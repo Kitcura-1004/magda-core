@@ -49,6 +49,7 @@ struct TrackInfo {
     bool muted = false;
     bool soloed = false;
     bool recordArmed = false;
+    bool frozen = false;  // Track is frozen (rendered to audio, plugins disabled)
 
     // Routing
     juce::String midiInputDevice;    // MIDI input device ID ("all", device ID, or empty for none)
@@ -91,6 +92,7 @@ struct TrackInfo {
           muted(other.muted),
           soloed(other.soloed),
           recordArmed(other.recordArmed),
+          frozen(other.frozen),
           midiInputDevice(other.midiInputDevice),
           midiOutputDevice(other.midiOutputDevice),
           audioInputDevice(other.audioInputDevice),
@@ -119,6 +121,7 @@ struct TrackInfo {
             muted = other.muted;
             soloed = other.soloed;
             recordArmed = other.recordArmed;
+            frozen = other.frozen;
             midiInputDevice = other.midiInputDevice;
             midiOutputDevice = other.midiOutputDevice;
             audioInputDevice = other.audioInputDevice;
@@ -150,6 +153,24 @@ struct TrackInfo {
 
     static juce::Colour getDefaultColor(int index) {
         return juce::Colour(defaultColors[index % defaultColors.size()]);
+    }
+
+    // Check if this track has an instrument device in its chain
+    bool hasInstrument() const {
+        for (const auto& element : chainElements) {
+            if (isDevice(element) && getDevice(element).isInstrument)
+                return true;
+            if (isRack(element)) {
+                const auto& rack = getRack(element);
+                for (const auto& chain : rack.chains) {
+                    for (const auto& e : chain.elements) {
+                        if (isDevice(e) && getDevice(e).isInstrument)
+                            return true;
+                    }
+                }
+            }
+        }
+        return false;
     }
 
     // Hierarchy helpers

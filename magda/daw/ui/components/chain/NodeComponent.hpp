@@ -57,6 +57,10 @@ class NodeComponent : public juce::Component, public magda::SelectionManagerList
     juce::String getNodeName() const;
     void setBypassed(bool bypassed);
     bool isBypassed() const;
+    void setFrozen(bool frozen);
+    bool isFrozen() const {
+        return frozen_;
+    }
 
     // Panel visibility
     bool isModPanelVisible() const {
@@ -186,6 +190,7 @@ class NodeComponent : public juce::Component, public magda::SelectionManagerList
 
     // Selection state
     bool selected_ = false;
+    bool frozen_ = false;
     bool mouseDownForSelection_ = false;
 
     // Collapsed state (show header only)

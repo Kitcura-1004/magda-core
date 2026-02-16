@@ -355,6 +355,15 @@ void TrackContentPanel::paintTrackLane(juce::Graphics& g, const TrackLane& lane,
     // Border (horizontal separators between tracks)
     g.setColour(DarkTheme::getColour(DarkTheme::BORDER));
     g.drawRect(area, 1);
+
+    // Frozen overlay
+    if (trackIndex >= 0 && trackIndex < static_cast<int>(visibleTrackIds_.size())) {
+        auto* trackInfo = TrackManager::getInstance().getTrack(visibleTrackIds_[trackIndex]);
+        if (trackInfo && trackInfo->frozen) {
+            g.setColour(juce::Colours::black.withAlpha(0.25f));
+            g.fillRect(area);
+        }
+    }
 }
 
 void TrackContentPanel::paintRecordingPreviews(juce::Graphics& g) {
@@ -1406,6 +1415,14 @@ void TrackContentPanel::rebuildClipComponents() {
         clipComp->onRenderTimeSelectionRequested = [this]() {
             if (onRenderTimeSelectionRequested)
                 onRenderTimeSelectionRequested();
+        };
+        clipComp->onBounceInPlaceRequested = [this](ClipId id) {
+            if (onBounceInPlaceRequested)
+                onBounceInPlaceRequested(id);
+        };
+        clipComp->onBounceToNewTrackRequested = [this](ClipId id) {
+            if (onBounceToNewTrackRequested)
+                onBounceToNewTrackRequested(id);
         };
 
         // Wire up grid snapping

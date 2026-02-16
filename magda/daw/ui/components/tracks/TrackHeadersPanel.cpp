@@ -601,6 +601,7 @@ void TrackHeadersPanel::tracksChanged() {
         header->isCollapsed = track->isCollapsedIn(currentViewMode_);
         header->muted = track->muted;
         header->solo = track->soloed;
+        header->frozen = track->frozen;
         header->volume = track->volume;
         header->pan = track->pan;
 
@@ -683,6 +684,7 @@ void TrackHeadersPanel::trackPropertyChanged(int trackId) {
         header.name = track->name;
         header.muted = track->muted;
         header.solo = track->soloed;
+        header.frozen = track->frozen;
         header.volume = track->volume;
         header.pan = track->pan;
 
@@ -1158,6 +1160,15 @@ void TrackHeadersPanel::paintTrackHeader(juce::Graphics& g, const TrackHeader& h
     // Group indicator color strip on the left
     if (header.isGroup) {
         g.setColour(DarkTheme::getColour(DarkTheme::ACCENT_ORANGE).withAlpha(0.7f));
+        g.fillRect(bgArea.getX(), bgArea.getY(), 3, bgArea.getHeight());
+    }
+
+    // Frozen overlay — dim the track header
+    if (header.frozen) {
+        g.setColour(juce::Colours::black.withAlpha(0.3f));
+        g.fillRect(bgArea);
+        // Cyan strip on the left to indicate frozen state
+        g.setColour(juce::Colour(0xFF66CCDD).withAlpha(0.8f));
         g.fillRect(bgArea.getX(), bgArea.getY(), 3, bgArea.getHeight());
     }
 }
@@ -1685,6 +1696,12 @@ void TrackHeadersPanel::showContextMenu(int trackIndex, juce::Point<int> positio
         }
     }
 
+    // Freeze/Unfreeze (for Audio and Instrument tracks only)
+    if (track->type == TrackType::Audio || track->type == TrackType::Instrument) {
+        menu.addSeparator();
+        menu.addItem(7, track->frozen ? "Unfreeze Track" : "Freeze Track");
+    }
+
     menu.addSeparator();
 
     // Duplicate track
@@ -1716,6 +1733,12 @@ void TrackHeadersPanel::showContextMenu(int trackIndex, juce::Point<int> positio
                                // Duplicate track without content
                                auto cmd = std::make_unique<DuplicateTrackCommand>(trackId, false);
                                UndoManager::getInstance().executeCommand(std::move(cmd));
+                           } else if (result == 7) {
+                               // Toggle freeze
+                               auto* t = TrackManager::getInstance().getTrack(trackId);
+                               if (t) {
+                                   TrackManager::getInstance().setTrackFrozen(trackId, !t->frozen);
+                               }
                            } else if (result >= 600) {
                                // Remove send (busIndex = result - 600)
                                int busIndex = result - 600;

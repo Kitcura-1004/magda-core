@@ -129,6 +129,15 @@ void AudioBridge::trackPropertyChanged(int trackId) {
             track->setMute(trackInfo->muted);
             track->setSolo(trackInfo->soloed);
 
+            // Sync freeze state
+            if (trackInfo->frozen != track->isFrozen(te::AudioTrack::individualFreeze)) {
+                DBG("AudioBridge::trackPropertyChanged - freeze sync: trackId="
+                    << trackId << " frozen=" << (trackInfo->frozen ? 1 : 0) << " teTrackName="
+                    << track->getName() << " numClips=" << track->getClips().size()
+                    << " trackLength=" << track->getLength().inSeconds());
+                track->setFrozen(trackInfo->frozen, te::AudioTrack::individualFreeze);
+            }
+
             // Sync volume/pan to VolumeAndPanPlugin
             setTrackVolume(trackId, trackInfo->volume);
             setTrackPan(trackId, trackInfo->pan);
@@ -490,6 +499,14 @@ void AudioBridge::syncAll() {
     for (const auto& track : tracks) {
         ensureTrackMapping(track.id);
         syncTrackPlugins(track.id);
+
+        // Sync frozen state from TE → MAGDA (e.g. on edit load)
+        if (auto* teTrack = getAudioTrack(track.id)) {
+            bool teFrozen = teTrack->isFrozen(te::AudioTrack::individualFreeze);
+            if (track.frozen != teFrozen) {
+                tm.getTrack(track.id)->frozen = teFrozen;
+            }
+        }
     }
 
     // Sync master channel volume/pan to Tracktion Engine
