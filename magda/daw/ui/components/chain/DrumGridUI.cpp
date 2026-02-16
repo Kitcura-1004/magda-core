@@ -23,10 +23,7 @@ DrumGridUI::PadButton::PadButton() {
     playButton_ = std::make_unique<magda::SvgButton>("Play", BinaryData::play_bare_svg,
                                                      BinaryData::play_bare_svgSize);
     playButton_->setSize(16, 16);
-    playButton_->onClick = [this]() {
-        if (onPlayClicked)
-            onPlayClicked(padIndex_);
-    };
+    playButton_->setInterceptsMouseClicks(false, false);  // We handle mouse events
     addChildComponent(*playButton_);
 }
 
@@ -158,9 +155,41 @@ void DrumGridUI::PadButton::paint(juce::Graphics& g) {
     }
 }
 
-void DrumGridUI::PadButton::mouseDown(const juce::MouseEvent& /*e*/) {
+void DrumGridUI::PadButton::mouseDown(const juce::MouseEvent& e) {
+    // Check if click is on the play button area
+    if (playButton_ && playButton_->isVisible() &&
+        playButton_->getBounds().contains(e.getPosition())) {
+        playPressed_ = true;
+        if (onNotePreview)
+            onNotePreview(padIndex_, true);
+        return;
+    }
+
     if (onClicked)
         onClicked(padIndex_);
+}
+
+void DrumGridUI::PadButton::mouseDrag(const juce::MouseEvent& e) {
+    if (playPressed_ || !hasSample_)
+        return;
+
+    if (e.getDistanceFromDragStart() < 4)
+        return;
+
+    if (auto* container = juce::DragAndDropContainer::findParentDragContainerFor(this)) {
+        auto* dragInfo = new juce::DynamicObject();
+        dragInfo->setProperty("type", "pad");
+        dragInfo->setProperty("padIndex", padIndex_);
+        container->startDragging(juce::var(dragInfo), this);
+    }
+}
+
+void DrumGridUI::PadButton::mouseUp(const juce::MouseEvent& /*e*/) {
+    if (playPressed_) {
+        playPressed_ = false;
+        if (onNotePreview)
+            onNotePreview(padIndex_, false);
+    }
 }
 
 // =============================================================================
@@ -173,9 +202,9 @@ DrumGridUI::DrumGridUI() {
         padButtons_[static_cast<size_t>(i)].onClicked = [this](int padIndex) {
             setSelectedPad(padIndex);
         };
-        padButtons_[static_cast<size_t>(i)].onPlayClicked = [this](int padIndex) {
-            if (onPlayClicked)
-                onPlayClicked(padIndex);
+        padButtons_[static_cast<size_t>(i)].onNotePreview = [this](int padIndex, bool isNoteOn) {
+            if (onNotePreview)
+                onNotePreview(padIndex, isNoteOn);
         };
         addAndMakeVisible(padButtons_[static_cast<size_t>(i)]);
     }
@@ -304,6 +333,33 @@ DrumGridUI::DrumGridUI() {
         chainsToggleButton_->setActive(chainsToggleButton_->getToggleState());
     };
     addAndMakeVisible(*chainsToggleButton_);
+
+    // Tab buttons for chains panel (Mix / Range)
+    auto setupTabButton = [this](juce::TextButton& btn) {
+        btn.setColour(juce::TextButton::buttonColourId, DarkTheme::getColour(DarkTheme::SURFACE));
+        btn.setColour(juce::TextButton::buttonOnColourId,
+                      DarkTheme::getColour(DarkTheme::ACCENT_BLUE).darker(0.3f));
+        btn.setColour(juce::TextButton::textColourOffId, DarkTheme::getSecondaryTextColour());
+        btn.setColour(juce::TextButton::textColourOnId, DarkTheme::getTextColour());
+        btn.setClickingTogglesState(true);
+        btn.setRadioGroupId(1001);
+        addAndMakeVisible(btn);
+    };
+    setupTabButton(mixTabButton_);
+    setupTabButton(rangeTabButton_);
+
+    mixTabButton_.setToggleState(true, juce::dontSendNotification);
+
+    mixTabButton_.onClick = [this]() {
+        currentChainsTab_ = ChainsTab::Mix;
+        resized();
+        repaint();
+    };
+    rangeTabButton_.onClick = [this]() {
+        currentChainsTab_ = ChainsTab::Range;
+        resized();
+        repaint();
+    };
 
     // Initialize
     refreshPadButtons();
@@ -459,6 +515,11 @@ void DrumGridUI::setSelectedPad(int padIndex) {
         int rowChainIdx = padInfos_[static_cast<size_t>(rowPad)].chainIndex;
         row->setSelected(rowChainIdx >= 0 && rowChainIdx == selectedChainIdx);
     }
+    for (auto& row : rangeRows_) {
+        int rowPad = row->getPadIndex();
+        int rowChainIdx = padInfos_[static_cast<size_t>(rowPad)].chainIndex;
+        row->setSelected(rowChainIdx >= 0 && rowChainIdx == selectedChainIdx);
+    }
 
     resized();
     if (onLayoutChanged)
@@ -527,15 +588,19 @@ void DrumGridUI::paint(juce::Graphics& g) {
         int chainsLeft = chainsViewport_.getX() - kGap / 2;
         g.drawVerticalLine(chainsLeft, top, bottom);
     }
+}
 
-    // Plugin drop highlight on pad
+void DrumGridUI::paintOverChildren(juce::Graphics& g) {
+    // Drop highlight on pad (painted over children so it's visible on top of PadButton)
     if (dropHighlightPad_ >= 0) {
         int pageStart = currentPage_ * kPadsPerPage;
         int btnIdx = dropHighlightPad_ - pageStart;
         if (btnIdx >= 0 && btnIdx < kPadsPerPage) {
             auto padBounds = padButtons_[static_cast<size_t>(btnIdx)].getBounds();
-            g.setColour(DarkTheme::getColour(DarkTheme::ACCENT_BLUE).withAlpha(0.3f));
+            g.setColour(juce::Colours::yellow.withAlpha(0.4f));
             g.fillRoundedRectangle(padBounds.toFloat(), 3.0f);
+            g.setColour(juce::Colours::yellow.withAlpha(0.8f));
+            g.drawRoundedRectangle(padBounds.toFloat().reduced(1.0f), 3.0f, 1.5f);
         }
     }
 }
@@ -584,44 +649,52 @@ void DrumGridUI::resized() {
 
     // --- Chains panel layout (FlexBox column) ---
     if (chainsPanelVisible_) {
-        juce::FlexBox chainList;
-        chainList.flexDirection = juce::FlexBox::Direction::column;
-
-        // Header label
-        chainList.items.add(juce::FlexItem(chainsLabel_).withHeight(18));
-
-        // Chain rows
-        for (auto& row : chainRows_)
-            chainList.items.add(juce::FlexItem(*row)
-                                    .withHeight(PadChainRowComponent::ROW_HEIGHT)
-                                    .withMargin({1, 0, 1, 0}));
-
-        // Perform layout into a scrollable area
-        int totalHeight = 18;
-        for (auto& row : chainRows_)
-            totalHeight += PadChainRowComponent::ROW_HEIGHT + 2;
-
         chainsLabel_.setVisible(true);
         chainsViewport_.setBounds(chainsArea);
         chainsViewport_.setVisible(true);
+        mixTabButton_.setVisible(true);
+        rangeTabButton_.setVisible(true);
+
+        // Layout header label above tabs
+        auto chainsHeader = chainsArea.removeFromTop(20);
+        chainsLabel_.setBounds(chainsHeader);
+
+        // Tab buttons row
+        auto tabRow = chainsArea.removeFromTop(20);
+        int tabW = tabRow.getWidth() / 2;
+        mixTabButton_.setBounds(tabRow.removeFromLeft(tabW));
+        rangeTabButton_.setBounds(tabRow);
+
+        chainsArea.removeFromTop(2);  // small gap below tabs
+
+        chainsViewport_.setBounds(chainsArea);
 
         int scrollbarWidth = chainsViewport_.getScrollBarThickness();
         int containerWidth = chainsViewport_.getWidth() - scrollbarWidth;
 
-        // Layout header above viewport
-        auto chainsHeader = chainsArea.removeFromTop(20);
-        chainsLabel_.setBounds(chainsHeader);
-        chainsViewport_.setBounds(chainsArea);
+        // Add only the visible rows to the container
+        chainsContainer_.removeAllChildren();
 
         int y = 0;
-        for (auto& row : chainRows_) {
-            row->setBounds(0, y, containerWidth, PadChainRowComponent::ROW_HEIGHT);
-            y += PadChainRowComponent::ROW_HEIGHT + 2;
+        if (currentChainsTab_ == ChainsTab::Mix) {
+            for (auto& row : chainRows_) {
+                row->setBounds(0, y, containerWidth, PadChainRowComponent::ROW_HEIGHT);
+                chainsContainer_.addAndMakeVisible(*row);
+                y += PadChainRowComponent::ROW_HEIGHT + 2;
+            }
+        } else {
+            for (auto& row : rangeRows_) {
+                row->setBounds(0, y, containerWidth, PadChainRangeRowComponent::ROW_HEIGHT);
+                chainsContainer_.addAndMakeVisible(*row);
+                y += PadChainRangeRowComponent::ROW_HEIGHT + 2;
+            }
         }
         chainsContainer_.setSize(containerWidth, juce::jmax(y, chainsArea.getHeight()));
     } else {
         chainsLabel_.setVisible(false);
         chainsViewport_.setVisible(false);
+        mixTabButton_.setVisible(false);
+        rangeTabButton_.setVisible(false);
     }
 
     // --- Pad Grid layout ---
@@ -679,7 +752,8 @@ void DrumGridUI::resized() {
 
 bool DrumGridUI::isInterestedInDragSource(const SourceDetails& details) {
     if (auto* obj = details.description.getDynamicObject()) {
-        bool interested = obj->getProperty("type").toString() == "plugin";
+        auto type = obj->getProperty("type").toString();
+        bool interested = type == "plugin" || type == "pad";
         DBG("DrumGridUI::isInterestedInDragSource: " << (interested ? "YES" : "NO"));
         return interested;
     }
@@ -720,11 +794,19 @@ void DrumGridUI::itemDropped(const SourceDetails& details) {
     }
 
     int padIndex = currentPage_ * kPadsPerPage + btnIdx;
-    setSelectedPad(padIndex);
 
     if (auto* obj = details.description.getDynamicObject()) {
-        if (onPluginDropped)
-            onPluginDropped(padIndex, *obj);
+        auto type = obj->getProperty("type").toString();
+
+        if (type == "pad") {
+            int sourcePad = static_cast<int>(obj->getProperty("padIndex"));
+            if (sourcePad != padIndex && onPadsSwapped)
+                onPadsSwapped(sourcePad, padIndex);
+        } else {
+            setSelectedPad(padIndex);
+            if (onPluginDropped)
+                onPluginDropped(padIndex, *obj);
+        }
     }
 
     repaint();
@@ -736,6 +818,7 @@ void DrumGridUI::itemDropped(const SourceDetails& details) {
 
 void DrumGridUI::rebuildChainRows() {
     chainRows_.clear();
+    rangeRows_.clear();
     chainsContainer_.removeAllChildren();
 
     // Build rows from padInfos — one row per pad that has a chain
@@ -750,6 +833,7 @@ void DrumGridUI::rebuildChainRows() {
         if (!seenChains.insert(info.chainIndex).second)
             continue;
 
+        // --- Mix row ---
         auto row = std::make_unique<PadChainRowComponent>(i);
         juce::String displayName = getNoteName(i) + " " + info.sampleName;
         row->updateFromPad(displayName, info.level, info.pan, info.mute, info.solo);
@@ -783,8 +867,30 @@ void DrumGridUI::rebuildChainRows() {
         };
 
         row->setSelected(i == selectedPad_);
-        chainsContainer_.addAndMakeVisible(*row);
         chainRows_.push_back(std::move(row));
+
+        // --- Range row ---
+        auto rangeRow = std::make_unique<PadChainRangeRowComponent>(i);
+        juce::String rangeName = getNoteName(i) + " " + info.sampleName;
+
+        // Query note range from DrumGridPlugin via callback
+        int lowNote = i;
+        int highNote = i;
+        int rootNote = i;
+        if (getNoteRange) {
+            auto [lo, hi, rt] = getNoteRange(i);
+            lowNote = lo;
+            highNote = hi;
+            rootNote = rt;
+        }
+        rangeRow->updateFromChain(rangeName, lowNote, highNote, rootNote);
+        rangeRow->onClicked = [this](int padIndex) { setSelectedPad(padIndex); };
+        rangeRow->onRangeChanged = [this](int padIndex, int lo, int hi, int rt) {
+            if (onPadRangeChanged)
+                onPadRangeChanged(padIndex, lo, hi, rt);
+        };
+        rangeRow->setSelected(i == selectedPad_);
+        rangeRows_.push_back(std::move(rangeRow));
     }
 
     resized();

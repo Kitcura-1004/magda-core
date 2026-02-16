@@ -320,8 +320,26 @@ MainWindow::MainComponent::MainComponent(AudioEngine* externalEngine) {
     mainView->onPlayheadPositionChanged = [this](double position) {
         transportPanel->setPlayheadPosition(position);
     };
-    mainView->onTimeSelectionChanged = [this](double start, double end, bool hasSelection) {
-        transportPanel->setTimeSelection(start, end, hasSelection);
+    mainView->onTimeSelectionChanged = [this](double start, double end, bool hasTimeSelection) {
+        transportPanel->setTimeSelection(start, end, hasTimeSelection);
+        // Refresh menu enabled state so Copy/Duplicate/Delete reflect time selection
+        bool hasSelection = hasTimeSelection;
+        if (!hasSelection) {
+            // Check if there's still a clip or note selection
+            hasSelection = !SelectionManager::getInstance().getSelectedClips().empty() ||
+                           SelectionManager::getInstance().getNoteSelection().isValid();
+        }
+        bool isPlaying = false, isRecording = false, isLooping = false, hasEditCursor = false;
+        if (mainView) {
+            const auto& ts = mainView->getTimelineController().getState();
+            isPlaying = ts.playhead.isPlaying;
+            isRecording = ts.playhead.isRecording;
+            isLooping = ts.loop.enabled;
+            hasEditCursor = ts.editCursorPosition >= 0;
+        }
+        MenuManager::getInstance().updateMenuStates(
+            false, false, hasSelection, hasEditCursor, leftPanelVisible, rightPanelVisible,
+            bottomPanelVisible, isPlaying, isRecording, isLooping);
     };
     mainView->onEditCursorChanged = [this](double position) {
         transportPanel->setEditCursorPosition(position);
@@ -818,6 +836,13 @@ void MainWindow::MainComponent::selectionTypeChanged(SelectionType newType) {
     bool hasSelection = ((newType == SelectionType::Clip || newType == SelectionType::MultiClip) &&
                          selectionManager.getSelectedClipCount() > 0) ||
                         (newType == SelectionType::Note && selectionManager.hasNoteSelection());
+
+    // Time selection also counts as "has selection" for copy/duplicate/delete
+    if (!hasSelection && mainView) {
+        const auto& sel = mainView->getTimelineController().getState().selection;
+        if (sel.isActive() && !sel.visuallyHidden)
+            hasSelection = true;
+    }
 
     // Get transport and edit cursor state (if available)
     bool isPlaying = false;

@@ -215,17 +215,34 @@ void TrackContentPanel::paintOverChildren(juce::Graphics& g) {
     // Draw marquee selection rectangle on top of everything
     paintMarqueeRect(g);
 
-    // Draw drop indicator for file drag-and-drop
-    if (showDropIndicator_ && dropTargetTrackIndex_ >= 0 &&
-        dropTargetTrackIndex_ < static_cast<int>(trackLanes.size())) {
-        int dropX = timeToPixel(dropInsertTime_);
-        int trackY = getTrackYPosition(dropTargetTrackIndex_);
-        int trackHeight = getTrackHeight(dropTargetTrackIndex_);
+    // Draw tint overlay for plugin drag-and-drop
+    if (showPluginDropOverlay_) {
+        g.setColour(juce::Colours::white.withAlpha(0.08f));
+        g.fillRect(getLocalBounds());
+    }
 
-        // Draw yellow vertical line to indicate drop position
-        g.setColour(juce::Colours::yellow.withAlpha(0.8f));
-        g.drawLine(static_cast<float>(dropX), static_cast<float>(trackY), static_cast<float>(dropX),
-                   static_cast<float>(trackY + trackHeight), 2.0f);
+    // Draw drop indicator for file drag-and-drop
+    if (showDropIndicator_) {
+        int dropX = timeToPixel(dropInsertTime_);
+
+        if (dropTargetTrackIndex_ >= 0 &&
+            dropTargetTrackIndex_ < static_cast<int>(trackLanes.size())) {
+            // Dropping on an existing track — line spans that track
+            int trackY = getTrackYPosition(dropTargetTrackIndex_);
+            int trackHeight = getTrackHeight(dropTargetTrackIndex_);
+
+            g.setColour(juce::Colours::yellow.withAlpha(0.8f));
+            g.drawLine(static_cast<float>(dropX), static_cast<float>(trackY),
+                       static_cast<float>(dropX), static_cast<float>(trackY + trackHeight), 2.0f);
+        } else {
+            // Dropping on empty area — show drop line spanning a phantom track region
+            int topY = getTotalTracksHeight();
+            int bottomY = topY + DEFAULT_TRACK_HEIGHT;
+
+            g.setColour(juce::Colours::yellow.withAlpha(0.8f));
+            g.drawLine(static_cast<float>(dropX), static_cast<float>(topY),
+                       static_cast<float>(dropX), static_cast<float>(bottomY), 2.0f);
+        }
     }
 }
 
@@ -749,13 +766,8 @@ void TrackContentPanel::mouseDown(const juce::MouseEvent& event) {
             moveSelectionOriginalEnd = selection.endTime;
             moveSelectionOriginalTracks = selection.trackIndices;
 
-            // Shift+grab: split clips at selection boundaries before moving
-            if (event.mods.isShiftDown()) {
-                splitClipsAtSelectionBoundaries();
-            }
-
-            // Capture all clips within the time selection (after splits)
-            captureClipsInTimeSelection();
+            // Defer split to first drag motion (so click-without-drag doesn't split)
+            needsSplitOnFirstDrag_ = true;
             return;
         } else {
             // Clicked outside time selection in lower zone - clear it and start new one
@@ -809,6 +821,13 @@ void TrackContentPanel::mouseDrag(const juce::MouseEvent& event) {
             onTimeSelectionChanged(newStart, newEnd, moveSelectionOriginalTracks);
         }
     } else if (isMovingSelection) {
+        // Split clips at selection boundaries on first drag motion
+        if (needsSplitOnFirstDrag_) {
+            needsSplitOnFirstDrag_ = false;
+            splitClipsAtSelectionBoundaries();
+            captureClipsInTimeSelection();
+        }
+
         // Calculate time delta from drag start
         double currentTime = pixelToTime(event.x);
         double deltaTime = currentTime - moveDragStartTime;
@@ -1023,6 +1042,7 @@ void TrackContentPanel::mouseUp(const juce::MouseEvent& event) {
 
         // Finalize move - the selection has already been updated via mouseDrag
         isMovingSelection = false;
+        needsSplitOnFirstDrag_ = false;
         moveDragStartTime = -1.0;
         moveSelectionOriginalStart = -1.0;
         moveSelectionOriginalEnd = -1.0;
@@ -2061,31 +2081,40 @@ void TrackContentPanel::filesDropped(const juce::StringArray& files, int x, int 
     }
     int trackIndex = getTrackIndexAtY(y);
 
-    if (trackIndex < 0 || trackIndex >= static_cast<int>(visibleTrackIds_.size())) {
-        return;
+    TrackId targetTrackId = INVALID_TRACK_ID;
+
+    if (trackIndex >= 0 && trackIndex < static_cast<int>(visibleTrackIds_.size())) {
+        // Dropped on an existing track
+        targetTrackId = visibleTrackIds_[trackIndex];
+        auto* track = TrackManager::getInstance().getTrack(targetTrackId);
+        if (!track)
+            return;
+
+        // Block drops on group/aux tracks (no clip timeline)
+        if (track->type == TrackType::Group || track->type == TrackType::Aux) {
+            juce::AlertWindow::showMessageBoxAsync(
+                juce::AlertWindow::WarningIcon, "Drop Failed",
+                "Audio files cannot be dropped on group or aux tracks.");
+            return;
+        }
+
+        // Block drops on tracks with a DrumGrid plugin
+        for (const auto& element : track->chainElements) {
+            if (isDevice(element) && getDevice(element).pluginId.containsIgnoreCase("drumgrid")) {
+                juce::AlertWindow::showMessageBoxAsync(
+                    juce::AlertWindow::WarningIcon, "Drop Failed",
+                    "Audio files cannot be dropped on Drum Grid tracks.");
+                return;
+            }
+        }
     }
-
-    TrackId targetTrackId = visibleTrackIds_[trackIndex];
-    auto* track = TrackManager::getInstance().getTrack(targetTrackId);
-
-    if (!track) {
-        return;
-    }
-
-    // Only allow drops on audio tracks
-    if (track->type != TrackType::Audio) {
-        juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::WarningIcon, "Drop Failed",
-                                               "Audio files can only be dropped on audio tracks.");
-        return;
-    }
-
-    // Import audio files at drop position
-    auto& clipManager = ClipManager::getInstance();
-    double currentTime = dropTime;
-    int importedCount = 0;
+    // If targetTrackId is still INVALID, we'll create a new track below
 
     juce::AudioFormatManager formatManager;
     formatManager.registerBasicFormats();
+
+    double currentTime = dropTime;
+    int importedCount = 0;
 
     for (const auto& filePath : files) {
         // Filter audio files only
@@ -2098,6 +2127,15 @@ void TrackContentPanel::filesDropped(const juce::StringArray& files, int x, int 
         juce::File audioFile(filePath);
         if (!audioFile.existsAsFile())
             continue;
+
+        // Create a new audio track if dropped on empty area
+        if (targetTrackId == INVALID_TRACK_ID) {
+            juce::String trackName = audioFile.getFileNameWithoutExtension();
+            targetTrackId = TrackManager::getInstance().createTrack(trackName, TrackType::Audio);
+            if (targetTrackId == INVALID_TRACK_ID)
+                return;
+            TrackManager::getInstance().setSelectedTrack(targetTrackId);
+        }
 
         // Read actual file duration
         double fileDuration = 4.0;  // fallback if reader fails
@@ -2118,6 +2156,40 @@ void TrackContentPanel::filesDropped(const juce::StringArray& files, int x, int 
 
     if (importedCount > 0) {
         DBG("TrackContentPanel: Imported " << importedCount << " audio files");
+    }
+}
+
+// =============================================================================
+// Plugin Drag-and-Drop Implementation (DragAndDropTarget)
+// =============================================================================
+
+bool TrackContentPanel::isInterestedInDragSource(const SourceDetails& details) {
+    if (auto* obj = details.description.getDynamicObject()) {
+        return obj->getProperty("type").toString() == "plugin";
+    }
+    return false;
+}
+
+void TrackContentPanel::itemDragEnter(const SourceDetails& /*details*/) {
+    showPluginDropOverlay_ = true;
+    repaint();
+}
+
+void TrackContentPanel::itemDragMove(const SourceDetails& /*details*/) {
+    // Overlay already shown
+}
+
+void TrackContentPanel::itemDragExit(const SourceDetails& /*details*/) {
+    showPluginDropOverlay_ = false;
+    repaint();
+}
+
+void TrackContentPanel::itemDropped(const SourceDetails& details) {
+    showPluginDropOverlay_ = false;
+    repaint();
+
+    if (auto* obj = details.description.getDynamicObject()) {
+        TrackManager::createTrackWithPlugin(*obj);
     }
 }
 

@@ -359,8 +359,11 @@ bool CreateClipCommand::validateState() const {
 // ============================================================================
 
 DuplicateClipCommand::DuplicateClipCommand(ClipId sourceClipId, double startTime,
-                                           TrackId targetTrackId)
-    : sourceClipId_(sourceClipId), startTime_(startTime), targetTrackId_(targetTrackId) {}
+                                           TrackId targetTrackId, double tempo)
+    : sourceClipId_(sourceClipId),
+      startTime_(startTime),
+      targetTrackId_(targetTrackId),
+      tempo_(tempo) {}
 
 bool DuplicateClipCommand::canExecute() const {
     return ClipManager::getInstance().getClip(sourceClipId_) != nullptr;
@@ -394,7 +397,8 @@ void DuplicateClipCommand::performAction() {
     if (startTime_ < 0) {
         duplicatedClipId_ = clipManager.duplicateClip(sourceClipId_);
     } else {
-        duplicatedClipId_ = clipManager.duplicateClipAt(sourceClipId_, startTime_, targetTrackId_);
+        duplicatedClipId_ =
+            clipManager.duplicateClipAt(sourceClipId_, startTime_, targetTrackId_, tempo_);
     }
 }
 
@@ -1013,6 +1017,228 @@ void RenderTimeSelectionCommand::undo() {
     clipManager.forceNotifyClipsChanged();
     newClipIds_.clear();
     success_ = false;
+}
+
+// ============================================================================
+// RippleDeleteTimeSelectionCommand
+// ============================================================================
+
+RippleDeleteTimeSelectionCommand::RippleDeleteTimeSelectionCommand(
+    double startTime, double endTime, const std::vector<TrackId>& trackIds)
+    : startTime_(startTime), endTime_(endTime), trackIds_(trackIds) {}
+
+void RippleDeleteTimeSelectionCommand::execute() {
+    auto& clipManager = ClipManager::getInstance();
+
+    // Snapshot all arrangement clips for reliable undo
+    snapshot_ = clipManager.getArrangementClips();
+
+    double duration = endTime_ - startTime_;
+    if (duration <= 0.0)
+        return;
+
+    // Helper: check if a clip's track is affected
+    auto isAffectedTrack = [this](TrackId trackId) {
+        if (trackIds_.empty())
+            return true;
+        return std::find(trackIds_.begin(), trackIds_.end(), trackId) != trackIds_.end();
+    };
+
+    // Collect clips to delete (fully inside selection)
+    std::vector<ClipId> clipsToDelete;
+
+    // Process overlapping clips on affected tracks
+    // We need to work on a copy of clip IDs since we'll be modifying clips
+    auto allClips = clipManager.getArrangementClips();
+    for (const auto& clip : allClips) {
+        if (!isAffectedTrack(clip.trackId))
+            continue;
+
+        double clipEnd = clip.startTime + clip.length;
+
+        // No overlap
+        if (clip.startTime >= endTime_ || clipEnd <= startTime_)
+            continue;
+
+        bool startsBeforeSel = clip.startTime < startTime_;
+        bool endsAfterSel = clipEnd > endTime_;
+
+        if (startsBeforeSel && endsAfterSel) {
+            // Clip spans both boundaries: split at startTime_, split again at endTime_,
+            // delete the middle piece. This preserves both the left and right portions.
+            ClipId rightId = clipManager.splitClip(clip.id, startTime_);
+            if (rightId != INVALID_CLIP_ID) {
+                // Split the right portion at endTime_ to isolate the middle
+                ClipId tailId = clipManager.splitClip(rightId, endTime_);
+                // Delete the middle piece (between startTime_ and endTime_)
+                clipsToDelete.push_back(rightId);
+                // The tail (after endTime_) needs to be shifted left by duration
+                if (tailId != INVALID_CLIP_ID) {
+                    auto* tailClip = clipManager.getClip(tailId);
+                    if (tailClip)
+                        tailClip->startTime = startTime_;  // Shift left to fill gap
+                }
+            }
+        } else if (startsBeforeSel) {
+            // Clip spans left boundary only: trim right edge to startTime_
+            double newLength = startTime_ - clip.startTime;
+            auto* liveClip = clipManager.getClip(clip.id);
+            if (liveClip)
+                liveClip->length = newLength;
+        } else if (endsAfterSel) {
+            // Clip spans right boundary only: split at endTime_, shift right portion left
+            ClipId tailId = clipManager.splitClip(clip.id, endTime_);
+            // Delete the left portion (starts inside selection)
+            clipsToDelete.push_back(clip.id);
+            // Shift the tail left to fill the gap
+            if (tailId != INVALID_CLIP_ID) {
+                auto* tailClip = clipManager.getClip(tailId);
+                if (tailClip)
+                    tailClip->startTime = startTime_;
+            }
+        } else {
+            // Fully inside selection: delete
+            clipsToDelete.push_back(clip.id);
+        }
+    }
+
+    // Delete fully-inside clips
+    for (auto clipId : clipsToDelete) {
+        clipManager.deleteClip(clipId);
+    }
+
+    // Shift all clips on affected tracks that start at or after endTime_ left by duration
+    for (auto& clip : clipManager.getArrangementClips()) {
+        if (!isAffectedTrack(clip.trackId))
+            continue;
+
+        // Use non-const access
+        auto* liveClip = clipManager.getClip(clip.id);
+        if (liveClip && liveClip->startTime >= endTime_) {
+            liveClip->startTime -= duration;
+        }
+    }
+
+    clipManager.forceNotifyClipsChanged();
+    executed_ = true;
+}
+
+void RippleDeleteTimeSelectionCommand::undo() {
+    if (!executed_)
+        return;
+
+    auto& clipManager = ClipManager::getInstance();
+
+    // Delete all current arrangement clips
+    auto currentClips = clipManager.getArrangementClips();
+    for (const auto& clip : currentClips) {
+        clipManager.deleteClip(clip.id);
+    }
+
+    // Restore from snapshot
+    for (const auto& clip : snapshot_) {
+        clipManager.restoreClip(clip);
+    }
+
+    clipManager.forceNotifyClipsChanged();
+    executed_ = false;
+}
+
+// ============================================================================
+// DeleteTimeSelectionCommand (no ripple)
+// ============================================================================
+
+DeleteTimeSelectionCommand::DeleteTimeSelectionCommand(double startTime, double endTime,
+                                                       const std::vector<TrackId>& trackIds)
+    : startTime_(startTime), endTime_(endTime), trackIds_(trackIds) {}
+
+void DeleteTimeSelectionCommand::execute() {
+    auto& clipManager = ClipManager::getInstance();
+
+    // Snapshot all arrangement clips for reliable undo
+    snapshot_ = clipManager.getArrangementClips();
+
+    double duration = endTime_ - startTime_;
+    if (duration <= 0.0)
+        return;
+
+    auto isAffectedTrack = [this](TrackId trackId) {
+        if (trackIds_.empty())
+            return true;
+        return std::find(trackIds_.begin(), trackIds_.end(), trackId) != trackIds_.end();
+    };
+
+    std::vector<ClipId> clipsToDelete;
+
+    auto allClips = clipManager.getArrangementClips();
+    for (const auto& clip : allClips) {
+        if (!isAffectedTrack(clip.trackId))
+            continue;
+
+        double clipEnd = clip.startTime + clip.length;
+
+        // No overlap
+        if (clip.startTime >= endTime_ || clipEnd <= startTime_)
+            continue;
+
+        bool startsBeforeSel = clip.startTime < startTime_;
+        bool endsAfterSel = clipEnd > endTime_;
+
+        if (startsBeforeSel && endsAfterSel) {
+            // Clip spans both boundaries: split at startTime_, split again at endTime_,
+            // delete the middle piece. Preserves both left and right portions.
+            ClipId rightId = clipManager.splitClip(clip.id, startTime_);
+            if (rightId != INVALID_CLIP_ID) {
+                ClipId tailId = clipManager.splitClip(rightId, endTime_);
+                clipsToDelete.push_back(rightId);
+                // tailId stays at endTime_ (no shift — non-ripple)
+                juce::ignoreUnused(tailId);
+            }
+        } else if (startsBeforeSel) {
+            // Clip spans left boundary: trim right edge to startTime_
+            double newLength = startTime_ - clip.startTime;
+            auto* liveClip = clipManager.getClip(clip.id);
+            if (liveClip)
+                liveClip->length = newLength;
+        } else if (endsAfterSel) {
+            // Clip spans right boundary: split at endTime_, delete left portion
+            ClipId tailId = clipManager.splitClip(clip.id, endTime_);
+            clipsToDelete.push_back(clip.id);
+            // tailId stays at endTime_ (no shift — non-ripple)
+            juce::ignoreUnused(tailId);
+        } else {
+            // Fully inside selection: delete
+            clipsToDelete.push_back(clip.id);
+        }
+    }
+
+    for (auto clipId : clipsToDelete) {
+        clipManager.deleteClip(clipId);
+    }
+
+    // No ripple shift — clips after selection stay where they are
+
+    clipManager.forceNotifyClipsChanged();
+    executed_ = true;
+}
+
+void DeleteTimeSelectionCommand::undo() {
+    if (!executed_)
+        return;
+
+    auto& clipManager = ClipManager::getInstance();
+
+    auto currentClips = clipManager.getArrangementClips();
+    for (const auto& clip : currentClips) {
+        clipManager.deleteClip(clip.id);
+    }
+
+    for (const auto& clip : snapshot_) {
+        clipManager.restoreClip(clip);
+    }
+
+    clipManager.forceNotifyClipsChanged();
+    executed_ = false;
 }
 
 }  // namespace magda
