@@ -868,6 +868,8 @@ void WaveformGridComponent::mouseDown(const juce::MouseEvent& event) {
 
     // Warp mode interaction
     if (warpMode_) {
+        bool altHeld = event.mods.isAltDown();
+
         // Shift + click inside waveform = zoom (instead of adding warp marker)
         if (shiftHeld && isInsideWaveform(x, *clip)) {
             dragMode_ = DragMode::Zoom;
@@ -881,10 +883,20 @@ void WaveformGridComponent::mouseDown(const juce::MouseEvent& event) {
         // Check if clicking on an existing marker to drag it
         int markerIndex = findMarkerAtPixel(x);
         if (markerIndex >= 0) {
-            dragMode_ = DragMode::MoveWarpMarker;
-            draggingMarkerIndex_ = markerIndex;
-            dragStartWarpTime_ = warpMarkers_[static_cast<size_t>(markerIndex)].warpTime;
-            dragStartX_ = x;
+            if (altHeld) {
+                // Alt+drag = reposition marker (move without stretching)
+                dragMode_ = DragMode::RepositionWarpMarker;
+                draggingMarkerIndex_ = markerIndex;
+                dragStartWarpTime_ = warpMarkers_[static_cast<size_t>(markerIndex)].warpTime;
+                dragStartSourceTime_ = warpMarkers_[static_cast<size_t>(markerIndex)].sourceTime;
+                dragStartX_ = x;
+            } else {
+                // Normal drag = stretch (change warp time only)
+                dragMode_ = DragMode::MoveWarpMarker;
+                draggingMarkerIndex_ = markerIndex;
+                dragStartWarpTime_ = warpMarkers_[static_cast<size_t>(markerIndex)].warpTime;
+                dragStartX_ = x;
+            }
             return;
         }
 
@@ -1025,6 +1037,30 @@ void WaveformGridComponent::mouseDrag(const juce::MouseEvent& event) {
         return;
     }
 
+    // Warp marker reposition drag (Alt+drag: move without stretching)
+    if (dragMode_ == DragMode::RepositionWarpMarker) {
+        auto* clip = magda::ClipManager::getInstance().getClip(editingClipId_);
+        if (!clip)
+            return;
+
+        double timelineDelta = (event.x - dragStartX_) / horizontalZoom_;
+        double sourceDelta = displayInfo_.timelineToSource(timelineDelta);
+
+        // Move both sourceTime and warpTime by the same source-domain delta
+        // This preserves the stretch relationship at this marker
+        double newSourceTime = dragStartSourceTime_ + sourceDelta;
+        double newWarpTime = dragStartWarpTime_ + sourceDelta;
+        if (newSourceTime < 0.0)
+            newSourceTime = 0.0;
+        if (newWarpTime < 0.0)
+            newWarpTime = 0.0;
+
+        if (draggingMarkerIndex_ >= 0 && onWarpMarkerReposition) {
+            onWarpMarkerReposition(draggingMarkerIndex_, newSourceTime, newWarpTime);
+        }
+        return;
+    }
+
     // Get clip for direct modification during drag (performance optimization)
     auto* clip = magda::ClipManager::getInstance().getClip(editingClipId_);
     if (!clip || clip->audioFilePath.isEmpty())
@@ -1134,6 +1170,12 @@ void WaveformGridComponent::mouseUp(const juce::MouseEvent& /*event*/) {
         return;
     }
 
+    if (dragMode_ == DragMode::RepositionWarpMarker) {
+        draggingMarkerIndex_ = -1;
+        dragMode_ = DragMode::None;
+        return;
+    }
+
     if (dragMode_ != DragMode::None && editingClipId_ != magda::INVALID_CLIP_ID) {
         // Clear drag mode BEFORE notifying so that updateClipPosition() can
         // update the cached values with the final clip state.
@@ -1166,7 +1208,9 @@ void WaveformGridComponent::mouseMove(const juce::MouseEvent& event) {
             repaint();
         }
 
-        if (newHovered >= 0) {
+        if (newHovered >= 0 && event.mods.isAltDown()) {
+            setMouseCursor(juce::MouseCursor::DraggingHandCursor);
+        } else if (newHovered >= 0) {
             setMouseCursor(juce::MouseCursor::LeftRightResizeCursor);
         } else if (event.mods.isShiftDown() && isInsideWaveform(x, *clip)) {
             setMouseCursor(magda::CursorManager::getInstance().getZoomCursor());
@@ -1349,6 +1393,16 @@ void WaveformGridComponent::showContextMenu(const juce::MouseEvent& event) {
         }
     }
 
+    // Slice operations
+    menu.addSeparator();
+    bool canSliceAtMarkers = warpMode_ && warpMarkers_.size() > 2;
+    menu.addItem(6, "Slice at Warp Markers In Place", canSliceAtMarkers);
+    menu.addItem(8, "Slice at Warp Markers to Drum Grid", canSliceAtMarkers);
+    bool canSliceAtGrid =
+        (gridResolution_ != GridResolution::Off || customGridBeats_ > 0.0) && timeRuler_ != nullptr;
+    menu.addItem(7, "Slice at Grid In Place", canSliceAtGrid);
+    menu.addItem(9, "Slice at Grid to Drum Grid", canSliceAtGrid);
+
     menu.showMenuAsync(juce::PopupMenu::Options(), [this, markerIndex, clipOffset](int result) {
         if (result == 1) {
             if (timeRuler_)
@@ -1366,6 +1420,14 @@ void WaveformGridComponent::showContextMenu(const juce::MouseEvent& event) {
             repaint();
         } else if (result == 5 && markerIndex >= 0 && onWarpMarkerRemove) {
             onWarpMarkerRemove(markerIndex);
+        } else if (result == 6 && onSliceAtWarpMarkers) {
+            onSliceAtWarpMarkers();
+        } else if (result == 7 && onSliceAtGrid) {
+            onSliceAtGrid();
+        } else if (result == 8 && onSliceWarpMarkersToDrumGrid) {
+            onSliceWarpMarkersToDrumGrid();
+        } else if (result == 9 && onSliceAtGridToDrumGrid) {
+            onSliceAtGridToDrumGrid();
         }
     });
 }

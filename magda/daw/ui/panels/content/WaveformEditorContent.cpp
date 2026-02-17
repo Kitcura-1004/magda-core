@@ -8,6 +8,7 @@
 #include "../../themes/FontManager.hpp"
 #include "audio/AudioBridge.hpp"
 #include "audio/AudioThumbnailManager.hpp"
+#include "core/ClipCommands.hpp"
 #include "core/ClipDisplayInfo.hpp"
 #include "core/TrackManager.hpp"
 #include "engine/AudioEngine.hpp"
@@ -390,6 +391,23 @@ WaveformEditorContent::WaveformEditorContent() {
         }
     };
 
+    // Warp marker reposition callback (Alt+drag: remove + add at new position)
+    gridComponent_->onWarpMarkerReposition = [this](int index, double newSourceTime,
+                                                    double newWarpTime) {
+        auto* bridge = getBridge();
+        if (bridge) {
+            bridge->removeWarpMarker(editingClipId_, index);
+            bridge->addWarpMarker(editingClipId_, newSourceTime, newWarpTime);
+            refreshWarpMarkers();
+        }
+    };
+
+    // Slice callbacks
+    gridComponent_->onSliceAtWarpMarkers = [this]() { sliceAtWarpMarkers(); };
+    gridComponent_->onSliceAtGrid = [this]() { sliceAtGrid(); };
+    gridComponent_->onSliceWarpMarkersToDrumGrid = [this]() { sliceWarpMarkersToDrumGrid(); };
+    gridComponent_->onSliceAtGridToDrumGrid = [this]() { sliceAtGridToDrumGrid(); };
+
     // Zoom drag on waveform — same log-curve sensitivity as header drag
     gridComponent_->onZoomDrag = [this](int deltaY, int anchorX) {
         // deltaY == 0 signals drag start — capture starting zoom
@@ -681,6 +699,19 @@ void WaveformEditorContent::clipPropertyChanged(magda::ClipId clipId) {
                 }
             }
             wasWarpEnabled_ = warpEnabled;
+        }
+
+        // Check if cached transients were invalidated (e.g. sensitivity changed)
+        if (transientsCached_ && clip->type == magda::ClipType::Audio &&
+            !clip->audioFilePath.isEmpty()) {
+            auto* cached = magda::AudioThumbnailManager::getInstance().getCachedTransients(
+                clip->audioFilePath);
+            if (!cached) {
+                // Cache was cleared — restart polling for new transients
+                transientsCached_ = false;
+                transientPollCount_ = 0;
+                startTimer(250);
+            }
         }
 
         updateGridSize();
@@ -1021,9 +1052,6 @@ magda::AudioBridge* WaveformEditorContent::getBridge() {
 
 // ============================================================================
 // Timer (Transient Detection Polling)
-// TODO: Expose transient detection sensitivity control. TE's TransientDetectionJob
-//       accepts a Config { float sensitivity } but WarpTimeManager hardcodes 0.5f.
-//       Would need to modify WarpTimeManager or re-run the job with a custom config.
 // ============================================================================
 
 void WaveformEditorContent::timerCallback() {
@@ -1059,6 +1087,58 @@ void WaveformEditorContent::timerCallback() {
         transientsCached_ = true;
         stopTimer();
     }
+}
+
+// ============================================================================
+// Slice Helpers
+// ============================================================================
+
+void WaveformEditorContent::sliceAtWarpMarkers() {
+    if (editingClipId_ == magda::INVALID_CLIP_ID)
+        return;
+
+    double tempo = cachedBpm_ > 0.0 ? cachedBpm_ : 120.0;
+    magda::sliceClipAtWarpMarkers(editingClipId_, tempo, getBridge());
+
+    editingClipId_ = magda::INVALID_CLIP_ID;
+    gridComponent_->setClip(magda::INVALID_CLIP_ID);
+}
+
+void WaveformEditorContent::sliceAtGrid() {
+    if (editingClipId_ == magda::INVALID_CLIP_ID)
+        return;
+
+    double bpm = cachedBpm_ > 0.0 ? cachedBpm_ : 120.0;
+    double gridBeats = gridComponent_->getGridResolutionBeats();
+    if (gridBeats <= 0.0)
+        return;
+
+    double gridInterval = gridBeats * 60.0 / bpm;
+    magda::sliceClipAtGrid(editingClipId_, gridInterval, bpm, getBridge());
+
+    editingClipId_ = magda::INVALID_CLIP_ID;
+    gridComponent_->setClip(magda::INVALID_CLIP_ID);
+}
+
+void WaveformEditorContent::sliceWarpMarkersToDrumGrid() {
+    if (editingClipId_ == magda::INVALID_CLIP_ID)
+        return;
+
+    double tempo = cachedBpm_ > 0.0 ? cachedBpm_ : 120.0;
+    magda::sliceWarpMarkersToDrumGrid(editingClipId_, tempo, getBridge());
+}
+
+void WaveformEditorContent::sliceAtGridToDrumGrid() {
+    if (editingClipId_ == magda::INVALID_CLIP_ID)
+        return;
+
+    double bpm = cachedBpm_ > 0.0 ? cachedBpm_ : 120.0;
+    double gridBeats = gridComponent_->getGridResolutionBeats();
+    if (gridBeats <= 0.0)
+        return;
+
+    double gridInterval = gridBeats * 60.0 / bpm;
+    magda::sliceAtGridToDrumGrid(editingClipId_, gridInterval, bpm, getBridge());
 }
 
 }  // namespace magda::daw::ui

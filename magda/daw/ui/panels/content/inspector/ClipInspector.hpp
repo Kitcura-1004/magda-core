@@ -103,6 +103,11 @@ class ClipInspector : public BaseInspector, public magda::ClipManagerListener {
     juce::TextButton autoDetectBeatsToggle_;
     std::unique_ptr<magda::DraggableValueLabel> beatSensitivityValue_;
 
+    // Transient detection section
+    juce::Label transientSectionLabel_;
+    juce::Label transientSensitivityLabel_;
+    std::unique_ptr<magda::DraggableValueLabel> transientSensitivityValue_;
+
     // Playback
     juce::TextButton reverseToggle_;
 

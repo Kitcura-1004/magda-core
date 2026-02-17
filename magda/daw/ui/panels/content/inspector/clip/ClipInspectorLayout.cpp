@@ -161,6 +161,20 @@ void ClipInspector::resized() {
         }
     }
 
+    // Transient sensitivity section (audio clips only)
+    if (transientSectionLabel_.isVisible()) {
+        addSeparator();
+        transientSectionLabel_.setBounds(addRow(16));
+        {
+            auto labelRow = addRow(labelHeight);
+            transientSensitivityLabel_.setBounds(labelRow);
+        }
+        {
+            auto row = addRow(valueHeight);
+            transientSensitivityValue_->setBounds(row);
+        }
+    }
+
     // Separator: after position/warp rows, before Pitch
     if (pitchSectionLabel_.isVisible())
         addSeparator();

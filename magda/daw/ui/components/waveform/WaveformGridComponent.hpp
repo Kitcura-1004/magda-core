@@ -171,6 +171,15 @@ class WaveformGridComponent : public juce::Component {
     std::function<void(int index, double newWarpTime)> onWarpMarkerMove;
     std::function<void(int index)> onWarpMarkerRemove;
 
+    // Warp marker reposition callback (Alt+drag: remove + add at new position)
+    std::function<void(int index, double newSourceTime, double newWarpTime)> onWarpMarkerReposition;
+
+    // Slice callbacks
+    std::function<void()> onSliceAtWarpMarkers;
+    std::function<void()> onSliceAtGrid;
+    std::function<void()> onSliceWarpMarkersToDrumGrid;
+    std::function<void()> onSliceAtGridToDrumGrid;
+
     // Zoom drag callback (deltaY from start, anchorX in viewport coords)
     std::function<void(int deltaY, int anchorX)> onZoomDrag;
 
@@ -205,6 +214,7 @@ class WaveformGridComponent : public juce::Component {
         StretchLeft,
         StretchRight,
         MoveWarpMarker,
+        RepositionWarpMarker,
         Zoom
     };
     DragMode dragMode_ = DragMode::None;
@@ -231,6 +241,7 @@ class WaveformGridComponent : public juce::Component {
     int hoveredMarkerIndex_ = -1;
     int draggingMarkerIndex_ = -1;
     double dragStartWarpTime_ = 0.0;
+    double dragStartSourceTime_ = 0.0;
 
     // Pre/post loop visibility
     bool showPreLoop_ = true;

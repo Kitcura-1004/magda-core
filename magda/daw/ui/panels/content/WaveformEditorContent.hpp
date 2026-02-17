@@ -138,6 +138,12 @@ class WaveformEditorContent : public PanelContent,
     void refreshWarpMarkers();
     magda::AudioBridge* getBridge();
 
+    // Slice helpers
+    void sliceAtWarpMarkers();
+    void sliceAtGrid();
+    void sliceWarpMarkersToDrumGrid();
+    void sliceAtGridToDrumGrid();
+
     // Warp state tracking
     bool wasWarpEnabled_ = false;
 
