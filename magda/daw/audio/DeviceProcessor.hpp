@@ -226,6 +226,139 @@ class MagdaSamplerProcessor : public DeviceProcessor {
 };
 
 /**
+ * @brief Processor for the built-in 4OSC synthesizer
+ *
+ * Enumerates parameters generically from plugin->getAutomatableParameters().
+ * The UI maps each control to its param index.
+ */
+class FourOscProcessor : public DeviceProcessor {
+  public:
+    FourOscProcessor(DeviceId deviceId, te::Plugin::Ptr plugin);
+
+    int getParameterCount() const override;
+    ParameterInfo getParameterInfo(int index) const override;
+    void populateParameters(DeviceInfo& info) const override;
+
+    void setParameterByIndex(int paramIndex, float value);
+    float getParameterByIndex(int paramIndex) const;
+};
+
+/**
+ * @brief Processor for the built-in 4-Band Equaliser
+ *
+ * Enumerates parameters generically from plugin->getAutomatableParameters().
+ * Parameter order: loFreq, loGain, loQ, midFreq1, midGain1, midQ1,
+ *                  midFreq2, midGain2, midQ2, hiFreq, hiGain, hiQ
+ */
+class EqualiserProcessor : public DeviceProcessor {
+  public:
+    EqualiserProcessor(DeviceId deviceId, te::Plugin::Ptr plugin);
+
+    int getParameterCount() const override;
+    ParameterInfo getParameterInfo(int index) const override;
+    void populateParameters(DeviceInfo& info) const override;
+
+    void setParameterByIndex(int paramIndex, float value);
+    float getParameterByIndex(int paramIndex) const;
+};
+
+class CompressorProcessor : public DeviceProcessor {
+  public:
+    CompressorProcessor(DeviceId deviceId, te::Plugin::Ptr plugin);
+
+    int getParameterCount() const override;
+    ParameterInfo getParameterInfo(int index) const override;
+    void populateParameters(DeviceInfo& info) const override;
+
+    void setParameterByIndex(int paramIndex, float value);
+    float getParameterByIndex(int paramIndex) const;
+};
+
+class DelayProcessor : public DeviceProcessor {
+  public:
+    DelayProcessor(DeviceId deviceId, te::Plugin::Ptr plugin);
+
+    int getParameterCount() const override;
+    ParameterInfo getParameterInfo(int index) const override;
+    void populateParameters(DeviceInfo& info) const override;
+
+    void setParameterByIndex(int paramIndex, float value);
+    float getParameterByIndex(int paramIndex) const;
+};
+
+class ReverbProcessor : public DeviceProcessor {
+  public:
+    ReverbProcessor(DeviceId deviceId, te::Plugin::Ptr plugin);
+
+    int getParameterCount() const override;
+    ParameterInfo getParameterInfo(int index) const override;
+    void populateParameters(DeviceInfo& info) const override;
+
+    void setParameterByIndex(int paramIndex, float value);
+    float getParameterByIndex(int paramIndex) const;
+};
+
+class ChorusProcessor : public DeviceProcessor {
+  public:
+    ChorusProcessor(DeviceId deviceId, te::Plugin::Ptr plugin);
+
+    int getParameterCount() const override;
+    ParameterInfo getParameterInfo(int index) const override;
+    void populateParameters(DeviceInfo& info) const override;
+
+    void setParameterByIndex(int paramIndex, float value);
+    float getParameterByIndex(int paramIndex) const;
+};
+
+class PhaserProcessor : public DeviceProcessor {
+  public:
+    PhaserProcessor(DeviceId deviceId, te::Plugin::Ptr plugin);
+
+    int getParameterCount() const override;
+    ParameterInfo getParameterInfo(int index) const override;
+    void populateParameters(DeviceInfo& info) const override;
+
+    void setParameterByIndex(int paramIndex, float value);
+    float getParameterByIndex(int paramIndex) const;
+};
+
+class FilterProcessor : public DeviceProcessor {
+  public:
+    FilterProcessor(DeviceId deviceId, te::Plugin::Ptr plugin);
+
+    int getParameterCount() const override;
+    ParameterInfo getParameterInfo(int index) const override;
+    void populateParameters(DeviceInfo& info) const override;
+
+    void setParameterByIndex(int paramIndex, float value);
+    float getParameterByIndex(int paramIndex) const;
+};
+
+class PitchShiftProcessor : public DeviceProcessor {
+  public:
+    PitchShiftProcessor(DeviceId deviceId, te::Plugin::Ptr plugin);
+
+    int getParameterCount() const override;
+    ParameterInfo getParameterInfo(int index) const override;
+    void populateParameters(DeviceInfo& info) const override;
+
+    void setParameterByIndex(int paramIndex, float value);
+    float getParameterByIndex(int paramIndex) const;
+};
+
+class ImpulseResponseProcessor : public DeviceProcessor {
+  public:
+    ImpulseResponseProcessor(DeviceId deviceId, te::Plugin::Ptr plugin);
+
+    int getParameterCount() const override;
+    ParameterInfo getParameterInfo(int index) const override;
+    void populateParameters(DeviceInfo& info) const override;
+
+    void setParameterByIndex(int paramIndex, float value);
+    float getParameterByIndex(int paramIndex) const;
+};
+
+/**
  * @brief Processor for the built-in Drum Grid device
  *
  * Minimal processor — the drum grid has no top-level automatable params initially.

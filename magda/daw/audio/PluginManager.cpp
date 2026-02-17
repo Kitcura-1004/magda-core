@@ -385,6 +385,18 @@ te::Plugin::Ptr PluginManager::loadBuiltInPlugin(TrackId trackId, const juce::St
         plugin = edit_.getPluginCache().createNewPlugin(te::PhaserPlugin::xmlTypeName, {});
         if (plugin)
             track->pluginList.insertPlugin(plugin, -1, nullptr);
+    } else if (type.equalsIgnoreCase("lowpass")) {
+        plugin = edit_.getPluginCache().createNewPlugin(te::LowPassPlugin::xmlTypeName, {});
+        if (plugin)
+            track->pluginList.insertPlugin(plugin, -1, nullptr);
+    } else if (type.equalsIgnoreCase("pitchshift")) {
+        plugin = edit_.getPluginCache().createNewPlugin(te::PitchShiftPlugin::xmlTypeName, {});
+        if (plugin)
+            track->pluginList.insertPlugin(plugin, -1, nullptr);
+    } else if (type.equalsIgnoreCase("impulseresponse")) {
+        plugin = edit_.getPluginCache().createNewPlugin(te::ImpulseResponsePlugin::xmlTypeName, {});
+        if (plugin)
+            track->pluginList.insertPlugin(plugin, -1, nullptr);
     }
 
     if (!plugin) {
@@ -1422,6 +1434,13 @@ te::Plugin::Ptr PluginManager::createPluginOnly(TrackId trackId, const DeviceInf
             plugin = edit_.getPluginCache().createNewPlugin(te::ChorusPlugin::xmlTypeName, {});
         } else if (device.pluginId.containsIgnoreCase("phaser")) {
             plugin = edit_.getPluginCache().createNewPlugin(te::PhaserPlugin::xmlTypeName, {});
+        } else if (device.pluginId.containsIgnoreCase("lowpass")) {
+            plugin = edit_.getPluginCache().createNewPlugin(te::LowPassPlugin::xmlTypeName, {});
+        } else if (device.pluginId.containsIgnoreCase("pitchshift")) {
+            plugin = edit_.getPluginCache().createNewPlugin(te::PitchShiftPlugin::xmlTypeName, {});
+        } else if (device.pluginId.containsIgnoreCase("impulseresponse")) {
+            plugin =
+                edit_.getPluginCache().createNewPlugin(te::ImpulseResponsePlugin::xmlTypeName, {});
         } else if (device.pluginId.containsIgnoreCase("tone")) {
             plugin =
                 edit_.getPluginCache().createNewPlugin(te::ToneGeneratorPlugin::xmlTypeName, {});
@@ -1574,8 +1593,7 @@ te::Plugin::Ptr PluginManager::loadDeviceAsPlugin(TrackId trackId, const DeviceI
         } else if (device.pluginId.containsIgnoreCase("4osc")) {
             plugin = createFourOscSynth(track);
             if (plugin) {
-                // TODO: Create FourOscProcessor to manage all 4 oscillators + ADSR + filter
-                processor = std::make_unique<DeviceProcessor>(device.id, plugin);
+                processor = std::make_unique<FourOscProcessor>(device.id, plugin);
             }
             // Note: "volume" devices are NOT created here - track volume is separate infrastructure
             // managed by ensureVolumePluginPosition() and controlled via
@@ -1585,20 +1603,59 @@ te::Plugin::Ptr PluginManager::loadDeviceAsPlugin(TrackId trackId, const DeviceI
             // No processor for meter - it's just for measurement
         } else if (device.pluginId.containsIgnoreCase("delay")) {
             plugin = edit_.getPluginCache().createNewPlugin(te::DelayPlugin::xmlTypeName, {});
-            if (plugin)
+            if (plugin) {
                 track->pluginList.insertPlugin(plugin, -1, nullptr);
+                processor = std::make_unique<DelayProcessor>(device.id, plugin);
+            }
         } else if (device.pluginId.containsIgnoreCase("reverb")) {
             plugin = edit_.getPluginCache().createNewPlugin(te::ReverbPlugin::xmlTypeName, {});
-            if (plugin)
+            if (plugin) {
                 track->pluginList.insertPlugin(plugin, -1, nullptr);
+                processor = std::make_unique<ReverbProcessor>(device.id, plugin);
+            }
         } else if (device.pluginId.containsIgnoreCase("eq")) {
             plugin = edit_.getPluginCache().createNewPlugin(te::EqualiserPlugin::xmlTypeName, {});
-            if (plugin)
+            if (plugin) {
                 track->pluginList.insertPlugin(plugin, -1, nullptr);
+                processor = std::make_unique<EqualiserProcessor>(device.id, plugin);
+            }
         } else if (device.pluginId.containsIgnoreCase("compressor")) {
             plugin = edit_.getPluginCache().createNewPlugin(te::CompressorPlugin::xmlTypeName, {});
-            if (plugin)
+            if (plugin) {
                 track->pluginList.insertPlugin(plugin, -1, nullptr);
+                processor = std::make_unique<CompressorProcessor>(device.id, plugin);
+            }
+        } else if (device.pluginId.containsIgnoreCase("chorus")) {
+            plugin = edit_.getPluginCache().createNewPlugin(te::ChorusPlugin::xmlTypeName, {});
+            if (plugin) {
+                track->pluginList.insertPlugin(plugin, -1, nullptr);
+                processor = std::make_unique<ChorusProcessor>(device.id, plugin);
+            }
+        } else if (device.pluginId.containsIgnoreCase("phaser")) {
+            plugin = edit_.getPluginCache().createNewPlugin(te::PhaserPlugin::xmlTypeName, {});
+            if (plugin) {
+                track->pluginList.insertPlugin(plugin, -1, nullptr);
+                processor = std::make_unique<PhaserProcessor>(device.id, plugin);
+            }
+        } else if (device.pluginId.containsIgnoreCase("lowpass")) {
+            plugin = edit_.getPluginCache().createNewPlugin(te::LowPassPlugin::xmlTypeName, {});
+            if (plugin) {
+                track->pluginList.insertPlugin(plugin, -1, nullptr);
+                processor = std::make_unique<FilterProcessor>(device.id, plugin);
+            }
+        } else if (device.pluginId.containsIgnoreCase("pitchshift")) {
+            plugin = edit_.getPluginCache().createNewPlugin(te::PitchShiftPlugin::xmlTypeName, {});
+            if (plugin) {
+                track->pluginList.insertPlugin(plugin, -1, nullptr);
+                processor = std::make_unique<PitchShiftProcessor>(device.id, plugin);
+            }
+        } else if (device.pluginId.containsIgnoreCase("impulseresponse")) {
+            plugin =
+                edit_.getPluginCache().createNewPlugin(te::ImpulseResponsePlugin::xmlTypeName, {});
+            if (plugin) {
+                track->pluginList.insertPlugin(plugin, -1, nullptr);
+                processor = std::make_unique<ImpulseResponseProcessor>(device.id, plugin);
+            }
         }
     } else {
         // External plugin - find matching description from KnownPluginList

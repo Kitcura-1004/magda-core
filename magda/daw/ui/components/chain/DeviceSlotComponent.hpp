@@ -2,13 +2,24 @@
 
 #include <juce_gui_basics/juce_gui_basics.h>
 
+#include "ChorusUI.hpp"
+#include "CompressorUI.hpp"
+#include "DelayUI.hpp"
 #include "DrumGridUI.hpp"
+#include "EqualiserUI.hpp"
+#include "FilterUI.hpp"
+#include "FourOscUI.hpp"
+#include "ImpulseResponseUI.hpp"
 #include "NodeComponent.hpp"
 #include "ParamSlotComponent.hpp"
+#include "PhaserUI.hpp"
+#include "PitchShiftUI.hpp"
+#include "ReverbUI.hpp"
 #include "SamplerUI.hpp"
 #include "ToneGeneratorUI.hpp"
 #include "core/DeviceInfo.hpp"
 #include "core/TrackManager.hpp"
+#include "ui/components/common/LinkableTextSlider.hpp"
 #include "ui/components/common/SvgButton.hpp"
 #include "ui/components/common/TextSlider.hpp"
 
@@ -42,7 +53,7 @@ class DeviceSlotComponent : public NodeComponent,
     static constexpr int PARAM_CELL_WIDTH = 48;
     static constexpr int PARAM_CELL_HEIGHT = 28;
     static constexpr int PAGINATION_HEIGHT = 18;
-    static constexpr int CONTENT_HEADER_HEIGHT = 14;
+    static constexpr int CONTENT_HEADER_HEIGHT = 18;
 
     DeviceSlotComponent(const magda::DeviceInfo& device);
     ~DeviceSlotComponent() override;
@@ -140,6 +151,8 @@ class DeviceSlotComponent : public NodeComponent,
   private:
     magda::DeviceInfo device_;
     bool isDrumGrid_ = false;  // Track if this is a drum grid for custom header painting
+    bool isTracktionDevice_ = false;
+    std::unique_ptr<juce::Drawable> tracktionLogo_;
 
     // Header controls
     std::unique_ptr<magda::SvgButton> modButton_;
@@ -164,6 +177,16 @@ class DeviceSlotComponent : public NodeComponent,
     std::unique_ptr<ToneGeneratorUI> toneGeneratorUI_;
     std::unique_ptr<SamplerUI> samplerUI_;
     std::unique_ptr<DrumGridUI> drumGridUI_;
+    std::unique_ptr<FourOscUI> fourOscUI_;
+    std::unique_ptr<EqualiserUI> eqUI_;
+    std::unique_ptr<CompressorUI> compressorUI_;
+    std::unique_ptr<ReverbUI> reverbUI_;
+    std::unique_ptr<DelayUI> delayUI_;
+    std::unique_ptr<ChorusUI> chorusUI_;
+    std::unique_ptr<PhaserUI> phaserUI_;
+    std::unique_ptr<FilterUI> filterUI_;
+    std::unique_ptr<PitchShiftUI> pitchShiftUI_;
+    std::unique_ptr<ImpulseResponseUI> impulseResponseUI_;
 
     void updatePageControls();
     void updateParamModulation();  // Update mod/macro pointers for params
@@ -183,6 +206,7 @@ class DeviceSlotComponent : public NodeComponent,
     // Helper to create custom UI for internal devices
     void createCustomUI();
     void updateCustomUI();
+    void setupCustomUILinking();
 
     // Dynamic layout helpers
     int getVisibleParamCount() const;
