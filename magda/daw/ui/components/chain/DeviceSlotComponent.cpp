@@ -436,8 +436,8 @@ DeviceSlotComponent::DeviceSlotComponent(const magda::DeviceInfo& device) : devi
         setupCustomUILinking();
     }
 
-    // Start timer to sync UI button state with actual window state (10 FPS)
-    startTimer(100);
+    // Start timer for UI button state sync and meter updates (~30 FPS)
+    startTimerHz(30);
 }
 
 DeviceSlotComponent::~DeviceSlotComponent() {
@@ -446,21 +446,30 @@ DeviceSlotComponent::~DeviceSlotComponent() {
 }
 
 void DeviceSlotComponent::timerCallback() {
+    auto* audioEngine = magda::TrackManager::getInstance().getAudioEngine();
+    if (!audioEngine)
+        return;
+
+    auto* bridge = audioEngine->getAudioBridge();
+    if (!bridge)
+        return;
+
     // Update UI button state to match actual plugin window state
     if (uiButton_) {
-        auto* audioEngine = magda::TrackManager::getInstance().getAudioEngine();
-        if (audioEngine) {
-            if (auto* bridge = audioEngine->getAudioBridge()) {
-                bool isOpen = bridge->isPluginWindowOpen(device_.id);
-                bool currentState = uiButton_->getToggleState();
+        bool isOpen = bridge->isPluginWindowOpen(device_.id);
+        bool currentState = uiButton_->getToggleState();
 
-                // Only update if state changed to avoid unnecessary repaints
-                if (isOpen != currentState) {
-                    uiButton_->setToggleState(isOpen, juce::dontSendNotification);
-                    uiButton_->setActive(isOpen);
-                }
-            }
+        // Only update if state changed to avoid unnecessary repaints
+        if (isOpen != currentState) {
+            uiButton_->setToggleState(isOpen, juce::dontSendNotification);
+            uiButton_->setActive(isOpen);
         }
+    }
+
+    // Poll device peak levels and feed to gain slider meter
+    magda::DeviceMeteringManager::DeviceMeterData data;
+    if (bridge->getDeviceMetering().getLatestLevels(device_.id, data)) {
+        gainSlider_.setMeterLevels(data.peakL, data.peakR);
     }
 }
 
@@ -956,10 +965,10 @@ void DeviceSlotComponent::resizedContent(juce::Rectangle<int> contentArea) {
 }
 
 void DeviceSlotComponent::resizedHeaderExtra(juce::Rectangle<int>& headerArea) {
-    // Header layout: [Macro] [M] [Name...] [gain slider] [UI] [on]
+    // Header layout: [Macro] [M] [Name] [UI] [...] [gain slider] [SC] [MO] [on] [X]
     // Note: delete (X) is handled by NodeComponent on the right
 
-    // Macro button on the left (before name) - matches panel order
+    // Macro button on the left
     macroButton_->setBounds(headerArea.removeFromLeft(BUTTON_SIZE));
     headerArea.removeFromLeft(4);
 
@@ -969,10 +978,6 @@ void DeviceSlotComponent::resizedHeaderExtra(juce::Rectangle<int>& headerArea) {
 
     // Power button on the right (before delete which is handled by parent)
     onButton_->setBounds(headerArea.removeFromRight(BUTTON_SIZE));
-    headerArea.removeFromRight(4);
-
-    // UI button
-    uiButton_->setBounds(headerArea.removeFromRight(BUTTON_SIZE));
     headerArea.removeFromRight(4);
 
     // Sidechain button (only if plugin supports it)
@@ -991,8 +996,15 @@ void DeviceSlotComponent::resizedHeaderExtra(juce::Rectangle<int>& headerArea) {
     }
 
     // Gain slider takes some space on the right
-    gainSlider_.setBounds(headerArea.removeFromRight(50));
+    gainSlider_.setBounds(headerArea.removeFromRight(70));
     headerArea.removeFromRight(4);
+
+    // Name label gets the remaining left portion (handled by NodeComponent)
+    // UI button sits just to the right of the name
+    if (uiButton_->isVisible()) {
+        uiButton_->setBounds(headerArea.removeFromRight(BUTTON_SIZE));
+        headerArea.removeFromRight(4);
+    }
 
     // Remaining space is for the name label (handled by NodeComponent)
 }
@@ -2568,13 +2580,7 @@ int DeviceSlotComponent::getVisibleParamCount() const {
 }
 
 int DeviceSlotComponent::getParamsPerRow() const {
-    int visibleCount = getVisibleParamCount();
-
-    // Determine columns based on visible parameter count
-    // Minimum 4 columns to keep header properly sized, always maintain 4 rows
-    if (visibleCount <= 16)
-        return 4;  // 4 columns × 4 rows (minimum width)
-    return 8;      // 8 columns × 4 rows (for 17-32 params)
+    return 8;  // Always 8 columns × 4 rows
 }
 
 int DeviceSlotComponent::getParamsPerPage() const {
