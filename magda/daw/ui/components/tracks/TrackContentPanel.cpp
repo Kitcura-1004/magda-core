@@ -1662,25 +1662,8 @@ bool TrackContentPanel::checkIfMarqueeNeeded(const juce::Point<int>& currentPoin
 bool TrackContentPanel::keyPressed(const juce::KeyPress& key) {
     auto& selectionManager = SelectionManager::getInstance();
 
-    // Cmd/Ctrl+Z: Undo
-    if (key == juce::KeyPress('z', juce::ModifierKeys::commandModifier, 0)) {
-        if (UndoManager::getInstance().canUndo()) {
-            UndoManager::getInstance().undo();
-            return true;
-        }
-        return false;
-    }
-
-    // Cmd/Ctrl+Shift+Z: Redo
-    if (key ==
-        juce::KeyPress('z', juce::ModifierKeys::commandModifier | juce::ModifierKeys::shiftModifier,
-                       0)) {
-        if (UndoManager::getInstance().canRedo()) {
-            UndoManager::getInstance().redo();
-            return true;
-        }
-        return false;
-    }
+    // Note: Cmd+Z / Cmd+Shift+Z (undo/redo) are handled globally by
+    // MainComponent's ApplicationCommandManager key mappings.
 
     // Cmd/Ctrl+A: Select all clips
     if (key == juce::KeyPress('a', juce::ModifierKeys::commandModifier, 0)) {
