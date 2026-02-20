@@ -2291,38 +2291,23 @@ void TrackHeadersPanel::itemDropped(const SourceDetails& details) {
         }
     }
 
+    auto device = TrackManager::deviceInfoFromPluginObject(*obj);
+
     if (targetIndex >= 0 && targetIndex < static_cast<int>(visibleTrackIds_.size())) {
         // Dropped on existing track header → add plugin to that track
-        DeviceInfo device;
-        device.name = obj->getProperty("name").toString().toStdString();
-        device.manufacturer = obj->getProperty("manufacturer").toString().toStdString();
-        auto uniqueId = obj->getProperty("uniqueId").toString();
-        device.pluginId = uniqueId.isNotEmpty() ? uniqueId
-                                                : obj->getProperty("name").toString() + "_" +
-                                                      obj->getProperty("format").toString();
-        device.isInstrument = static_cast<bool>(obj->getProperty("isInstrument"));
-        device.uniqueId = obj->getProperty("uniqueId").toString();
-        device.fileOrIdentifier = obj->getProperty("fileOrIdentifier").toString();
-
-        juce::String format = obj->getProperty("format").toString();
-        if (format == "VST3")
-            device.format = PluginFormat::VST3;
-        else if (format == "AU")
-            device.format = PluginFormat::AU;
-        else if (format == "VST")
-            device.format = PluginFormat::VST;
-        else if (format == "Internal")
-            device.format = PluginFormat::Internal;
-
         TrackId trackId = visibleTrackIds_[targetIndex];
-        TrackManager::getInstance().addDeviceToTrack(trackId, device);
+        auto cmd = std::make_unique<AddDeviceToTrackCommand>(trackId, device);
+        UndoManager::getInstance().executeCommand(std::move(cmd));
         TrackManager::getInstance().setSelectedTrack(trackId);
 
         DBG("Dropped plugin on track header: " << juce::String(device.name) << " → track "
                                                << trackId);
     } else {
         // Dropped on empty area → create new track with plugin
-        TrackManager::createTrackWithPlugin(*obj);
+        TrackType trackType = device.isInstrument ? TrackType::Instrument : TrackType::Audio;
+        juce::String pluginName = obj->getProperty("name").toString();
+        auto cmd = std::make_unique<CreateTrackWithDeviceCommand>(pluginName, trackType, device);
+        UndoManager::getInstance().executeCommand(std::move(cmd));
     }
 
     pluginDropTrackIndex_ = -1;

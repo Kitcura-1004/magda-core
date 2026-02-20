@@ -13,6 +13,7 @@
 #include "Config.hpp"
 #include "core/ClipCommands.hpp"
 #include "core/SelectionManager.hpp"
+#include "core/TrackCommands.hpp"
 #include "core/UndoManager.hpp"
 
 namespace magda {
@@ -2161,6 +2162,9 @@ void TrackContentPanel::filesDropped(const juce::StringArray& files, int x, int 
     double currentTime = dropTime;
     int importedCount = 0;
 
+    // Wrap entire audio file drop in a compound operation so it's a single undo step
+    CompoundOperationScope scope("Import Audio Files");
+
     for (const auto& filePath : files) {
         // Filter audio files only
         if (!filePath.endsWithIgnoreCase(".wav") && !filePath.endsWithIgnoreCase(".aiff") &&
@@ -2176,7 +2180,10 @@ void TrackContentPanel::filesDropped(const juce::StringArray& files, int x, int 
         // Create a new audio track if dropped on empty area
         if (targetTrackId == INVALID_TRACK_ID) {
             juce::String trackName = audioFile.getFileNameWithoutExtension();
-            targetTrackId = TrackManager::getInstance().createTrack(trackName, TrackType::Audio);
+            auto createTrackCmd = std::make_unique<CreateTrackCommand>(TrackType::Audio, trackName);
+            auto* createTrackPtr = createTrackCmd.get();
+            UndoManager::getInstance().executeCommand(std::move(createTrackCmd));
+            targetTrackId = createTrackPtr->getCreatedTrackId();
             if (targetTrackId == INVALID_TRACK_ID)
                 return;
             TrackManager::getInstance().setSelectedTrack(targetTrackId);
@@ -2234,7 +2241,11 @@ void TrackContentPanel::itemDropped(const SourceDetails& details) {
     repaint();
 
     if (auto* obj = details.description.getDynamicObject()) {
-        TrackManager::createTrackWithPlugin(*obj);
+        auto device = TrackManager::deviceInfoFromPluginObject(*obj);
+        TrackType trackType = device.isInstrument ? TrackType::Instrument : TrackType::Audio;
+        juce::String pluginName = obj->getProperty("name").toString();
+        auto cmd = std::make_unique<CreateTrackWithDeviceCommand>(pluginName, trackType, device);
+        UndoManager::getInstance().executeCommand(std::move(cmd));
     }
 }
 
