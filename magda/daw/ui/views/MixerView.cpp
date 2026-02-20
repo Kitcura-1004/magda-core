@@ -213,7 +213,7 @@ void MixerView::ChannelStrip::setupControls() {
     panKnob = std::make_unique<juce::Slider>(juce::Slider::RotaryHorizontalVerticalDrag,
                                              juce::Slider::NoTextBox);
     panKnob->setRange(-1.0, 1.0, 0.01);
-    panKnob->setValue(0.0);
+    panKnob->setValue(0.0, juce::dontSendNotification);
     panKnob->setColour(juce::Slider::rotarySliderFillColourId,
                        DarkTheme::getColour(DarkTheme::ACCENT_BLUE));
     panKnob->setColour(juce::Slider::rotarySliderOutlineColourId,
@@ -267,9 +267,9 @@ void MixerView::ChannelStrip::setupControls() {
     // Volume fader - using dB scale with unity at 0.75 position
     volumeFader =
         std::make_unique<juce::Slider>(juce::Slider::LinearVertical, juce::Slider::NoTextBox);
-    volumeFader->setRange(0.0, 1.0, 0.001);             // Internal 0-1 range
-    volumeFader->setValue(0.75);                        // Unity gain (0 dB) at 75%
-    volumeFader->setSliderSnapsToMousePosition(false);  // Relative drag, not jump to click
+    volumeFader->setRange(0.0, 1.0, 0.001);                   // Internal 0-1 range
+    volumeFader->setValue(0.75, juce::dontSendNotification);  // Unity gain (0 dB) at 75%
+    volumeFader->setSliderSnapsToMousePosition(false);        // Relative drag, not jump to click
     volumeFader->setColour(juce::Slider::trackColourId, DarkTheme::getColour(DarkTheme::SURFACE));
     volumeFader->setColour(juce::Slider::backgroundColourId,
                            DarkTheme::getColour(DarkTheme::SURFACE));
@@ -761,7 +761,7 @@ void MixerView::DrumSubChannelStrip::setupControls() {
     panKnob = std::make_unique<juce::Slider>(juce::Slider::RotaryHorizontalVerticalDrag,
                                              juce::Slider::NoTextBox);
     panKnob->setRange(-1.0, 1.0, 0.01);
-    panKnob->setValue(0.0);
+    panKnob->setValue(0.0, juce::dontSendNotification);
     panKnob->setColour(juce::Slider::rotarySliderFillColourId,
                        DarkTheme::getColour(DarkTheme::ACCENT_BLUE));
     panKnob->setColour(juce::Slider::rotarySliderOutlineColourId,
@@ -812,7 +812,7 @@ void MixerView::DrumSubChannelStrip::setupControls() {
     volumeFader =
         std::make_unique<juce::Slider>(juce::Slider::LinearVertical, juce::Slider::NoTextBox);
     volumeFader->setRange(0.0, 1.0, 0.001);
-    volumeFader->setValue(0.75);
+    volumeFader->setValue(0.75, juce::dontSendNotification);
     volumeFader->setSliderSnapsToMousePosition(false);
     volumeFader->setColour(juce::Slider::trackColourId, DarkTheme::getColour(DarkTheme::SURFACE));
     volumeFader->setColour(juce::Slider::backgroundColourId,
