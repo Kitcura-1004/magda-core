@@ -48,6 +48,11 @@ AudioBridge::AudioBridge(te::Engine& engine, te::Edit& edit)
       trackController_(engine, edit),
       pluginManager_(engine, edit, trackController_, pluginWindowBridge_, transportState_),
       clipSynchronizer_(edit, trackController_, warpMarkerManager_) {
+    // Wire up async plugin load completion callback to notify UI
+    pluginManager_.onAsyncPluginLoaded = [](TrackId trackId) {
+        TrackManager::getInstance().notifyTrackDevicesChanged(trackId);
+    };
+
     // Register as TrackManager listener
     TrackManager::getInstance().addListener(this);
 
@@ -869,6 +874,30 @@ float AudioBridge::getMasterPan() const {
 // =============================================================================
 // Audio Routing
 // =============================================================================
+
+juce::BigInteger AudioBridge::getEnabledInputChannels() const {
+    juce::BigInteger enabled;
+    auto& dm = engine_.getDeviceManager();
+    for (auto* dev : dm.getWaveInputDevices()) {
+        if (dev->isEnabled()) {
+            for (const auto& ch : dev->getChannels())
+                enabled.setBit(ch.indexInDevice, true);
+        }
+    }
+    return enabled;
+}
+
+juce::BigInteger AudioBridge::getEnabledOutputChannels() const {
+    juce::BigInteger enabled;
+    auto& dm = engine_.getDeviceManager();
+    for (auto* dev : dm.getWaveOutputDevices()) {
+        if (dev->isEnabled()) {
+            for (const auto& ch : dev->getChannels())
+                enabled.setBit(ch.indexInDevice, true);
+        }
+    }
+    return enabled;
+}
 
 void AudioBridge::setTrackAudioOutput(TrackId trackId, const juce::String& destination) {
     trackController_.setTrackAudioOutput(trackId, destination);

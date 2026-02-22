@@ -464,8 +464,12 @@ void TrackHeadersPanel::populateAudioInputOptions(RoutingSelector* selector, Tra
             }
         }
     }
+    juce::BigInteger enabledInputChannels;
+    if (auto* bridge = audioEngine_->getAudioBridge())
+        enabledInputChannels = bridge->getEnabledInputChannels();
     RoutingSyncHelper::populateAudioInputOptions(selector, deviceManager->getCurrentAudioDevice(),
-                                                 trackId, &inputTrackMapping_);
+                                                 trackId, &inputTrackMapping_,
+                                                 enabledInputChannels);
 }
 
 void TrackHeadersPanel::populateAudioOutputOptions(RoutingSelector* selector,
@@ -475,8 +479,12 @@ void TrackHeadersPanel::populateAudioOutputOptions(RoutingSelector* selector,
     auto* deviceManager = audioEngine_->getDeviceManager();
     if (!deviceManager)
         return;
-    RoutingSyncHelper::populateAudioOutputOptions(
-        selector, currentTrackId, deviceManager->getCurrentAudioDevice(), outputTrackMapping_);
+    juce::BigInteger enabledOutputChannels;
+    if (auto* bridge = audioEngine_->getAudioBridge())
+        enabledOutputChannels = bridge->getEnabledOutputChannels();
+    RoutingSyncHelper::populateAudioOutputOptions(selector, currentTrackId,
+                                                  deviceManager->getCurrentAudioDevice(),
+                                                  outputTrackMapping_, enabledOutputChannels);
 }
 
 void TrackHeadersPanel::populateMidiInputOptions(RoutingSelector* selector) {
@@ -872,10 +880,16 @@ void TrackHeadersPanel::updateRoutingSelectorFromTrack(TrackHeader& header,
         return;
     auto* deviceManager = audioEngine_->getDeviceManager();
     auto* device = deviceManager ? deviceManager->getCurrentAudioDevice() : nullptr;
+    juce::BigInteger enabledIn, enabledOut;
+    if (auto* bridge = audioEngine_->getAudioBridge()) {
+        enabledIn = bridge->getEnabledInputChannels();
+        enabledOut = bridge->getEnabledOutputChannels();
+    }
     RoutingSyncHelper::syncSelectorsFromTrack(
         *track, header.audioInputSelector.get(), header.inputSelector.get(),
         header.outputSelector.get(), header.midiOutputSelector.get(), audioEngine_->getMidiBridge(),
-        device, header.trackId, outputTrackMapping_, midiOutputTrackMapping_, &inputTrackMapping_);
+        device, header.trackId, outputTrackMapping_, midiOutputTrackMapping_, &inputTrackMapping_,
+        enabledIn, enabledOut);
 }
 
 void TrackHeadersPanel::paint(juce::Graphics& g) {
@@ -1606,12 +1620,17 @@ void TrackHeadersPanel::updateTrackHeaderLayout() {
                     tcpArea.removeFromTop(rowGap);
 
                     // Output row: [Audio Out] [MIDI Out] [outputIcon]
+                    // Multi-out children: hide MIDI out (no independent MIDI routing)
                     auto outputRow = tcpArea.removeFromTop(contentRowHeight);
                     header.outputSelector->setBounds(outputRow.removeFromLeft(ddWidth));
                     header.outputSelector->setVisible(true);
                     outputRow.removeFromLeft(ddGap);
-                    header.midiOutputSelector->setBounds(outputRow.removeFromLeft(ddWidth));
-                    header.midiOutputSelector->setVisible(true);
+                    if (!header.isMultiOut) {
+                        header.midiOutputSelector->setBounds(outputRow.removeFromLeft(ddWidth));
+                        header.midiOutputSelector->setVisible(true);
+                    } else {
+                        header.midiOutputSelector->setVisible(false);
+                    }
                     outputRow.removeFromLeft(ddGap);
                     header.outputIcon->setBounds(outputRow.removeFromLeft(iconSize));
                     header.outputIcon->setVisible(true);
