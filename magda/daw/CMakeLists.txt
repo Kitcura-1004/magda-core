@@ -66,6 +66,7 @@ juce_add_binary_data(MagdaAssets
     ../../assets/icons/bezier.svg
     ../../assets/icons/curve.svg
     ../../assets/icons/save.svg
+    ../../assets/icons/folder-open.svg
     ../../assets/icons/infinito.svg
     ../../assets/icons/position.svg
     ../../assets/icons/Offset.svg
@@ -353,6 +354,7 @@ set(DAW_UI_SOURCES
     ui/components/chain/FilterUI.cpp
     ui/components/chain/PitchShiftUI.cpp
     ui/components/chain/ImpulseResponseUI.cpp
+    ui/components/chain/UtilityUI.cpp
     ui/components/chain/FourOscUI.cpp
     ui/components/chain/PadChainPanel.cpp
     ui/components/chain/PadDeviceSlot.cpp
@@ -551,6 +553,7 @@ set(DAW_HEADERS
     ui/components/chain/FilterUI.hpp
     ui/components/chain/PitchShiftUI.hpp
     ui/components/chain/ImpulseResponseUI.hpp
+    ui/components/chain/UtilityUI.hpp
     ui/components/chain/FourOscUI.hpp
     ui/components/chain/PagedControlPanel.hpp
     ui/components/chain/MacroKnobComponent.hpp
