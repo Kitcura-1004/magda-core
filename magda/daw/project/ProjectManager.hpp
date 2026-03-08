@@ -1,6 +1,7 @@
 #pragma once
 
 #include <juce_core/juce_core.h>
+#include <juce_events/juce_events.h>
 
 #include <functional>
 #include <thread>
@@ -50,7 +51,7 @@ class ProjectManagerListener {
  *
  * Handles new/open/save/close operations and tracks unsaved changes.
  */
-class ProjectManager {
+class ProjectManager : private juce::Timer {
   public:
     static ProjectManager& getInstance();
 
@@ -136,6 +137,13 @@ class ProjectManager {
     }
 
     /**
+     * @brief Get mutable project info (for capturing live state before save)
+     */
+    ProjectInfo& getMutableProjectInfo() {
+        return currentProject_;
+    }
+
+    /**
      * @brief Check if a project is currently open
      */
     bool hasOpenProject() const {
@@ -163,6 +171,19 @@ class ProjectManager {
     void setLoopSettings(bool enabled, double startBeats, double endBeats);
 
     /**
+     * @brief Check if the project has unsaved changes
+     */
+    bool isDirty() const {
+        return isDirty_;
+    }
+
+    /**
+     * @brief Show unsaved changes dialog and ask whether to proceed
+     * @return true if the user chooses to proceed, false if cancelled
+     */
+    bool showUnsavedChangesDialog();
+
+    /**
      * @brief Mark project as dirty (unsaved changes)
      * Called by managers when data changes
      */
@@ -182,11 +203,46 @@ class ProjectManager {
     std::function<void()> onBeforeSave;
 
     /**
+     * @brief Callback invoked after loading a project to restore UI state (zoom, view mode)
+     */
+    std::function<void(const ProjectInfo&)> onAfterLoad;
+
+    /**
      * @brief Get last error message from failed operation
      */
     const juce::String& getLastError() const {
         return lastError_;
     }
+
+    // ========================================================================
+    // Auto-Save
+    // ========================================================================
+
+    /**
+     * @brief Enable or disable auto-save
+     * @param enabled Whether auto-save is active
+     * @param intervalSeconds Interval between auto-save checks (default 60s)
+     */
+    void setAutoSaveEnabled(bool enabled, int intervalSeconds = 60);
+
+    bool isAutoSaveEnabled() const {
+        return autoSaveEnabled_;
+    }
+
+    /**
+     * @brief Check if an autosave file exists for the given project file
+     * @param projectFile The .mgd project file
+     * @return The autosave file if it exists, or an invalid File
+     */
+    static juce::File getAutosaveFile(const juce::File& projectFile);
+
+    /**
+     * @brief Check for autosave recovery and prompt user
+     * @param projectFile The .mgd project file being opened
+     * @return true if the user chose to recover (caller should load the autosave),
+     *         false if the user declined (caller should load the original)
+     */
+    static bool promptAutosaveRecovery(const juce::File& projectFile);
 
     // ========================================================================
     // Media Directories
@@ -225,12 +281,16 @@ class ProjectManager {
     ~ProjectManager();
 
     void joinBackgroundThread();
+    void timerCallback() override;
+    void performAutosave();
+    void deleteAutosaveFile();
 
     ProjectInfo currentProject_;
     juce::File currentFile_;
     juce::File mediaDirectory_;
     bool isDirty_ = false;
     bool isProjectOpen_ = false;
+    bool autoSaveEnabled_ = true;
 
     std::vector<ProjectManagerListener*> listeners_;
     juce::String lastError_;
@@ -256,13 +316,6 @@ class ProjectManager {
      * @brief Migrate media files from old directory to new, updating clip paths
      */
     void migrateMediaFiles(const juce::File& oldDir, const juce::File& newDir);
-
-    /**
-     * @brief Show unsaved changes dialog and ask whether to proceed
-     * @return true if the user chooses to proceed despite unsaved changes, false if the user
-     * cancels the operation
-     */
-    bool showUnsavedChangesDialog();
 };
 
 }  // namespace magda

@@ -370,7 +370,7 @@ void ClipInspector::initClipPropertiesSection() {
                     .withButton("OK")
                     .withButton("Cancel"),
                 [this, clipId, applyAutoTempo](int result) {
-                    if (result == 1 && primaryClipId() == clipId) {
+                    if (result == 0 && primaryClipId() == clipId) {
                         applyAutoTempo(true);
                     }
                 });
@@ -456,9 +456,13 @@ void ClipInspector::initClipPropertiesSection() {
             bpm = timelineController_->getState().tempo.bpm;
         }
         // Preserve current phase when moving loop start
+        // Use sourceBPM for audio source-file positions
+        double loopBpm =
+            (clip->type == magda::ClipType::Audio && clip->sourceBPM > 0.0) ? clip->sourceBPM : bpm;
         double currentPhase = clip->offset - clip->loopStart;
         double newLoopStartBeats = clipLoopStartValue_->getValue();
-        double newLoopStartSeconds = magda::TimelineUtils::beatsToSeconds(newLoopStartBeats, bpm);
+        double newLoopStartSeconds =
+            magda::TimelineUtils::beatsToSeconds(newLoopStartBeats, loopBpm);
         newLoopStartSeconds = std::max(0.0, newLoopStartSeconds);
         double newOffset = newLoopStartSeconds + currentPhase;
         magda::ClipManager::getInstance().setLoopStart(primaryClipId(), newLoopStartSeconds, bpm);
@@ -489,8 +493,11 @@ void ClipInspector::initClipPropertiesSection() {
         }
 
         // Compute new loop length from loop end - loop start
+        // Use sourceBPM for audio source-file positions
+        double loopBpm =
+            (clip->type == magda::ClipType::Audio && clip->sourceBPM > 0.0) ? clip->sourceBPM : bpm;
         double newLoopEndBeats = clipLoopEndValue_->getValue();
-        double loopStartBeats = magda::TimelineUtils::secondsToBeats(clip->loopStart, bpm);
+        double loopStartBeats = magda::TimelineUtils::secondsToBeats(clip->loopStart, loopBpm);
         double newLoopLengthBeats = newLoopEndBeats - loopStartBeats;
         if (newLoopLengthBeats < 0.25)
             newLoopLengthBeats = 0.25;
@@ -499,8 +506,8 @@ void ClipInspector::initClipPropertiesSection() {
         if (clip->autoTempo && clip->sourceBPM > 0.0) {
             newLoopLengthSeconds = (newLoopLengthBeats * 60.0) / clip->sourceBPM;
         } else {
-            double timelineSeconds = magda::TimelineUtils::beatsToSeconds(newLoopLengthBeats, bpm);
-            newLoopLengthSeconds = timelineSeconds * clip->speedRatio;
+            newLoopLengthSeconds =
+                magda::TimelineUtils::beatsToSeconds(newLoopLengthBeats, loopBpm);
         }
 
         if (clip->view == magda::ClipView::Session) {
@@ -540,16 +547,21 @@ void ClipInspector::initClipPropertiesSection() {
         if (!clip)
             return;
 
-        double bpm = 120.0;
-        if (timelineController_) {
-            bpm = timelineController_->getState().tempo.bpm;
+        double newPhaseBeats = std::max(0.0, clipLoopPhaseValue_->getValue());
+        if (clip->type == magda::ClipType::MIDI) {
+            // MIDI phase lives in midiOffset (beats)
+            magda::UndoManager::getInstance().executeCommand(
+                std::make_unique<magda::SetClipOffsetCommand>(primaryClipId(), newPhaseBeats));
+        } else {
+            // Audio phase: convert beats to seconds and set offset
+            double bpm = 120.0;
+            if (timelineController_)
+                bpm = timelineController_->getState().tempo.bpm;
+            double newPhaseSeconds = magda::TimelineUtils::beatsToSeconds(newPhaseBeats, bpm);
+            double newOffset = clip->loopStart + newPhaseSeconds;
+            magda::UndoManager::getInstance().executeCommand(
+                std::make_unique<magda::SetClipOffsetCommand>(primaryClipId(), newOffset));
         }
-        double newPhaseBeats = clipLoopPhaseValue_->getValue();
-        double newPhaseSeconds = magda::TimelineUtils::beatsToSeconds(newPhaseBeats, bpm);
-        newPhaseSeconds = std::max(0.0, newPhaseSeconds);
-        double newOffset = clip->loopStart + newPhaseSeconds;
-        magda::UndoManager::getInstance().executeCommand(
-            std::make_unique<magda::SetClipOffsetCommand>(primaryClipId(), newOffset));
     };
     clipPropsContainer_.addChildComponent(*clipLoopPhaseValue_);
 }
@@ -748,7 +760,7 @@ void ClipInspector::initPitchSection() {
     pitchChangeValue_ = std::make_unique<DraggableValueLabel>(DraggableValueLabel::Format::Raw);
     pitchChangeValue_->setRange(-48.0, 48.0, 0.0);
     pitchChangeValue_->setSuffix(" st");
-    pitchChangeValue_->setDecimalPlaces(1);
+    pitchChangeValue_->setDecimalPlaces(2);
     pitchChangeValue_->onValueChange = [this]() {
         if (selectedClipIds_.empty())
             return;
@@ -768,29 +780,6 @@ void ClipInspector::initPitchSection() {
         refreshClipRangeDisplay();
     };
     clipPropsContainer_.addChildComponent(*pitchChangeValue_);
-
-    transposeValue_ = std::make_unique<DraggableValueLabel>(DraggableValueLabel::Format::Integer);
-    transposeValue_->setRange(-24.0, 24.0, 0.0);
-    transposeValue_->setSuffix(" st");
-    transposeValue_->onValueChange = [this]() {
-        if (selectedClipIds_.empty())
-            return;
-        double currentValue = transposeValue_->getValue();
-        int delta = static_cast<int>(std::round(currentValue - multiTransposeDragStart_));
-        if (delta == 0)
-            return;
-        for (auto cid : selectedClipIds_) {
-            const auto* c = magda::ClipManager::getInstance().getClip(cid);
-            if (c && c->type == magda::ClipType::Audio) {
-                int newVal = juce::jlimit(-24, 24, c->transpose + delta);
-                magda::ClipManager::getInstance().setTranspose(cid, newVal);
-            }
-        }
-        multiTransposeDragStart_ = currentValue;
-        computeClipRange();
-        refreshClipRangeDisplay();
-    };
-    clipPropsContainer_.addChildComponent(*transposeValue_);
 }
 
 // ========================================================================

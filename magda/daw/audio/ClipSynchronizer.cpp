@@ -154,18 +154,6 @@ void ClipSynchronizer::clipPropertyChanged(ClipId clipId) {
                                                            << " not found in ClipManager");
         return;
     }
-    DBG("[CLIP-SYNC-PROP-CHANGED] clipId="
-        << clipId << " view=" << (int)clip->view << " startTime=" << clip->startTime << " length="
-        << clip->length << " offset=" << clip->offset << " loopStart=" << clip->loopStart
-        << " getTeOffset()=" << clip->getTeOffset(clip->loopEnabled));
-
-    if (clip->isBeatsAuthoritative()) {
-        DBG("[CLIP-SYNCHRONIZER] clipPropertyChanged clip "
-            << clipId << " length=" << clip->length << " loopLength=" << clip->loopLength
-            << " loopLengthBeats=" << clip->loopLengthBeats << " lengthBeats=" << clip->lengthBeats
-            << " startTime=" << clip->startTime << " startBeats=" << clip->startBeats);
-    }
-
     if (clip->view == ClipView::Session) {
         // Session clip property changed (e.g. sceneIndex set after creation).
         // Try to sync it to a slot if not already synced.
@@ -530,8 +518,11 @@ bool ClipSynchronizer::syncSessionClipToSlot(ClipId clipId) {
             }
 
             // Set file offset (trim point) - relative to loop start, in stretched time
-            audioClipPtr->setOffset(
-                te::TimeDuration::fromSeconds(clip->getTeOffset(clip->loopEnabled)));
+            {
+                double bpm = edit_.tempoSequence.getBpmAt(te::TimePosition());
+                audioClipPtr->setOffset(
+                    te::TimeDuration::fromSeconds(clip->getTeOffset(clip->loopEnabled, bpm)));
+            }
 
             // Set looping properties
             if (clip->loopEnabled && clip->getSourceLength() > 0.0) {
@@ -898,8 +889,10 @@ void ClipSynchronizer::configureSessionAutoTempo(te::WaveAudioClip* audioClip,
     if (!audioClip->getAutoTempo())
         audioClip->setAutoTempo(true);
 
-    // Set offset (with speedRatio=1.0, stretched time == source time)
-    audioClip->setOffset(te::TimeDuration::fromSeconds(clip->getTeOffset(clip->loopEnabled)));
+    // Set offset — for autoTempo, convert source seconds to timeline seconds
+    double bpmForOffset = edit_.tempoSequence.getBpmAt(te::TimePosition());
+    audioClip->setOffset(
+        te::TimeDuration::fromSeconds(clip->getTeOffset(clip->loopEnabled, bpmForOffset)));
 
     // Set beat-based loop range using the same helper as arrangement path
     if (clip->loopEnabled) {
@@ -1200,9 +1193,6 @@ void ClipSynchronizer::syncMidiClipToEngine(ClipId clipId, const ClipInfo* clip)
         midiClipPtr->setEnd(endPos, false);
     }
 
-    // Force offset to 0 — note shifting is handled manually below
-    midiClipPtr->setOffset(te::TimeDuration::fromSeconds(0.0));
-
     // Set up internal looping on the TE clip
     if (clip->loopEnabled && clip->loopLengthBeats > 0.0) {
         // Use the stored loop region length, not the clip container length
@@ -1214,34 +1204,32 @@ void ClipSynchronizer::syncMidiClipToEngine(ClipId clipId, const ClipInfo* clip)
         midiClipPtr->setLoopRange(te::TimeRange(loopStartTime, loopEndTime));
         midiClipPtr->setLoopRangeBeats(
             {te::BeatPosition::fromBeats(0.0), te::BeatPosition::fromBeats(loopBeats)});
+
+        // Set TE offset from midiOffset (beats) so playback starts at the phase position
+        double bpm = edit_.tempoSequence.getBpmAt(te::TimePosition());
+        double phaseSeconds = clip->midiOffset * (60.0 / bpm);
+        midiClipPtr->setOffset(te::TimeDuration::fromSeconds(phaseSeconds));
     } else {
         midiClipPtr->disableLooping();
+        midiClipPtr->setOffset(te::TimeDuration::fromSeconds(0.0));
     }
 
     // Clear existing notes and rebuild from ClipManager
     auto& sequence = midiClipPtr->getSequence();
     sequence.clear(nullptr);
 
-    // Calculate the beat range visible in this clip based on midiOffset
+    // Calculate the beat range visible in this clip
     double clipLengthBeats = clip->lengthBeats;
-    // When looping, notes only span the loop region — TE handles repetition
     double contentLengthBeats = (clip->loopEnabled && clip->loopLengthBeats > 0.0)
                                     ? clip->loopLengthBeats
                                     : clipLengthBeats;
-    // Apply midiOffset in all modes so arrangement clips also respect the offset
-    double effectiveOffset = clip->midiOffset;
-    double visibleStart = effectiveOffset;  // Where the clip's "view window" starts
+    // For non-looped clips, midiTrimOffset shifts the visible window (left-resize trim)
+    double effectiveOffset = (clip->loopEnabled) ? 0.0 : clip->midiTrimOffset;
+    double visibleStart = effectiveOffset;
     double visibleEnd = effectiveOffset + contentLengthBeats;
 
-    DBG("MIDI SYNC clip " << clipId << ":");
-    DBG("  midiOffset=" << clip->midiOffset << ", clipLength=" << clipLengthBeats << " beats");
-    DBG("  loopEnabled=" << (int)clip->loopEnabled
-                         << ", loopLengthBeats=" << clip->loopLengthBeats);
-    DBG("  contentLengthBeats=" << contentLengthBeats);
-    DBG("  Visible range: [" << visibleStart << ", " << visibleEnd << ")");
-    DBG("  Total notes: " << clip->midiNotes.size());
-
-    // Only add notes that overlap with the visible range
+    // Add notes to TE sequence — notes stay at original positions,
+    // TE offset + looping handles phase wrapping natively
     int addedCount = 0;
 
     for (const auto& note : clip->midiNotes) {
@@ -1249,18 +1237,18 @@ void ClipSynchronizer::syncMidiClipToEngine(ClipId clipId, const ClipInfo* clip)
         double noteEnd = noteStart + note.lengthBeats;
 
         // Skip notes completely outside the visible range
-        if (noteEnd <= visibleStart || noteStart >= visibleEnd) {
+        if (noteEnd <= visibleStart || noteStart >= visibleEnd)
             continue;
-        }
+
+        double adjustedLength = note.lengthBeats;
 
         // Truncate notes at content boundary to prevent stuck notes
-        double adjustedLength = note.lengthBeats;
         if (noteStart >= contentLengthBeats)
             continue;
         if (noteEnd > contentLengthBeats)
             adjustedLength = contentLengthBeats - noteStart;
 
-        // Calculate position relative to clip start (subtract midiOffset for session clips only)
+        // For non-looped clips with midiOffset, shift note positions
         double adjustedStart = noteStart - effectiveOffset;
 
         // Truncate note if it starts before the visible range
@@ -1270,11 +1258,9 @@ void ClipSynchronizer::syncMidiClipToEngine(ClipId clipId, const ClipInfo* clip)
         }
 
         // Truncate note if it extends past the content boundary
-        if (adjustedStart + adjustedLength > contentLengthBeats) {
+        if (adjustedStart + adjustedLength > contentLengthBeats)
             adjustedLength = contentLengthBeats - adjustedStart;
-        }
 
-        // Add note to Tracktion (all positions are now non-negative)
         if (adjustedLength > 0.0) {
             sequence.addNote(note.noteNumber, te::BeatPosition::fromBeats(adjustedStart),
                              te::BeatDuration::fromBeats(adjustedLength), note.velocity, 0,
@@ -1282,8 +1268,6 @@ void ClipSynchronizer::syncMidiClipToEngine(ClipId clipId, const ClipInfo* clip)
             addedCount++;
         }
     }
-
-    DBG("  Added " << addedCount << " notes to Tracktion");
 
     // Add CC events with interpolation (grouped by controller number)
     {
@@ -1417,34 +1401,7 @@ void ClipSynchronizer::syncAudioClipToEngine(ClipId clipId, const ClipInfo* clip
     // TE's reversed offset/loop with our model's pre-reverse values.
     // The playback graph rebuild is deferred until the proxy file is ready.
     if (clip->isReversed != audioClipPtr->getIsReversed()) {
-        DBG("========== REVERSE TOGGLE [" << clipId << "] ==========");
-        DBG("  Setting isReversed = " << (int)clip->isReversed);
-        DBG("  BEFORE setIsReversed:");
-        DBG("    TE offset: " << audioClipPtr->getPosition().getOffset().inSeconds());
-        DBG("    TE loopStart: " << audioClipPtr->getLoopStart().inSeconds());
-        DBG("    TE loopLength: " << audioClipPtr->getLoopLength().inSeconds());
-        DBG("    TE isLooping: " << (int)audioClipPtr->isLooping());
-        DBG("    TE sourceFile: " << audioClipPtr->getCurrentSourceFile().getFullPathName());
-        DBG("    TE playbackFile: " << audioClipPtr->getPlaybackFile().getFile().getFullPathName());
-        DBG("    TE speedRatio: " << audioClipPtr->getSpeedRatio());
-        DBG("    Model offset: " << clip->offset);
-        DBG("    Model loopStart: " << clip->loopStart);
-        DBG("    Model loopLength: " << clip->loopLength);
-        DBG("    Model loopEnabled: " << (int)clip->loopEnabled);
-
         audioClipPtr->setIsReversed(clip->isReversed);
-
-        DBG("  AFTER setIsReversed:");
-        DBG("    TE offset: " << audioClipPtr->getPosition().getOffset().inSeconds());
-        DBG("    TE loopStart: " << audioClipPtr->getLoopStart().inSeconds());
-        DBG("    TE loopLength: " << audioClipPtr->getLoopLength().inSeconds());
-        DBG("    TE isLooping: " << (int)audioClipPtr->isLooping());
-        DBG("    TE sourceFile: " << audioClipPtr->getCurrentSourceFile().getFullPathName());
-        DBG("    TE playbackFile: " << audioClipPtr->getPlaybackFile().getFile().getFullPathName());
-        DBG("    TE playbackFile exists: "
-            << (int)audioClipPtr->getPlaybackFile().getFile().existsAsFile());
-        DBG("    TE position: " << audioClipPtr->getPosition().getStart().inSeconds() << " - "
-                                << audioClipPtr->getPosition().getEnd().inSeconds());
 
         // Read back ALL of TE's transformed values into our model
         if (auto* mutableClip = ClipManager::getInstance().getClip(clipId)) {
@@ -1456,24 +1413,17 @@ void ClipSynchronizer::syncAudioClipToEngine(ClipId clipId, const ClipInfo* clip
             } else {
                 mutableClip->loopStart = teOffset;
             }
-            DBG("  Model UPDATED:");
-            DBG("    offset: " << mutableClip->offset);
-            DBG("    loopStart: " << mutableClip->loopStart);
-            DBG("    loopLength: " << mutableClip->loopLength);
         }
 
         // Check if the reversed proxy file is ready
         auto playbackFile = audioClipPtr->getPlaybackFile();
         if (playbackFile.getFile().existsAsFile()) {
-            DBG("  Proxy file EXISTS — reallocating immediately");
             if (auto* ctx = edit_.getCurrentPlaybackContext())
                 ctx->reallocate();
         } else {
-            DBG("  Proxy file NOT FOUND — polling until ready (clipId=" << clipId << ")");
             pendingReverseClipId_ = clipId;
         }
 
-        DBG("========== REVERSE TOGGLE DONE ==========");
         return;  // Don't let subsequent sync steps overwrite TE's reversed state
     }
 
@@ -1498,31 +1448,6 @@ void ClipSynchronizer::syncAudioClipToEngine(ClipId clipId, const ClipInfo* clip
 
     // 5. UPDATE speed ratio and auto-tempo mode
     // Handle auto-tempo (musical mode) vs time-based mode
-    DBG("========== AUTO-TEMPO SYNC [" << clipId << "] ==========");
-    DBG("  OUR MODEL:");
-    DBG("    autoTempo: " << (int)clip->autoTempo);
-    DBG("    loopEnabled: " << (int)clip->loopEnabled);
-    DBG("    loopStartBeats: " << clip->loopStartBeats);
-    DBG("    loopLengthBeats: " << clip->loopLengthBeats);
-    DBG("    loopStart: " << clip->loopStart);
-    DBG("    loopLength: " << clip->loopLength);
-    DBG("    offset: " << clip->offset);
-    DBG("    length: " << clip->length);
-    DBG("    speedRatio: " << clip->speedRatio);
-    DBG("    sourceBPM: " << clip->sourceBPM);
-    DBG("    sourceNumBeats: " << clip->sourceNumBeats);
-    DBG("    getTeOffset(): " << clip->getTeOffset(clip->loopEnabled));
-    DBG("    loopStart+loopLength: " << (clip->loopStart + clip->loopLength));
-    DBG("  TE STATE BEFORE:");
-    DBG("    autoTempo: " << (int)audioClipPtr->getAutoTempo());
-    DBG("    isLooping: " << (int)audioClipPtr->isLooping());
-    DBG("    loopStartBeats: " << audioClipPtr->getLoopStartBeats().inBeats());
-    DBG("    loopLengthBeats: " << audioClipPtr->getLoopLengthBeats().inBeats());
-    DBG("    loopStart: " << audioClipPtr->getLoopStart().inSeconds());
-    DBG("    loopLength: " << audioClipPtr->getLoopLength().inSeconds());
-    DBG("    offset: " << audioClipPtr->getPosition().getOffset().inSeconds());
-    DBG("    speedRatio: " << audioClipPtr->getSpeedRatio());
-
     if (clip->isBeatsAuthoritative()) {
         // ========================================================================
         // AUTO-TEMPO MODE (Beat-based length, maintains musical time)
@@ -1534,32 +1459,18 @@ void ClipSynchronizer::syncAudioClipToEngine(ClipId clipId, const ClipInfo* clip
         // - speedRatio must be 1.0 (TE requirement)
         // - Use beat-based loop range (setLoopRangeBeats)
 
-        DBG("syncAudioClip [" << clipId << "] ENABLING AUTO-TEMPO MODE");
-
         // Enable auto-tempo in TE if not already enabled
         if (!audioClipPtr->getAutoTempo()) {
-            DBG("  -> Setting TE autoTempo = true");
             audioClipPtr->setAutoTempo(true);
-            DBG("  TE STATE AFTER setAutoTempo(true):");
-            DBG("    isLooping: " << (int)audioClipPtr->isLooping());
-            DBG("    loopStartBeats: " << audioClipPtr->getLoopStartBeats().inBeats());
-            DBG("    loopLengthBeats: " << audioClipPtr->getLoopLengthBeats().inBeats());
-            DBG("    loopStart: " << audioClipPtr->getLoopStart().inSeconds());
-            DBG("    loopLength: " << audioClipPtr->getLoopLength().inSeconds());
-            DBG("    offset: " << audioClipPtr->getPosition().getOffset().inSeconds());
-        } else {
-            DBG("  -> TE autoTempo already true");
         }
 
         // Force speedRatio to 1.0 (auto-tempo requirement)
         if (std::abs(audioClipPtr->getSpeedRatio() - 1.0) > 0.001) {
-            DBG("  -> Forcing speedRatio to 1.0 (was " << audioClipPtr->getSpeedRatio() << ")");
             audioClipPtr->setSpeedRatio(1.0);
         }
 
         // Auto-tempo requires a valid stretch mode for TE to time-stretch audio
         if (audioClipPtr->getTimeStretchMode() == te::TimeStretcher::disabled) {
-            DBG("  -> Setting stretch mode to default (required for autoTempo)");
             audioClipPtr->setTimeStretchMode(te::TimeStretcher::defaultMode);
         }
 
@@ -1570,15 +1481,7 @@ void ClipSynchronizer::syncAudioClipToEngine(ClipId clipId, const ClipInfo* clip
 
         // Always disable autoTempo in TE when our model says it's off
         if (audioClipPtr->getAutoTempo()) {
-            DBG("syncAudioClip [" << clipId << "] disabling TE autoTempo");
             audioClipPtr->setAutoTempo(false);
-            DBG("  TE STATE AFTER setAutoTempo(false):");
-            DBG("    isLooping: " << (int)audioClipPtr->isLooping());
-            DBG("    loopStartBeats: " << audioClipPtr->getLoopStartBeats().inBeats());
-            DBG("    loopLengthBeats: " << audioClipPtr->getLoopLengthBeats().inBeats());
-            DBG("    loopStart: " << audioClipPtr->getLoopStart().inSeconds());
-            DBG("    loopLength: " << audioClipPtr->getLoopLength().inSeconds());
-            DBG("    offset: " << audioClipPtr->getPosition().getOffset().inSeconds());
         }
 
         double teSpeedRatio = clip->speedRatio;
@@ -1598,28 +1501,37 @@ void ClipSynchronizer::syncAudioClipToEngine(ClipId clipId, const ClipInfo* clip
         }
 
         if (std::abs(currentSpeedRatio - teSpeedRatio) > 0.001) {
-            DBG("syncAudioClip [" << clipId << "] setSpeedRatio: " << teSpeedRatio << " (was "
-                                  << currentSpeedRatio << ", speedRatio=" << clip->speedRatio
-                                  << ")");
             audioClipPtr->setUsesProxy(false);
             audioClipPtr->setSpeedRatio(teSpeedRatio);
-
-            // Log TE state after setSpeedRatio (which internally calls setLoopRange)
-            auto posAfterSpeed = audioClipPtr->getPosition();
-            auto loopRangeAfterSpeed = audioClipPtr->getLoopRange();
-            DBG("  TE after setSpeedRatio: offset="
-                << posAfterSpeed.getOffset().inSeconds()
-                << ", start=" << posAfterSpeed.getStart().inSeconds()
-                << ", end=" << posAfterSpeed.getEnd().inSeconds()
-                << ", loopRange=" << loopRangeAfterSpeed.getStart().inSeconds() << "-"
-                << loopRangeAfterSpeed.getEnd().inSeconds()
-                << ", autoTempo=" << (int)audioClipPtr->getAutoTempo()
-                << ", isLooping=" << (int)audioClipPtr->isLooping());
         }
 
-        // Sync warp state to engine
+        // Sync warp state to engine (time-based warp — rare, but handle it)
         if (clip->warpEnabled != audioClipPtr->getWarpTime()) {
             audioClipPtr->setWarpTime(clip->warpEnabled);
+        }
+    }
+
+    // 5b. WARP — sync warp state and restore markers (applies to both code paths)
+    if (clip->warpEnabled) {
+        if (!audioClipPtr->getWarpTime()) {
+            audioClipPtr->setWarpTime(true);
+        }
+
+        // Restore saved warp markers if TE has no user markers yet
+        if (!clip->warpMarkers.empty()) {
+            auto& warpManager = audioClipPtr->getWarpTimeManager();
+            auto existingMarkers = warpManager.getMarkers();
+            // TE creates 2 default boundary markers; if only those exist, restore saved
+            if (existingMarkers.size() <= 2) {
+                warpManager.removeAllMarkers();
+                for (const auto& wm : clip->warpMarkers) {
+                    warpManager.insertMarker(
+                        te::WarpMarker(te::TimePosition::fromSeconds(wm.sourceTime),
+                                       te::TimePosition::fromSeconds(wm.warpTime)));
+                }
+                DBG("ClipSynchronizer: Restored " << clip->warpMarkers.size()
+                                                  << " warp markers for clip " << clipId);
+            }
         }
     }
 
@@ -1631,7 +1543,6 @@ void ClipSynchronizer::syncAudioClipToEngine(ClipId clipId, const ClipInfo* clip
 
         // Get tempo for beat calculations
         double bpm = edit_.tempoSequence.getTempo(0)->getBpm();
-        DBG("  Current BPM: " << bpm);
 
         // Override TE's loopInfo BPM to match our calibrated sourceBPM.
         // setAutoTempo calibrates sourceBPM = projectBPM / speedRatio so that
@@ -1642,8 +1553,6 @@ void ClipSynchronizer::syncAudioClipToEngine(ClipId clipId, const ClipInfo* clip
             auto& li = audioClipPtr->getLoopInfo();
             double currentLoopInfoBpm = li.getBpm(waveInfo);
             if (std::abs(currentLoopInfoBpm - clip->sourceBPM) > 0.1) {
-                DBG("  -> Overriding TE loopInfo BPM: " << currentLoopInfoBpm << " -> "
-                                                        << clip->sourceBPM);
                 li.setBpm(clip->sourceBPM, waveInfo);
             }
         }
@@ -1651,30 +1560,10 @@ void ClipSynchronizer::syncAudioClipToEngine(ClipId clipId, const ClipInfo* clip
         // Calculate beat range using centralized helper
         auto [loopStartBeats, loopLengthBeats] = ClipOperations::getAutoTempoBeatRange(*clip, bpm);
 
-        DBG("  -> Beat range (from ClipOperations): start="
-            << loopStartBeats << ", length=" << loopLengthBeats << " beats"
-            << ", end=" << (loopStartBeats + loopLengthBeats));
-        DBG("  -> TE loopInfo.getNumBeats(): " << audioClipPtr->getLoopInfo().getNumBeats());
-
         // Set the beat-based loop range in TE
         auto loopRange = te::BeatRange(te::BeatPosition::fromBeats(loopStartBeats),
                                        te::BeatDuration::fromBeats(loopLengthBeats));
-
-        DBG("  -> Calling audioClipPtr->setLoopRangeBeats()");
         audioClipPtr->setLoopRangeBeats(loopRange);
-        DBG("  TE STATE AFTER setLoopRangeBeats:");
-        DBG("    isLooping: " << (int)audioClipPtr->isLooping());
-        DBG("    loopStartBeats: " << audioClipPtr->getLoopStartBeats().inBeats());
-        DBG("    loopLengthBeats: " << audioClipPtr->getLoopLengthBeats().inBeats());
-        DBG("    loopStart: " << audioClipPtr->getLoopStart().inSeconds());
-        DBG("    loopLength: " << audioClipPtr->getLoopLength().inSeconds());
-        DBG("    offset: " << audioClipPtr->getPosition().getOffset().inSeconds());
-        DBG("    autoTempo: " << (int)audioClipPtr->getAutoTempo());
-        DBG("    speedRatio: " << audioClipPtr->getSpeedRatio());
-
-        if (!audioClipPtr->isLooping()) {
-            DBG("  -> WARNING: TE isLooping() is FALSE after setLoopRangeBeats!");
-        }
     } else {
         // Time-based mode: Use time-based loop range
         // Only use setLoopRange (time-based), NOT setLoopRangeBeats which forces
@@ -1684,8 +1573,6 @@ void ClipSynchronizer::syncAudioClipToEngine(ClipId clipId, const ClipInfo* clip
             auto loopEndTime = te::TimePosition::fromSeconds(clip->getTeLoopEnd());
             audioClipPtr->setLoopRange(te::TimeRange(loopStartTime, loopEndTime));
         } else if (audioClipPtr->isLooping()) {
-            // Looping disabled in our model but TE still has it on — clear it
-            DBG("syncAudioClip [" << clipId << "] clearing TE loop range (our loopEnabled=false)");
             audioClipPtr->setLoopRange({});
         }
     }
@@ -1693,15 +1580,11 @@ void ClipSynchronizer::syncAudioClipToEngine(ClipId clipId, const ClipInfo* clip
     // 7. UPDATE audio offset (trim point in file)
     // Must come AFTER loop range — setLoopRangeBeats resets offset internally
     {
-        double teOffset = juce::jmax(0.0, clip->getTeOffset(clip->loopEnabled));
+        double projectBpm = edit_.tempoSequence.getBpmAt(te::TimePosition());
+        double teOffset = juce::jmax(0.0, clip->getTeOffset(clip->loopEnabled, projectBpm));
         auto currentOffset = audioClipPtr->getPosition().getOffset().inSeconds();
-        DBG("  OFFSET SYNC: teOffset=" << teOffset << " (offset=" << clip->offset << " loopStart="
-                                       << clip->loopStart << " speedRatio=" << clip->speedRatio
-                                       << " loopEnabled=" << (int)clip->loopEnabled << ")"
-                                       << ", currentTEOffset=" << currentOffset);
         if (std::abs(currentOffset - teOffset) > 0.001) {
             audioClipPtr->setOffset(te::TimeDuration::fromSeconds(teOffset));
-            DBG("    -> setOffset(" << teOffset << ")");
         }
     }
 
@@ -1766,32 +1649,6 @@ void ClipSynchronizer::syncAudioClipToEngine(ClipId clipId, const ClipInfo* clip
         audioClipPtr->setAutoCrossfade(clip->autoCrossfade);
 
     // 13. CHANNELS — removed (L/R controls removed from Inspector)
-
-    // Final state dump
-    {
-        auto finalPos = audioClipPtr->getPosition();
-        auto finalLoop = audioClipPtr->getLoopRange();
-        auto finalLoopBeats = audioClipPtr->getLoopRangeBeats();
-
-        DBG("========== FINAL STATE [" << clipId << "] ==========");
-        DBG("  TE Position: " << finalPos.getStart().inSeconds() << " - "
-                              << finalPos.getEnd().inSeconds());
-        DBG("  TE Offset: " << finalPos.getOffset().inSeconds());
-        DBG("  TE SpeedRatio: " << audioClipPtr->getSpeedRatio());
-        DBG("  TE AutoTempo: " << (int)audioClipPtr->getAutoTempo());
-        DBG("  TE IsLooping: " << (int)audioClipPtr->isLooping());
-        DBG("  TE LoopRange (time): " << finalLoop.getStart().inSeconds() << " - "
-                                      << finalLoop.getEnd().inSeconds());
-        DBG("  TE LoopRangeBeats: "
-            << finalLoopBeats.getStart().inBeats() << " - "
-            << (finalLoopBeats.getStart() + finalLoopBeats.getLength()).inBeats()
-            << " (length: " << finalLoopBeats.getLength().inBeats() << " beats)");
-        DBG("  Our offset: " << clip->offset);
-        DBG("  Our speedRatio: " << clip->speedRatio);
-        DBG("  Our loopEnabled: " << (int)clip->loopEnabled);
-        DBG("  Our autoTempo: " << (int)clip->autoTempo);
-        DBG("=============================================");
-    }
 }
 
 }  // namespace magda

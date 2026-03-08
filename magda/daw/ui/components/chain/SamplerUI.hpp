@@ -44,7 +44,7 @@ class SamplerUI : public juce::Component, public juce::FileDragAndDropTarget, pr
     void updateParameters(float attack, float decay, float sustain, float release, float pitch,
                           float fine, float level, float sampleStart, float sampleEnd,
                           bool loopEnabled, float loopStart, float loopEnd, float velAmount,
-                          const juce::String& sampleName);
+                          const juce::String& sampleName, int rootNote = 60);
 
     /**
      * @brief Callback when a parameter changes (paramIndex, actualValue)
@@ -70,6 +70,11 @@ class SamplerUI : public juce::Component, public juce::FileDragAndDropTarget, pr
     std::function<void(bool)> onLoopEnabledChanged;
 
     /**
+     * @brief Callback when root note changes (MIDI note 0-127)
+     */
+    std::function<void(int)> onRootNoteChanged;
+
+    /**
      * @brief Callback to read current playback position from plugin
      */
     std::function<double()> getPlaybackPosition;
@@ -79,6 +84,10 @@ class SamplerUI : public juce::Component, public juce::FileDragAndDropTarget, pr
      */
     void setWaveformData(const juce::AudioBuffer<float>* buffer, double sampleRate,
                          double sampleLengthSeconds);
+
+    bool hasWaveform() const {
+        return hasWaveform_;
+    }
 
     void paint(juce::Graphics& g) override;
     void resized() override;
@@ -106,6 +115,8 @@ class SamplerUI : public juce::Component, public juce::FileDragAndDropTarget, pr
     // Sample info
     juce::Label sampleNameLabel_;
     std::unique_ptr<magda::SvgButton> loadButton_;
+    TextSlider rootNoteSlider_{TextSlider::Format::Decimal};
+    juce::Label rootNoteLabel_;
 
     // Waveform thumbnail
     juce::Path waveformPath_;
@@ -154,11 +165,26 @@ class SamplerUI : public juce::Component, public juce::FileDragAndDropTarget, pr
     float waveformGain_ = 1.0f;
 
     // Dragging state
-    enum class DragTarget { None, SampleStart, SampleEnd, LoopStart, LoopEnd, LoopRegion, Scroll };
+    enum class DragTarget {
+        None,
+        SampleStart,
+        SampleEnd,
+        LoopStart,
+        LoopEnd,
+        LoopRegion,
+        Scroll,
+        Zoom
+    };
     DragTarget currentDrag_ = DragTarget::None;
     double scrollDragStartOffset_ = 0.0;
     double loopDragStartL_ = 0.0;
     double loopDragStartR_ = 0.0;
+
+    // Zoom drag state
+    int zoomDragStartY_ = 0;
+    double zoomDragStartPPS_ = 0.0;
+    double zoomDragAnchorTime_ = 0.0;
+    int zoomDragAnchorPixelOffset_ = 0;
 
     // Hit-testing helpers
     static constexpr int kMarkerHitPixels = 5;

@@ -8,6 +8,8 @@
 #include "../audio/MagdaSamplerPlugin.hpp"
 #include "../engine/TracktionEngineWrapper.hpp"
 #include "../project/ProjectManager.hpp"
+#include "../ui/state/TimelineController.hpp"
+#include "ClipOperations.hpp"
 #include "Config.hpp"
 #include "TrackManager.hpp"
 
@@ -16,6 +18,46 @@ namespace magda {
 namespace te = tracktion;
 
 namespace {
+
+/// Expand a file naming pattern with token substitution.
+/// Tokens: <clip-name>, <track-name>, <project-name>, <date-time>
+juce::String expandPattern(juce::String pattern, const juce::String& clipName,
+                           const juce::String& trackName) {
+    juce::String safeClip =
+        clipName.isNotEmpty() ? clipName.replaceCharacters(" /\\:", "____") : "clip";
+    juce::String safeTrack =
+        trackName.isNotEmpty() ? trackName.replaceCharacters(" /\\:", "____") : "track";
+
+    juce::String projName = ProjectManager::getInstance().getProjectName();
+    if (projName.isEmpty())
+        projName = "untitled";
+    projName = projName.replaceCharacters(" /\\:", "____");
+
+    juce::String timestamp = juce::Time::getCurrentTime().formatted("%Y%m%d_%H%M%S");
+
+    pattern = pattern.replace("<clip-name>", safeClip);
+    pattern = pattern.replace("<track-name>", safeTrack);
+    pattern = pattern.replace("<project-name>", projName);
+    pattern = pattern.replace("<date-time>", timestamp);
+
+    return pattern.replaceCharacters("/\\:", "___");
+}
+
+/// Expand the render/export file naming pattern (default: <project-name>_<date-time>).
+juce::String expandRenderPattern(const juce::String& clipName, const juce::String& trackName) {
+    juce::String pattern(Config::getInstance().getRenderFilePattern());
+    if (pattern.isEmpty())
+        pattern = "<project-name>_<date-time>";
+    return expandPattern(pattern, clipName, trackName);
+}
+
+/// Expand the bounce file naming pattern (default: <clip-name>_<date-time>).
+juce::String expandBouncePattern(const juce::String& clipName, const juce::String& trackName) {
+    juce::String pattern(Config::getInstance().getBounceFilePattern());
+    if (pattern.isEmpty())
+        pattern = "<clip-name>_<date-time>";
+    return expandPattern(pattern, clipName, trackName);
+}
 
 /**
  * Progress window for offline rendering that runs on a background thread
@@ -756,11 +798,11 @@ void RenderClipCommand::execute() {
     }
     rendersDir.createDirectory();
 
-    juce::String timestamp = juce::Time::getCurrentTime().formatted("%Y%m%d_%H%M%S");
-    juce::String safeName =
+    auto* trackInfo = TrackManager::getInstance().getTrack(clip->trackId);
+    juce::String trackName = trackInfo ? trackInfo->name : "Track";
+    juce::String clipName =
         clip->name.isNotEmpty() ? clip->name : sourceFile.getFileNameWithoutExtension();
-    safeName = safeName.replaceCharacters(" /\\:", "____");
-    renderedFile_ = rendersDir.getChildFile(safeName + "_rendered_" + timestamp + ".wav");
+    renderedFile_ = rendersDir.getChildFile(expandRenderPattern(clipName, trackName) + ".wav");
 
     // Stop transport and free playback context for offline rendering
     auto& transport = edit->getTransport();
@@ -804,8 +846,8 @@ void RenderClipCommand::execute() {
 
     auto& formatManager = engine_->getEngine()->getAudioFileFormatManager();
     params.audioFormat = formatManager.getWavFormat();
-    params.bitDepth = 24;
-    params.sampleRateForAudio = edit->engine.getDeviceManager().getSampleRate();
+    params.bitDepth = Config::getInstance().getRenderBitDepth();
+    params.sampleRateForAudio = Config::getInstance().getRenderSampleRate();
     params.blockSizeForAudio = 512;
     params.usePlugins = false;
     params.useMasterPlugins = false;
@@ -849,7 +891,7 @@ void RenderClipCommand::execute() {
     // Copy over visual properties to the new clip
     if (auto* newClip = clipManager.getClip(newClipId_)) {
         newClip->colour = colour;
-        newClip->name = name.isNotEmpty() ? name : safeName;
+        newClip->name = name.isNotEmpty() ? name : renderedFile_.getFileNameWithoutExtension();
         clipManager.forceNotifyClipsChanged();
     }
 
@@ -913,7 +955,6 @@ void RenderTimeSelectionCommand::execute() {
     te::freePlaybackContextIfNotRecording(transport);
 
     auto allTracks = te::getAllTracks(*edit);
-    juce::String timestamp = juce::Time::getCurrentTime().formatted("%Y%m%d_%H%M%S");
 
     trackStates_.clear();
     newClipIds_.clear();
@@ -964,9 +1005,10 @@ void RenderTimeSelectionCommand::execute() {
 
         auto* trackInfo = TrackManager::getInstance().getTrack(trackId);
         juce::String trackName = trackInfo ? trackInfo->name : "Track";
-        trackName = trackName.replaceCharacters(" /\\:", "____");
+        auto* firstClipInfo = clipManager.getClip(overlappingIds[0]);
+        juce::String clipName = firstClipInfo ? firstClipInfo->name : trackName;
         trackState.renderedFile =
-            rendersDir.getChildFile(trackName + "_rendered_" + timestamp + ".wav");
+            rendersDir.getChildFile(expandRenderPattern(clipName, trackName) + ".wav");
 
         // Resolve TE track index
         auto* teTrack = bridge->getAudioTrack(trackId);
@@ -991,8 +1033,8 @@ void RenderTimeSelectionCommand::execute() {
 
         auto& formatManager = engine_->getEngine()->getAudioFileFormatManager();
         params.audioFormat = formatManager.getWavFormat();
-        params.bitDepth = 24;
-        params.sampleRateForAudio = edit->engine.getDeviceManager().getSampleRate();
+        params.bitDepth = Config::getInstance().getRenderBitDepth();
+        params.sampleRateForAudio = Config::getInstance().getRenderSampleRate();
         params.blockSizeForAudio = 512;
         params.usePlugins = false;
         params.useMasterPlugins = false;
@@ -1083,12 +1125,70 @@ void RenderTimeSelectionCommand::undo() {
 }
 
 // ============================================================================
+// Helper: trim a looped clip's boundaries without splitting/deleting notes.
+// For looped clips, time selection operations just adjust the container
+// (startTime, length, midiOffset) — the notes repeat and don't need modification.
+// Returns true if the clip was handled as a looped clip.
+static bool trimLoopedClip(ClipManager& clipManager, const ClipInfo& clip, double selStart,
+                           double selEnd, bool ripple, double duration,
+                           std::vector<ClipId>& clipsToDelete) {
+    if (!clip.loopEnabled)
+        return false;
+
+    auto* liveClip = clipManager.getClip(clip.id);
+    if (!liveClip)
+        return false;
+
+    double clipEnd = clip.startTime + clip.length;
+    bool startsBeforeSel = clip.startTime < selStart;
+    bool endsAfterSel = clipEnd > selEnd;
+
+    if (startsBeforeSel && endsAfterSel) {
+        if (!ripple) {
+            // Non-ripple: need two clips with a gap — fall through to normal split logic
+            return false;
+        }
+        // Ripple: reduce length by duration, gap gets closed
+        liveClip->length -= duration;
+    } else if (startsBeforeSel) {
+        // Spans left boundary: trim right edge
+        liveClip->length = selStart - clip.startTime;
+    } else if (endsAfterSel) {
+        // Spans right boundary: trim left edge, adjust phase
+        double trimAmount = selEnd - clip.startTime;
+        liveClip->startTime = ripple ? selStart : selEnd;
+        liveClip->length -= trimAmount;
+
+        // Adjust midiOffset (phase) for the trimmed portion
+        if (clip.type == ClipType::MIDI && clip.loopLength > 0.0) {
+            double bpm = 120.0;
+            if (auto* controller = magda::TimelineController::getCurrent()) {
+                bpm = controller->getState().tempo.bpm;
+            }
+            double trimBeats = trimAmount * bpm / 60.0;
+            double loopLengthBeats = clip.loopLength * bpm / 60.0;
+            if (loopLengthBeats > 0.0) {
+                double newPhase = std::fmod(clip.midiOffset + trimBeats, loopLengthBeats);
+                if (newPhase < 0.0)
+                    newPhase += loopLengthBeats;
+                liveClip->midiOffset = newPhase;
+            }
+        }
+    } else {
+        // Fully inside: delete
+        clipsToDelete.push_back(clip.id);
+    }
+
+    return true;
+}
+
+// ============================================================================
 // RippleDeleteTimeSelectionCommand
 // ============================================================================
 
 RippleDeleteTimeSelectionCommand::RippleDeleteTimeSelectionCommand(
-    double startTime, double endTime, const std::vector<TrackId>& trackIds)
-    : startTime_(startTime), endTime_(endTime), trackIds_(trackIds) {}
+    double startTime, double endTime, const std::vector<TrackId>& trackIds, double tempo)
+    : startTime_(startTime), endTime_(endTime), trackIds_(trackIds), tempo_(tempo) {}
 
 void RippleDeleteTimeSelectionCommand::execute() {
     auto& clipManager = ClipManager::getInstance();
@@ -1123,16 +1223,20 @@ void RippleDeleteTimeSelectionCommand::execute() {
         if (clip.startTime >= endTime_ || clipEnd <= startTime_)
             continue;
 
+        // Looped clips: just adjust boundaries, don't split/delete notes
+        if (trimLoopedClip(clipManager, clip, startTime_, endTime_, true, duration, clipsToDelete))
+            continue;
+
         bool startsBeforeSel = clip.startTime < startTime_;
         bool endsAfterSel = clipEnd > endTime_;
 
         if (startsBeforeSel && endsAfterSel) {
             // Clip spans both boundaries: split at startTime_, split again at endTime_,
             // delete the middle piece. This preserves both the left and right portions.
-            ClipId rightId = clipManager.splitClip(clip.id, startTime_);
+            ClipId rightId = clipManager.splitClip(clip.id, startTime_, tempo_);
             if (rightId != INVALID_CLIP_ID) {
                 // Split the right portion at endTime_ to isolate the middle
-                ClipId tailId = clipManager.splitClip(rightId, endTime_);
+                ClipId tailId = clipManager.splitClip(rightId, endTime_, tempo_);
                 // Delete the middle piece (between startTime_ and endTime_)
                 clipsToDelete.push_back(rightId);
                 // The tail (after endTime_) needs to be shifted left by duration
@@ -1150,7 +1254,7 @@ void RippleDeleteTimeSelectionCommand::execute() {
                 liveClip->length = newLength;
         } else if (endsAfterSel) {
             // Clip spans right boundary only: split at endTime_, shift right portion left
-            ClipId tailId = clipManager.splitClip(clip.id, endTime_);
+            ClipId tailId = clipManager.splitClip(clip.id, endTime_, tempo_);
             // Delete the left portion (starts inside selection)
             clipsToDelete.push_back(clip.id);
             // Shift the tail left to fill the gap
@@ -1212,8 +1316,9 @@ void RippleDeleteTimeSelectionCommand::undo() {
 // ============================================================================
 
 DeleteTimeSelectionCommand::DeleteTimeSelectionCommand(double startTime, double endTime,
-                                                       const std::vector<TrackId>& trackIds)
-    : startTime_(startTime), endTime_(endTime), trackIds_(trackIds) {}
+                                                       const std::vector<TrackId>& trackIds,
+                                                       double tempo)
+    : startTime_(startTime), endTime_(endTime), trackIds_(trackIds), tempo_(tempo) {}
 
 void DeleteTimeSelectionCommand::execute() {
     auto& clipManager = ClipManager::getInstance();
@@ -1244,15 +1349,19 @@ void DeleteTimeSelectionCommand::execute() {
         if (clip.startTime >= endTime_ || clipEnd <= startTime_)
             continue;
 
+        // Looped clips: just adjust boundaries, don't split/delete notes
+        if (trimLoopedClip(clipManager, clip, startTime_, endTime_, false, duration, clipsToDelete))
+            continue;
+
         bool startsBeforeSel = clip.startTime < startTime_;
         bool endsAfterSel = clipEnd > endTime_;
 
         if (startsBeforeSel && endsAfterSel) {
             // Clip spans both boundaries: split at startTime_, split again at endTime_,
             // delete the middle piece. Preserves both left and right portions.
-            ClipId rightId = clipManager.splitClip(clip.id, startTime_);
+            ClipId rightId = clipManager.splitClip(clip.id, startTime_, tempo_);
             if (rightId != INVALID_CLIP_ID) {
-                ClipId tailId = clipManager.splitClip(rightId, endTime_);
+                ClipId tailId = clipManager.splitClip(rightId, endTime_, tempo_);
                 clipsToDelete.push_back(rightId);
                 // tailId stays at endTime_ (no shift — non-ripple)
                 juce::ignoreUnused(tailId);
@@ -1265,7 +1374,7 @@ void DeleteTimeSelectionCommand::execute() {
                 liveClip->length = newLength;
         } else if (endsAfterSel) {
             // Clip spans right boundary: split at endTime_, delete left portion
-            ClipId tailId = clipManager.splitClip(clip.id, endTime_);
+            ClipId tailId = clipManager.splitClip(clip.id, endTime_, tempo_);
             clipsToDelete.push_back(clip.id);
             // tailId stays at endTime_ (no shift — non-ripple)
             juce::ignoreUnused(tailId);
@@ -1356,10 +1465,12 @@ void BounceInPlaceCommand::execute() {
     }
     bouncesDir.createDirectory();
 
-    juce::String timestamp = juce::Time::getCurrentTime().formatted("%Y%m%d_%H%M%S");
-    juce::String safeName = clip->name.isNotEmpty() ? clip->name : "clip";
-    safeName = safeName.replaceCharacters(" /\\:", "____");
-    renderedFile_ = bouncesDir.getChildFile(safeName + "_bounced_" + timestamp + ".wav");
+    {
+        auto* trackInfo = TrackManager::getInstance().getTrack(clip->trackId);
+        juce::String trackName = trackInfo ? trackInfo->name : "Track";
+        juce::String clipName = clip->name.isNotEmpty() ? clip->name : "clip";
+        renderedFile_ = bouncesDir.getChildFile(expandBouncePattern(clipName, trackName) + ".wav");
+    }
 
     // Stop transport and free playback context
     auto& transport = edit->getTransport();
@@ -1422,8 +1533,8 @@ void BounceInPlaceCommand::execute() {
     params.destFile = renderedFile_;
     auto& formatManager = engine_->getEngine()->getAudioFileFormatManager();
     params.audioFormat = formatManager.getWavFormat();
-    params.bitDepth = 24;
-    params.sampleRateForAudio = edit->engine.getDeviceManager().getSampleRate();
+    params.bitDepth = Config::getInstance().getBounceBitDepth();
+    params.sampleRateForAudio = Config::getInstance().getRenderSampleRate();
     params.blockSizeForAudio = 512;
     params.usePlugins = true;  // Synth is active, FX are bypassed
     params.useMasterPlugins = false;
@@ -1473,7 +1584,7 @@ void BounceInPlaceCommand::execute() {
 
     if (auto* newClip = clipManager.getClip(newClipId_)) {
         newClip->colour = colour;
-        newClip->name = name.isNotEmpty() ? name : safeName;
+        newClip->name = name.isNotEmpty() ? name : renderedFile_.getFileNameWithoutExtension();
         clipManager.forceNotifyClipsChanged();
     }
 
@@ -1546,10 +1657,12 @@ void BounceToNewTrackCommand::execute() {
     }
     bouncesDir.createDirectory();
 
-    juce::String timestamp = juce::Time::getCurrentTime().formatted("%Y%m%d_%H%M%S");
-    juce::String safeName = clip->name.isNotEmpty() ? clip->name : "clip";
-    safeName = safeName.replaceCharacters(" /\\:", "____");
-    renderedFile_ = bouncesDir.getChildFile(safeName + "_bounce_" + timestamp + ".wav");
+    {
+        auto* trackInfo = TrackManager::getInstance().getTrack(clip->trackId);
+        juce::String trackName = trackInfo ? trackInfo->name : "Track";
+        juce::String clipName = clip->name.isNotEmpty() ? clip->name : "clip";
+        renderedFile_ = bouncesDir.getChildFile(expandBouncePattern(clipName, trackName) + ".wav");
+    }
 
     // Stop transport and free playback context
     auto& transport = edit->getTransport();
@@ -1593,8 +1706,8 @@ void BounceToNewTrackCommand::execute() {
     params.destFile = renderedFile_;
     auto& formatManager = engine_->getEngine()->getAudioFileFormatManager();
     params.audioFormat = formatManager.getWavFormat();
-    params.bitDepth = 24;
-    params.sampleRateForAudio = edit->engine.getDeviceManager().getSampleRate();
+    params.bitDepth = Config::getInstance().getBounceBitDepth();
+    params.sampleRateForAudio = Config::getInstance().getRenderSampleRate();
     params.blockSizeForAudio = 512;
     params.usePlugins = true;  // Full signal chain
     params.useMasterPlugins = false;
@@ -1648,7 +1761,8 @@ void BounceToNewTrackCommand::execute() {
 
     if (auto* newClip = clipManager.getClip(newClipId_)) {
         newClip->colour = clipColour;
-        newClip->name = clipName.isNotEmpty() ? clipName : safeName;
+        newClip->name =
+            clipName.isNotEmpty() ? clipName : renderedFile_.getFileNameWithoutExtension();
         clipManager.forceNotifyClipsChanged();
     }
 
@@ -1680,6 +1794,38 @@ void BounceToNewTrackCommand::undo() {
     }
 
     success_ = false;
+}
+
+// ============================================================================
+// FlattenMidiClipCommand
+// ============================================================================
+
+FlattenMidiClipCommand::FlattenMidiClipCommand(ClipId clipId) : clipId_(clipId) {}
+
+void FlattenMidiClipCommand::execute() {
+    auto& clipManager = ClipManager::getInstance();
+    auto* clip = clipManager.getClip(clipId_);
+    if (!clip || clip->type != ClipType::MIDI)
+        return;
+
+    beforeSnapshot_ = *clip;
+    ClipOperations::flattenMidiClip(*clip);
+    clipManager.forceNotifyClipPropertyChanged(clipId_);
+    executed_ = true;
+}
+
+void FlattenMidiClipCommand::undo() {
+    if (!executed_)
+        return;
+
+    auto& clipManager = ClipManager::getInstance();
+    auto* clip = clipManager.getClip(clipId_);
+    if (!clip)
+        return;
+
+    *clip = beforeSnapshot_;
+    clipManager.forceNotifyClipPropertyChanged(clipId_);
+    executed_ = false;
 }
 
 // ============================================================================

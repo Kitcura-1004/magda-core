@@ -189,7 +189,7 @@ void PadChainPanel::itemDropped(const SourceDetails& details) {
 
 void PadChainPanel::paint(juce::Graphics& g) {
     // Background
-    g.setColour(DarkTheme::getColour(DarkTheme::BACKGROUND).brighter(0.02f));
+    g.setColour(DarkTheme::getColour(DarkTheme::BACKGROUND));
     g.fillRect(getLocalBounds());
 
     // "+" stripe background
@@ -226,19 +226,23 @@ void PadChainPanel::resized() {
     // Viewport fills the rest
     viewport_.setBounds(area);
 
-    int height = area.getHeight() - 8;
+    int height = area.getHeight() - 4;
 
-    int x = 4;
+    int x = 2;
+    int viewportWidth = area.getWidth();
     for (size_t i = 0; i < slots_.size(); ++i) {
         if (i > 0)
             x += ARROW_WIDTH;
         int slotWidth = slots_[i]->getPreferredWidth();
-        slots_[i]->setBounds(x, 4, slotWidth, height);
+        // Single slot: fill the viewport width exactly (no scrolling)
+        if (slots_.size() == 1)
+            slotWidth = viewportWidth - 4;  // 2px padding each side
+        slots_[i]->setBounds(x, 2, slotWidth, height);
         x += slotWidth;
     }
 
-    x += 4;
-    container_.setSize(juce::jmax(x, area.getWidth()), height + 8);
+    x += 2;
+    container_.setSize(juce::jmax(x, area.getWidth()), height + 4);
 }
 
 int PadChainPanel::calculateInsertIndex(int mouseX) const {

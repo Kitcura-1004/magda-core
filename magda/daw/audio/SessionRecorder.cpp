@@ -21,18 +21,99 @@ void SessionRecorder::setArmed(bool armed) {
     if (armed == armed_)
         return;
     armed_ = armed;
+
+    // When arming, pick up any session clips that are already playing.
+    // clipPlaybackStateChanged only fires on transitions, so clips that
+    // were already playing before arming would otherwise be missed.
+    if (armed_ && getPlayState_) {
+        auto& clipManager = ClipManager::getInstance();
+        for (const auto& clip : clipManager.getSessionClips()) {
+            auto state = getPlayState_(clip.id);
+            if (state == SessionClipPlayState::Playing) {
+                ensureSnapshotTaken();
+
+                double launchTime = edit_.getTransport().position.get().inSeconds();
+                if (getLaunchTime_) {
+                    double precise = getLaunchTime_(clip.trackId);
+                    if (precise > 0.0)
+                        launchTime = precise;
+                }
+
+                ActiveRecording rec;
+                rec.sessionClipId = clip.id;
+                rec.trackId = clip.trackId;
+                rec.arrangementStartTime = launchTime;
+                activeRecordings_[clip.id] = rec;
+
+                if (recordingPreviews_) {
+                    RecordingPreview preview;
+                    preview.trackId = clip.trackId;
+                    preview.startTime = launchTime;
+                    preview.currentLength = 0.0;
+                    preview.isAudioRecording = (clip.type == ClipType::Audio);
+                    (*recordingPreviews_)[clip.trackId] = preview;
+                }
+            }
+        }
+    }
 }
 
 void SessionRecorder::updatePreviews() {
     if (!armed_ || !recordingPreviews_ || activeRecordings_.empty())
         return;
 
+    auto& clipManager = ClipManager::getInstance();
+    auto& tempoSeq = edit_.tempoSequence;
     double currentTime = edit_.getTransport().position.get().inSeconds();
 
     for (const auto& [clipId, rec] : activeRecordings_) {
         auto it = recordingPreviews_->find(rec.trackId);
-        if (it != recordingPreviews_->end()) {
-            it->second.currentLength = currentTime - rec.arrangementStartTime;
+        if (it == recordingPreviews_->end())
+            continue;
+
+        auto& preview = it->second;
+        preview.currentLength = currentTime - rec.arrangementStartTime;
+
+        // Populate preview notes from the session clip's MIDI data
+        const auto* sessionClip = clipManager.getClip(rec.sessionClipId);
+        if (!sessionClip || sessionClip->type != ClipType::MIDI || sessionClip->midiNotes.empty())
+            continue;
+
+        double clipLengthBeats = sessionClip->lengthBeats;
+        if (clipLengthBeats <= 0.0)
+            clipLengthBeats = 4.0;
+
+        auto startBeatPos =
+            tempoSeq.toBeats(te::TimePosition::fromSeconds(rec.arrangementStartTime));
+        auto endBeatPos = tempoSeq.toBeats(te::TimePosition::fromSeconds(currentTime));
+        double totalBeats = endBeatPos.inBeats() - startBeatPos.inBeats();
+        if (totalBeats <= 0.0)
+            continue;
+
+        // Rebuild notes (tiled if looping) — cheap enough at ~30fps.
+        // Note coordinates are in beats relative to the preview start,
+        // matching the rendering code's expectation (currentLength * beatsPerSecond).
+        preview.notes.clear();
+
+        if (sessionClip->loopEnabled && totalBeats > clipLengthBeats) {
+            int numPasses = static_cast<int>(std::ceil(totalBeats / clipLengthBeats));
+            for (int pass = 0; pass < numPasses; ++pass) {
+                double passOffset = pass * clipLengthBeats;
+                for (const auto& note : sessionClip->midiNotes) {
+                    double noteStart = note.startBeat + passOffset;
+                    if (noteStart >= totalBeats)
+                        break;
+                    MidiNote tiled = note;
+                    tiled.startBeat = noteStart;
+                    preview.notes.push_back(tiled);
+                }
+            }
+        } else {
+            for (const auto& note : sessionClip->midiNotes) {
+                if (note.startBeat >= totalBeats)
+                    continue;
+                preview.notes.push_back(note);
+            }
         }
     }
 }

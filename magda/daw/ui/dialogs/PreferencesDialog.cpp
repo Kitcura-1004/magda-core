@@ -1,5 +1,6 @@
 #include "PreferencesDialog.hpp"
 
+#include "../../project/ProjectManager.hpp"
 #include "../state/TimelineController.hpp"
 #include "../state/TimelineEvents.hpp"
 #include "../themes/DarkTheme.hpp"
@@ -97,6 +98,11 @@ class GeneralPage : public juce::Component {
                     1.0, " bars");
         setupSlider(*this, viewDurationSlider, viewDurationLabel, "Default View", 4.0, 128.0, 1.0,
                     " bars");
+
+        setupSectionHeader(*this, autoSaveHeader, "Auto-Save");
+        setupToggle(*this, autoSaveToggle, "Enable auto-save");
+        setupSlider(*this, autoSaveIntervalSlider, autoSaveIntervalLabel, "Interval", 10.0, 300.0,
+                    10.0, " sec");
     }
 
     void resized() override {
@@ -123,6 +129,15 @@ class GeneralPage : public juce::Component {
         layoutSliderRow(bounds, timelineLengthLabel, timelineLengthSlider, rowH, labelW, sliderH);
         bounds.removeFromTop(4);
         layoutSliderRow(bounds, viewDurationLabel, viewDurationSlider, rowH, labelW, sliderH);
+        bounds.removeFromTop(secGap);
+
+        // Auto-Save
+        autoSaveHeader.setBounds(bounds.removeFromTop(headerH));
+        bounds.removeFromTop(4);
+        autoSaveToggle.setBounds(bounds.removeFromTop(rowH).reduced(0, 4));
+        bounds.removeFromTop(4);
+        layoutSliderRow(bounds, autoSaveIntervalLabel, autoSaveIntervalSlider, rowH, labelW,
+                        sliderH);
     }
 
     void loadSettings(Config& config) {
@@ -134,6 +149,9 @@ class GeneralPage : public juce::Component {
         timelineLengthSlider.setValue(config.getDefaultTimelineLengthBars(),
                                       juce::dontSendNotification);
         viewDurationSlider.setValue(config.getDefaultZoomViewBars(), juce::dontSendNotification);
+        autoSaveToggle.setToggleState(config.getAutoSaveEnabled(), juce::dontSendNotification);
+        autoSaveIntervalSlider.setValue(config.getAutoSaveIntervalSeconds(),
+                                        juce::dontSendNotification);
     }
 
     void applySettings(Config& config) {
@@ -143,6 +161,8 @@ class GeneralPage : public juce::Component {
         config.setZoomOutSensitivityShift(zoomShiftSensitivitySlider.getValue());
         config.setDefaultTimelineLengthBars(static_cast<int>(timelineLengthSlider.getValue()));
         config.setDefaultZoomViewBars(static_cast<int>(viewDurationSlider.getValue()));
+        config.setAutoSaveEnabled(autoSaveToggle.getToggleState());
+        config.setAutoSaveIntervalSeconds(static_cast<int>(autoSaveIntervalSlider.getValue()));
     }
 
   private:
@@ -153,11 +173,14 @@ class GeneralPage : public juce::Component {
         slider.setBounds(row.reduced(0, (rowH - sliderH) / 2));
     }
 
-    juce::Label zoomHeader, timelineHeader;
+    juce::Label zoomHeader, timelineHeader, autoSaveHeader;
     juce::Slider zoomInSensitivitySlider, zoomOutSensitivitySlider, zoomShiftSensitivitySlider;
     juce::Label zoomInLabel, zoomOutLabel, zoomShiftLabel;
     juce::Slider timelineLengthSlider, viewDurationSlider;
     juce::Label timelineLengthLabel, viewDurationLabel;
+    juce::ToggleButton autoSaveToggle;
+    juce::Slider autoSaveIntervalSlider;
+    juce::Label autoSaveIntervalLabel;
 };
 
 // ---- UI tab: Panels, Behavior (incl. showTooltips), Layout ----------------
@@ -250,7 +273,8 @@ class UIPage : public juce::Component {
 class RenderingPage : public juce::Component {
   public:
     RenderingPage() {
-        setupSectionHeader(*this, renderHeader, "Rendering");
+        // --- Output Folder ---
+        setupSectionHeader(*this, renderHeader, "Output");
 
         renderFolderLabel.setText("Render Output Folder", juce::dontSendNotification);
         renderFolderLabel.setFont(FontManager::getInstance().getUIFont(12.0f));
@@ -274,10 +298,10 @@ class RenderingPage : public juce::Component {
                                       [this](const juce::FileChooser& fc) {
                                           auto result = fc.getResult();
                                           if (result.exists()) {
+                                              renderFolderPath_ =
+                                                  result.getFullPathName().toStdString();
                                               renderFolderValue.setText(result.getFullPathName(),
                                                                         juce::dontSendNotification);
-                                              renderFolderValue.setTooltip(
-                                                  result.getFullPathName());
                                           }
                                       });
         };
@@ -285,52 +309,227 @@ class RenderingPage : public juce::Component {
 
         renderFolderClearButton.setButtonText("Clear");
         renderFolderClearButton.onClick = [this]() {
+            renderFolderPath_.clear();
             renderFolderValue.setText("Default (beside source file)", juce::dontSendNotification);
-            renderFolderValue.setTooltip("");
         };
         addAndMakeVisible(renderFolderClearButton);
+
+        // --- Format ---
+        setupSectionHeader(*this, formatHeader, "Format");
+
+        setupComboLabel(sampleRateLabel, "Sample Rate");
+        sampleRateCombo.addItem("44100 Hz", 1);
+        sampleRateCombo.addItem("48000 Hz", 2);
+        sampleRateCombo.addItem("96000 Hz", 3);
+        sampleRateCombo.addItem("192000 Hz", 4);
+        styleCombo(sampleRateCombo);
+        addAndMakeVisible(sampleRateCombo);
+
+        setupComboLabel(bitDepthLabel, "Export Bit Depth");
+        bitDepthCombo.addItem("16-bit", 1);
+        bitDepthCombo.addItem("24-bit", 2);
+        bitDepthCombo.addItem("32-bit float", 3);
+        styleCombo(bitDepthCombo);
+        addAndMakeVisible(bitDepthCombo);
+
+        setupComboLabel(bounceBitDepthLabel, "Bounce Bit Depth");
+        bounceBitDepthCombo.addItem("16-bit", 1);
+        bounceBitDepthCombo.addItem("24-bit", 2);
+        bounceBitDepthCombo.addItem("32-bit float", 3);
+        styleCombo(bounceBitDepthCombo);
+        addAndMakeVisible(bounceBitDepthCombo);
+
+        // --- File Naming ---
+        setupSectionHeader(*this, namingHeader, "File Naming");
+
+        setupComboLabel(patternLabel, "Export Pattern");
+        patternEditor.setFont(FontManager::getInstance().getUIFont(12.0f));
+        patternEditor.setColour(juce::TextEditor::backgroundColourId,
+                                DarkTheme::getColour(DarkTheme::SURFACE));
+        patternEditor.setColour(juce::TextEditor::textColourId,
+                                DarkTheme::getColour(DarkTheme::TEXT_PRIMARY));
+        patternEditor.setColour(juce::TextEditor::outlineColourId,
+                                DarkTheme::getColour(DarkTheme::BORDER));
+        addAndMakeVisible(patternEditor);
+
+        setupComboLabel(bouncePatternLabel, "Bounce Pattern");
+        bouncePatternEditor.setFont(FontManager::getInstance().getUIFont(12.0f));
+        bouncePatternEditor.setColour(juce::TextEditor::backgroundColourId,
+                                      DarkTheme::getColour(DarkTheme::SURFACE));
+        bouncePatternEditor.setColour(juce::TextEditor::textColourId,
+                                      DarkTheme::getColour(DarkTheme::TEXT_PRIMARY));
+        bouncePatternEditor.setColour(juce::TextEditor::outlineColourId,
+                                      DarkTheme::getColour(DarkTheme::BORDER));
+        addAndMakeVisible(bouncePatternEditor);
+
+        patternHint.setText("Tokens: <clip-name> <track-name> <project-name> <date-time>",
+                            juce::dontSendNotification);
+        patternHint.setFont(FontManager::getInstance().getUIFont(10.0f));
+        patternHint.setColour(juce::Label::textColourId, DarkTheme::getColour(DarkTheme::TEXT_DIM));
+        patternHint.setJustificationType(juce::Justification::centredLeft);
+        addAndMakeVisible(patternHint);
     }
 
     void resized() override {
         auto bounds = getLocalBounds().reduced(16);
         const int rowH = 32;
         const int headerH = 28;
+        const int labelW = 140;
+        const int secGap = 12;
 
+        // Output folder
         renderHeader.setBounds(bounds.removeFromTop(headerH));
         bounds.removeFromTop(4);
-
         renderFolderLabel.setBounds(bounds.removeFromTop(rowH));
         bounds.removeFromTop(4);
+        {
+            auto row = bounds.removeFromTop(rowH);
+            auto buttonsArea = row.removeFromRight(140);
+            renderFolderValue.setBounds(row);
+            renderFolderClearButton.setBounds(buttonsArea.removeFromRight(60).reduced(0, 2));
+            buttonsArea.removeFromRight(4);
+            renderFolderBrowseButton.setBounds(buttonsArea.reduced(0, 2));
+        }
+        bounds.removeFromTop(secGap);
 
-        auto row = bounds.removeFromTop(rowH);
-        auto buttonsArea = row.removeFromRight(140);
-        renderFolderValue.setBounds(row);
-        renderFolderClearButton.setBounds(buttonsArea.removeFromRight(60).reduced(0, 2));
-        buttonsArea.removeFromRight(4);
-        renderFolderBrowseButton.setBounds(buttonsArea.reduced(0, 2));
+        // Format
+        formatHeader.setBounds(bounds.removeFromTop(headerH));
+        bounds.removeFromTop(4);
+        layoutComboRow(bounds, sampleRateLabel, sampleRateCombo, rowH, labelW);
+        bounds.removeFromTop(4);
+        layoutComboRow(bounds, bitDepthLabel, bitDepthCombo, rowH, labelW);
+        bounds.removeFromTop(4);
+        layoutComboRow(bounds, bounceBitDepthLabel, bounceBitDepthCombo, rowH, labelW);
+        bounds.removeFromTop(secGap);
+
+        // File naming
+        namingHeader.setBounds(bounds.removeFromTop(headerH));
+        bounds.removeFromTop(4);
+        {
+            auto row = bounds.removeFromTop(rowH);
+            patternLabel.setBounds(row.removeFromLeft(labelW));
+            patternEditor.setBounds(row.reduced(0, 4));
+        }
+        bounds.removeFromTop(4);
+        {
+            auto row = bounds.removeFromTop(rowH);
+            bouncePatternLabel.setBounds(row.removeFromLeft(labelW));
+            bouncePatternEditor.setBounds(row.reduced(0, 4));
+        }
+        bounds.removeFromTop(2);
+        patternHint.setBounds(bounds.removeFromTop(18).withTrimmedLeft(labelW));
     }
 
     void loadSettings(Config& config) {
-        auto folder = config.getRenderFolder();
-        if (folder.empty()) {
+        // Folder
+        renderFolderPath_ = config.getRenderFolder();
+        if (renderFolderPath_.empty()) {
             renderFolderValue.setText("Default (beside source file)", juce::dontSendNotification);
-            renderFolderValue.setTooltip("");
         } else {
-            renderFolderValue.setText(juce::String(folder), juce::dontSendNotification);
-            renderFolderValue.setTooltip(juce::String(folder));
+            renderFolderValue.setText(juce::String(renderFolderPath_), juce::dontSendNotification);
         }
+
+        // Sample rate
+        double sr = config.getRenderSampleRate();
+        if (sr >= 192000.0)
+            sampleRateCombo.setSelectedId(4, juce::dontSendNotification);
+        else if (sr >= 96000.0)
+            sampleRateCombo.setSelectedId(3, juce::dontSendNotification);
+        else if (sr >= 48000.0)
+            sampleRateCombo.setSelectedId(2, juce::dontSendNotification);
+        else
+            sampleRateCombo.setSelectedId(1, juce::dontSendNotification);
+
+        // Bit depth
+        int bd = config.getRenderBitDepth();
+        if (bd >= 32)
+            bitDepthCombo.setSelectedId(3, juce::dontSendNotification);
+        else if (bd >= 24)
+            bitDepthCombo.setSelectedId(2, juce::dontSendNotification);
+        else
+            bitDepthCombo.setSelectedId(1, juce::dontSendNotification);
+
+        // Bounce bit depth
+        int bbd = config.getBounceBitDepth();
+        if (bbd >= 32)
+            bounceBitDepthCombo.setSelectedId(3, juce::dontSendNotification);
+        else if (bbd >= 24)
+            bounceBitDepthCombo.setSelectedId(2, juce::dontSendNotification);
+        else
+            bounceBitDepthCombo.setSelectedId(1, juce::dontSendNotification);
+
+        // File patterns
+        patternEditor.setText(juce::String(config.getRenderFilePattern()),
+                              juce::dontSendNotification);
+        bouncePatternEditor.setText(juce::String(config.getBounceFilePattern()),
+                                    juce::dontSendNotification);
     }
 
     void applySettings(Config& config) {
-        config.setRenderFolder(renderFolderValue.getTooltip().toStdString());
+        config.setRenderFolder(renderFolderPath_);
+
+        static constexpr double sampleRates[] = {44100.0, 48000.0, 96000.0, 192000.0};
+        int srIdx = sampleRateCombo.getSelectedId() - 1;
+        if (srIdx >= 0 && srIdx < 4)
+            config.setRenderSampleRate(sampleRates[srIdx]);
+
+        static constexpr int bitDepths[] = {16, 24, 32};
+        int bdIdx = bitDepthCombo.getSelectedId() - 1;
+        if (bdIdx >= 0 && bdIdx < 3)
+            config.setRenderBitDepth(bitDepths[bdIdx]);
+
+        auto pattern = patternEditor.getText().toStdString();
+        if (pattern.empty())
+            pattern = "<project-name>_<date-time>";
+        config.setRenderFilePattern(pattern);
+
+        auto bouncePattern = bouncePatternEditor.getText().toStdString();
+        if (bouncePattern.empty())
+            bouncePattern = "<clip-name>_<date-time>";
+        config.setBounceFilePattern(bouncePattern);
+
+        int bbdIdx = bounceBitDepthCombo.getSelectedId() - 1;
+        if (bbdIdx >= 0 && bbdIdx < 3)
+            config.setBounceBitDepth(bitDepths[bbdIdx]);
     }
 
   private:
-    juce::Label renderHeader;
+    void setupComboLabel(juce::Label& label, const juce::String& text) {
+        label.setText(text, juce::dontSendNotification);
+        label.setFont(FontManager::getInstance().getUIFont(12.0f));
+        label.setColour(juce::Label::textColourId, DarkTheme::getColour(DarkTheme::TEXT_PRIMARY));
+        label.setJustificationType(juce::Justification::centredLeft);
+        addAndMakeVisible(label);
+    }
+
+    void styleCombo(juce::ComboBox& combo) {
+        combo.setColour(juce::ComboBox::backgroundColourId,
+                        DarkTheme::getColour(DarkTheme::SURFACE));
+        combo.setColour(juce::ComboBox::textColourId,
+                        DarkTheme::getColour(DarkTheme::TEXT_PRIMARY));
+        combo.setColour(juce::ComboBox::outlineColourId, DarkTheme::getColour(DarkTheme::BORDER));
+    }
+
+    static void layoutComboRow(juce::Rectangle<int>& bounds, juce::Label& label,
+                               juce::ComboBox& combo, int rowH, int labelW) {
+        auto row = bounds.removeFromTop(rowH);
+        label.setBounds(row.removeFromLeft(labelW));
+        combo.setBounds(row.reduced(0, 4));
+    }
+
+    juce::Label renderHeader, formatHeader, namingHeader;
     juce::Label renderFolderLabel;
     juce::Label renderFolderValue;
     juce::TextButton renderFolderBrowseButton;
     juce::TextButton renderFolderClearButton;
+    std::string renderFolderPath_;
+
+    juce::Label sampleRateLabel, bitDepthLabel, bounceBitDepthLabel;
+    juce::ComboBox sampleRateCombo, bitDepthCombo, bounceBitDepthCombo;
+
+    juce::Label patternLabel, bouncePatternLabel, patternHint;
+    juce::TextEditor patternEditor, bouncePatternEditor;
+
     std::unique_ptr<juce::FileChooser> fileChooser_;
 };
 
@@ -553,7 +752,7 @@ PreferencesDialog::PreferencesDialog() {
     addAndMakeVisible(applyButton);
 
     loadCurrentSettings();
-    setSize(500, 580);
+    setSize(500, 650);
 }
 
 PreferencesDialog::~PreferencesDialog() {
@@ -605,6 +804,10 @@ void PreferencesDialog::applySettings() {
     aiPage->applySettings(config);
     shortcutsPage->applySettings(config);
     config.save();
+
+    // Apply auto-save settings
+    ProjectManager::getInstance().setAutoSaveEnabled(config.getAutoSaveEnabled(),
+                                                     config.getAutoSaveIntervalSeconds());
 
     // Apply timeline length to live session
     if (auto* tc = TimelineController::getCurrent()) {

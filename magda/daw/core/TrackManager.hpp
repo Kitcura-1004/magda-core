@@ -209,7 +209,7 @@ class TrackManager {
     // View settings
     void setTrackVisible(TrackId trackId, ViewMode mode, bool visible);
     void setTrackLocked(TrackId trackId, ViewMode mode, bool locked);
-    void setTrackCollapsed(TrackId trackId, ViewMode mode, bool collapsed);
+    void setTrackCollapsed(TrackId trackId, bool collapsed);
     void setTrackHeight(TrackId trackId, ViewMode mode, int height);
 
     // Signal chain management (unified list of devices and racks)
@@ -465,6 +465,10 @@ class TrackManager {
     TrackId getSelectedTrack() const {
         return selectedTrackId_;
     }
+    void setSelectedTracks(const std::unordered_set<TrackId>& trackIds);
+    const std::unordered_set<TrackId>& getSelectedTracks() const {
+        return selectedTrackIds_;
+    }
 
     // Chain selection (for plugin browser context menu)
     void setSelectedChain(TrackId trackId, RackId rackId, ChainId chainId);
@@ -556,7 +560,9 @@ class TrackManager {
     int nextChainId_ = 1;
     int nextAuxBusIndex_ = 0;
     MasterChannelState masterChannel_;
+    TrackInfo masterTrack_;  // Dedicated TrackInfo for master channel (id=MASTER_TRACK_ID)
     TrackId selectedTrackId_ = INVALID_TRACK_ID;
+    std::unordered_set<TrackId> selectedTrackIds_;
     TrackId selectedChainTrackId_ = INVALID_TRACK_ID;
     RackId selectedChainRackId_ = INVALID_RACK_ID;
     ChainId selectedChainId_ = INVALID_CHAIN_ID;

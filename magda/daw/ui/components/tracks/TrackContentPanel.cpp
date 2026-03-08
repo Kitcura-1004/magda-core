@@ -387,6 +387,41 @@ void TrackContentPanel::paintTrackLane(juce::Graphics& g, const TrackLane& lane,
             g.setColour(juce::Colours::black.withAlpha(0.25f));
             g.fillRect(area);
         }
+
+        // Group extent indicator — show the time range covered by all child clips
+        if (trackInfo && trackInfo->isGroup()) {
+            auto descendants = TrackManager::getInstance().getAllDescendants(trackInfo->id);
+            auto& clipManager = ClipManager::getInstance();
+            double earliest = std::numeric_limits<double>::max();
+            double latest = 0.0;
+            bool hasClips = false;
+
+            for (auto childId : descendants) {
+                for (auto clipId : clipManager.getClipsOnTrack(childId)) {
+                    const auto* clip = clipManager.getClip(clipId);
+                    if (clip && clip->view == ClipView::Arrangement) {
+                        earliest = std::min(earliest, clip->startTime);
+                        latest = std::max(latest, clip->startTime + clip->length);
+                        hasClips = true;
+                    }
+                }
+            }
+
+            if (hasClips && latest > earliest) {
+                int x1 = timeToPixel(earliest);
+                int x2 = timeToPixel(latest);
+                auto extentArea =
+                    juce::Rectangle<int>(x1, area.getY() + 2, x2 - x1, area.getHeight() - 4);
+
+                // Subtle filled background
+                g.setColour(juce::Colours::white.withAlpha(0.06f));
+                g.fillRoundedRectangle(extentArea.toFloat(), 3.0f);
+
+                // Outline
+                g.setColour(juce::Colours::white.withAlpha(0.15f));
+                g.drawRoundedRectangle(extentArea.toFloat(), 3.0f, 1.0f);
+            }
+        }
     }
 }
 
@@ -534,7 +569,30 @@ void TrackContentPanel::paintRecordingPreviews(juce::Graphics& g) {
 }
 
 void TrackContentPanel::paintEditCursor(juce::Graphics& g) {
-    if (!timelineController || selectedTrackIndex < 0) {
+    if (!timelineController) {
+        return;
+    }
+
+    // Determine which track to draw the cursor on
+    int cursorTrackIndex = selectedTrackIndex;
+
+    // If no track is selected, fall back to the selected clip's track
+    if (cursorTrackIndex < 0) {
+        auto selectedClipId = magda::SelectionManager::getInstance().getSelectedClip();
+        if (selectedClipId != magda::INVALID_CLIP_ID) {
+            const auto* clip = magda::ClipManager::getInstance().getClip(selectedClipId);
+            if (clip) {
+                for (size_t i = 0; i < visibleTrackIds_.size(); ++i) {
+                    if (visibleTrackIds_[i] == clip->trackId) {
+                        cursorTrackIndex = static_cast<int>(i);
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    if (cursorTrackIndex < 0) {
         return;
     }
 
@@ -555,7 +613,7 @@ void TrackContentPanel::paintEditCursor(juce::Graphics& g) {
     int cursorX = timeToPixel(editCursorPos);
 
     // Only draw on selected track(s)
-    auto trackArea = getTrackLaneArea(selectedTrackIndex);
+    auto trackArea = getTrackLaneArea(cursorTrackIndex);
     if (trackArea.isEmpty()) {
         return;
     }
@@ -1425,9 +1483,23 @@ void TrackContentPanel::clipPropertyChanged(ClipId clipId) {
     }
 }
 
-void TrackContentPanel::clipSelectionChanged(ClipId /*clipId*/) {
+void TrackContentPanel::clipSelectionChanged(ClipId clipId) {
     // Grab keyboard focus to ensure shortcuts work after selection changes
     grabKeyboardFocus();
+
+    // Derive selected track from clip so edit cursor draws on the right lane
+    if (clipId != INVALID_CLIP_ID) {
+        auto* clip = ClipManager::getInstance().getClip(clipId);
+        if (clip) {
+            selectedTrackIndex = -1;
+            for (size_t i = 0; i < visibleTrackIds_.size(); ++i) {
+                if (visibleTrackIds_[i] == clip->trackId) {
+                    selectedTrackIndex = static_cast<int>(i);
+                    break;
+                }
+            }
+        }
+    }
 
     // Repaint to update selection visuals
     repaint();
@@ -1799,8 +1871,32 @@ bool TrackContentPanel::keyPressed(const juce::KeyPress& key) {
         return true;
     }
 
-    // Delete/Backspace: Delete selected clips
+    // Delete/Backspace: time-selection delete takes priority, then selected clips
     if (key == juce::KeyPress::deleteKey || key == juce::KeyPress::backspaceKey) {
+        if (timelineController && timelineController->getState().selection.isVisuallyActive()) {
+            const auto& state = timelineController->getState();
+            const auto& sel = state.selection;
+
+            // Resolve track IDs from selection indices
+            std::vector<TrackId> trackIds;
+            if (sel.trackIndices.empty()) {
+                trackIds = visibleTrackIds_;
+            } else {
+                for (int idx : sel.trackIndices) {
+                    if (idx >= 0 && idx < static_cast<int>(visibleTrackIds_.size()))
+                        trackIds.push_back(visibleTrackIds_[idx]);
+                }
+            }
+
+            auto cmd = std::make_unique<DeleteTimeSelectionCommand>(sel.startTime, sel.endTime,
+                                                                    trackIds, state.tempo.bpm);
+            UndoManager::getInstance().executeCommand(std::move(cmd));
+
+            timelineController->dispatch(SetEditCursorEvent{sel.startTime});
+            timelineController->dispatch(ClearTimeSelectionEvent{});
+            return true;
+        }
+
         const auto& selectedClips = selectionManager.getSelectedClips();
         if (!selectedClips.empty()) {
             // Copy to vector since we're modifying during iteration

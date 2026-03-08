@@ -293,12 +293,14 @@ TrackHeadersPanel::TrackHeader::TrackHeader(const juce::String& trackName) : nam
     panLabel->setRange(-1.0, 1.0, 0.0);  // -1 (L) to +1 (R), default center
     panLabel->setValue(pan, juce::dontSendNotification);
 
-    // Collapse button for groups (triangle indicator)
-    collapseButton = std::make_unique<juce::TextButton>();
-    collapseButton->setColour(juce::TextButton::buttonColourId, juce::Colours::transparentBlack);
-    collapseButton->setColour(juce::TextButton::buttonOnColourId, juce::Colours::transparentBlack);
-    collapseButton->setColour(juce::TextButton::textColourOffId,
-                              DarkTheme::getColour(DarkTheme::TEXT_PRIMARY));
+    // Collapse button for groups (chevron indicator)
+    collapseButton =
+        std::make_unique<juce::DrawableButton>("Collapse", juce::DrawableButton::ImageFitted);
+    collapseButton->setColour(juce::DrawableButton::backgroundColourId,
+                              juce::Colours::transparentBlack);
+    collapseButton->setColour(juce::DrawableButton::backgroundOnColourId,
+                              juce::Colours::transparentBlack);
+    collapseButton->setEdgeIndent(1);
 
     // Input type selector (hidden, kept for internal state)
     inputTypeSelector = std::make_unique<InputTypeSelector>();
@@ -382,6 +384,9 @@ TrackHeadersPanel::TrackHeadersPanel(AudioEngine* audioEngine) : audioEngine_(au
     ViewModeController::getInstance().addListener(this);
     currentViewMode_ = ViewModeController::getInstance().getViewMode();
 
+    // Register as SelectionManager listener
+    SelectionManager::getInstance().addListener(this);
+
     // Register as AutomationManager listener
     AutomationManager::getInstance().addListener(this);
 
@@ -403,6 +408,7 @@ TrackHeadersPanel::TrackHeadersPanel(AudioEngine* audioEngine) : audioEngine_(au
 TrackHeadersPanel::~TrackHeadersPanel() {
     stopTimer();
     TrackManager::getInstance().removeListener(this);
+    SelectionManager::getInstance().removeListener(this);
     ViewModeController::getInstance().removeListener(this);
     AutomationManager::getInstance().removeListener(this);
 }
@@ -736,7 +742,7 @@ void TrackHeadersPanel::tracksChanged() {
     }
     trackHeaders.clear();
     visibleTrackIds_.clear();
-    selectedTrackIndex = -1;
+    selectedTrackIndices_.clear();
 
     // Build visible tracks list (respecting hierarchy)
     auto& trackManager = TrackManager::getInstance();
@@ -758,6 +764,7 @@ void TrackHeadersPanel::tracksChanged() {
         header->depth = depth;
         header->isGroup = track->isGroup() || track->hasChildren();
         header->isMultiOut = (track->type == TrackType::MultiOut);
+        header->isMaster = (track->type == TrackType::Master);
         header->isCollapsed = track->isCollapsedIn(currentViewMode_);
         header->muted = track->muted;
         header->solo = track->soloed;
@@ -808,7 +815,7 @@ void TrackHeadersPanel::tracksChanged() {
 
         // Add collapse button for groups and tracks with multi-out children
         if (header->isGroup || track->hasChildren()) {
-            header->collapseButton->setButtonText(header->isCollapsed ? "▶" : "▼");
+            updateCollapseButtonIcon(*header);
             header->collapseButton->onClick = [this, trackId]() { handleCollapseToggle(trackId); };
             addAndMakeVisible(*header->collapseButton);
         }
@@ -978,7 +985,7 @@ void TrackHeadersPanel::paint(juce::Graphics& g) {
         auto headerArea = getTrackHeaderArea(static_cast<int>(i));
         if (headerArea.intersects(getLocalBounds())) {
             paintTrackHeader(g, *trackHeaders[i], headerArea,
-                             static_cast<int>(i) == selectedTrackIndex);
+                             selectedTrackIndices_.count(static_cast<int>(i)) > 0);
 
             // Draw resize handle
             auto resizeArea = getResizeHandleArea(static_cast<int>(i));
@@ -1007,7 +1014,8 @@ void TrackHeadersPanel::resized() {
 
 void TrackHeadersPanel::selectTrack(int index) {
     if (index >= 0 && index < static_cast<int>(trackHeaders.size())) {
-        selectedTrackIndex = index;
+        selectedTrackIndices_.clear();
+        selectedTrackIndices_.insert(index);
 
         // Notify SelectionManager of selection change (which syncs with TrackManager)
         TrackId trackId = trackHeaders[index]->trackId;
@@ -1023,11 +1031,25 @@ void TrackHeadersPanel::selectTrack(int index) {
 }
 
 void TrackHeadersPanel::trackSelectionChanged(TrackId trackId) {
-    selectedTrackIndex = -1;
+    selectedTrackIndices_.clear();
     for (size_t i = 0; i < visibleTrackIds_.size(); ++i) {
         if (visibleTrackIds_[i] == trackId) {
-            selectedTrackIndex = static_cast<int>(i);
+            selectedTrackIndices_.insert(static_cast<int>(i));
             break;
+        }
+    }
+    repaint();
+}
+
+void TrackHeadersPanel::selectionTypeChanged(SelectionType /*newType*/) {
+    // Handled by trackSelectionChanged / multiTrackSelectionChanged
+}
+
+void TrackHeadersPanel::multiTrackSelectionChanged(const std::unordered_set<TrackId>& trackIds) {
+    selectedTrackIndices_.clear();
+    for (size_t i = 0; i < visibleTrackIds_.size(); ++i) {
+        if (trackIds.count(visibleTrackIds_[i]) > 0) {
+            selectedTrackIndices_.insert(static_cast<int>(i));
         }
     }
     repaint();
@@ -1498,6 +1520,25 @@ void TrackHeadersPanel::layoutVolPanAndButtons(TrackHeader& header, juce::Rectan
     const int gap = 2;
     const int rh = 16;  // rowHeight
     const int areaWidth = area.getWidth();
+
+    // Master track: volume + mute only (no solo, pan, record, monitor)
+    if (header.isMaster) {
+        auto row = area.removeFromTop(rh);
+        const int rowWidth = std::min(areaWidth, areaWidth >= 260 ? areaWidth : 120);
+        auto content = inner.removeFrom(row, rowWidth);
+        const int btnW = 20;
+        header.volumeLabel->setBounds(content.removeFromLeft(content.getWidth() - btnW - gap));
+        header.volumeLabel->setVisible(true);
+        content.removeFromLeft(gap);
+        header.muteButton->setBounds(content);
+        header.soloButton->setVisible(false);
+        header.panLabel->setVisible(false);
+        header.recordButton->setVisible(false);
+        header.monitorButton->setVisible(false);
+        header.automationButton->setVisible(false);
+        return;
+    }
+
     const int numBtns = header.isMultiOut ? 3 : 5;
 
     if (areaWidth >= 260) {
@@ -1588,14 +1629,19 @@ void TrackHeadersPanel::layoutControlArea(TrackHeader& header, juce::Rectangle<i
     auto topRow = tcpArea.removeFromTop(nameRowHeight);
 
     if (header.isGroup) {
-        header.collapseButton->setBounds(topRow.removeFromLeft(COLLAPSE_BUTTON_SIZE));
+        auto btnArea = topRow.removeFromLeft(COLLAPSE_BUTTON_SIZE);
+        int btnY = btnArea.getCentreY() - COLLAPSE_BUTTON_SIZE / 2;
+        header.collapseButton->setBounds(btnArea.getX(), btnY, COLLAPSE_BUTTON_SIZE,
+                                         COLLAPSE_BUTTON_SIZE);
         topRow.removeFromLeft(2);
         header.collapseButton->setVisible(true);
     } else {
         header.collapseButton->setVisible(false);
     }
 
-    header.nameLabel->setBounds(topRow);
+    // Leave some breathing room so the label doesn't span the full header width
+    auto nameArea = topRow.withTrimmedRight(topRow.getWidth() / 4);
+    header.nameLabel->setBounds(nameArea);
     header.nameLabel->setJustificationType(headersOnRight_ ? juce::Justification::centredRight
                                                            : juce::Justification::centredLeft);
     tcpArea.removeFromTop(3);
@@ -1755,13 +1801,51 @@ void TrackHeadersPanel::mouseDown(const juce::MouseEvent& event) {
         // Find which track was clicked
         for (int i = 0; i < static_cast<int>(trackHeaders.size()); ++i) {
             if (getTrackHeaderArea(i).contains(pos)) {
-                selectTrack(i);
+                TrackId trackId = trackHeaders[i]->trackId;
+
+                if (event.mods.isCommandDown() && !event.mods.isPopupMenu()) {
+                    // Cmd+click: toggle track in multi-selection
+                    SelectionManager::getInstance().toggleTrackSelection(trackId);
+                    grabKeyboardFocus();
+                } else if (event.mods.isShiftDown() && !event.mods.isPopupMenu()) {
+                    // Shift+click: range select from anchor to clicked track
+                    auto anchorTrack = SelectionManager::getInstance().getAnchorTrack();
+                    int anchorIndex = -1;
+                    for (size_t j = 0; j < visibleTrackIds_.size(); ++j) {
+                        if (visibleTrackIds_[j] == anchorTrack) {
+                            anchorIndex = static_cast<int>(j);
+                            break;
+                        }
+                    }
+                    if (anchorIndex >= 0) {
+                        int lo = std::min(anchorIndex, i);
+                        int hi = std::max(anchorIndex, i);
+                        std::unordered_set<TrackId> rangeIds;
+                        for (int k = lo; k <= hi; ++k) {
+                            rangeIds.insert(trackHeaders[k]->trackId);
+                        }
+                        SelectionManager::getInstance().selectTracks(rangeIds);
+                    } else {
+                        selectTrack(i);
+                    }
+                    grabKeyboardFocus();
+                } else {
+                    // Plain click on a track that's already in multi-selection:
+                    // defer single-selection to mouseUp so drag can keep multi-selection
+                    if (selectedTrackIndices_.size() > 1 && selectedTrackIndices_.count(i) > 0) {
+                        deferredSingleSelectIndex_ = i;
+                    } else {
+                        // Plain click: single selection
+                        selectTrack(i);
+                    }
+                }
 
                 // Right-click shows context menu (only for direct clicks, not child forwards)
                 if (event.mods.isPopupMenu() && event.originalComponent == this) {
                     showContextMenu(i, pos);
-                } else if (event.originalComponent == this) {
-                    // Record potential drag start
+                } else if (event.originalComponent == this && !event.mods.isCommandDown() &&
+                           !event.mods.isShiftDown()) {
+                    // Record potential drag start (plain clicks or clicks on multi-selected track)
                     draggedTrackIndex_ = i;
                     dragStartX_ = localEvent.x;
                     dragStartY_ = localEvent.y;
@@ -1809,6 +1893,20 @@ void TrackHeadersPanel::mouseDrag(const juce::MouseEvent& event) {
     }
 }
 
+void TrackHeadersPanel::mouseWheelMove(const juce::MouseEvent& event,
+                                       const juce::MouseWheelDetails& wheel) {
+    if (scrollTarget_) {
+        // Match JUCE Viewport's scroll formula: deltaY * 14.0f * singleStepSize (default 16)
+        auto pos = scrollTarget_->getViewPosition();
+        float distance = wheel.deltaY * 14.0f * 16.0f;
+        int step = juce::roundToInt(distance < 0.0f ? juce::jmin(distance, -1.0f)
+                                                    : juce::jmax(distance, 1.0f));
+        scrollTarget_->setViewPosition(pos.x, pos.y - step);
+    } else {
+        juce::Component::mouseWheelMove(event, wheel);
+    }
+}
+
 void TrackHeadersPanel::mouseUp(const juce::MouseEvent& /*event*/) {
     // Handle vertical track height resizing cleanup
     if (isResizing) {
@@ -1821,7 +1919,12 @@ void TrackHeadersPanel::mouseUp(const juce::MouseEvent& /*event*/) {
     // Handle drag-to-reorder completion
     if (isDraggingToReorder_) {
         executeDrop();
+        deferredSingleSelectIndex_ = -1;  // Don't reduce to single after drag
+    } else if (deferredSingleSelectIndex_ >= 0) {
+        // No drag happened — reduce multi-selection to single click target
+        selectTrack(deferredSingleSelectIndex_);
     }
+    deferredSingleSelectIndex_ = -1;
     resetDragState();
 }
 
@@ -1873,12 +1976,27 @@ void TrackHeadersPanel::setTrackPan(int trackIndex, float pan) {
     }
 }
 
+void TrackHeadersPanel::updateCollapseButtonIcon(TrackHeader& header) {
+    auto colour = DarkTheme::getColour(DarkTheme::TEXT_PRIMARY);
+    if (header.isCollapsed) {
+        auto icon = juce::Drawable::createFromImageData(BinaryData::chevron_right_svg,
+                                                        BinaryData::chevron_right_svgSize);
+        icon->replaceColour(juce::Colour(0xFFB3B3B3), colour);
+        header.collapseButton->setImages(icon.get());
+    } else {
+        auto icon = juce::Drawable::createFromImageData(BinaryData::chevron_down_svg,
+                                                        BinaryData::chevron_down_svgSize);
+        icon->replaceColour(juce::Colour(0xFFB3B3B3), colour);
+        header.collapseButton->setImages(icon.get());
+    }
+}
+
 void TrackHeadersPanel::handleCollapseToggle(TrackId trackId) {
     auto& trackManager = TrackManager::getInstance();
     const auto* track = trackManager.getTrack(trackId);
     if (track && (track->isGroup() || track->hasChildren())) {
         bool currentlyCollapsed = track->isCollapsedIn(currentViewMode_);
-        trackManager.setTrackCollapsed(trackId, currentViewMode_, !currentlyCollapsed);
+        trackManager.setTrackCollapsed(trackId, !currentlyCollapsed);
     }
 }
 
@@ -2125,8 +2243,12 @@ void TrackHeadersPanel::calculateDropTarget(int /*mouseX*/, int mouseY) {
         int headerHeight = headerArea.getHeight();
         int quarterHeight = headerHeight / 4;
 
-        // Skip self
-        if (i == draggedTrackIndex_)
+        // Skip selected tracks (all tracks being dragged together)
+        bool isBeingDragged = (selectedTrackIndices_.size() > 1 &&
+                               selectedTrackIndices_.count(draggedTrackIndex_) > 0)
+                                  ? selectedTrackIndices_.count(i) > 0
+                                  : (i == draggedTrackIndex_);
+        if (isBeingDragged)
             continue;
 
         // Check if mouse is in this track's vertical range
@@ -2194,24 +2316,49 @@ void TrackHeadersPanel::executeDrop() {
         return;
 
     auto& trackManager = TrackManager::getInstance();
-    TrackId draggedTrackId = trackHeaders[draggedTrackIndex_]->trackId;
-    const auto* draggedTrack = trackManager.getTrack(draggedTrackId);
-    if (!draggedTrack)
+
+    // Collect tracks to move: if dragged track is part of multi-selection, move all selected
+    // tracks in display order; otherwise move just the single dragged track
+    bool isMultiDrag =
+        selectedTrackIndices_.size() > 1 && selectedTrackIndices_.count(draggedTrackIndex_) > 0;
+
+    std::vector<TrackId> tracksToMove;
+    if (isMultiDrag) {
+        // Collect selected track IDs in display order (ascending index)
+        std::vector<int> sortedIndices(selectedTrackIndices_.begin(), selectedTrackIndices_.end());
+        std::sort(sortedIndices.begin(), sortedIndices.end());
+        for (int idx : sortedIndices) {
+            if (idx >= 0 && idx < static_cast<int>(trackHeaders.size()))
+                tracksToMove.push_back(trackHeaders[idx]->trackId);
+        }
+    } else {
+        TrackId draggedTrackId = trackHeaders[draggedTrackIndex_]->trackId;
+        tracksToMove.push_back(draggedTrackId);
+    }
+
+    if (tracksToMove.empty())
         return;
+
+    // Verify all tracks exist
+    for (auto tid : tracksToMove) {
+        if (!trackManager.getTrack(tid))
+            return;
+    }
+
+    if (isMultiDrag)
+        UndoManager::getInstance().beginCompoundOperation("Move Tracks");
 
     if (dropTargetType_ == DropTargetType::BetweenTracks && dropTargetIndex_ >= 0) {
         // Determine the target parent based on drop position
         TrackId targetParentId = INVALID_TRACK_ID;
 
         if (dropTargetIndex_ < static_cast<int>(visibleTrackIds_.size())) {
-            // Dropping before an existing track - adopt that track's parent
             TrackId targetTrackId = visibleTrackIds_[dropTargetIndex_];
             const auto* targetTrack = trackManager.getTrack(targetTrackId);
             if (targetTrack) {
                 targetParentId = targetTrack->parentId;
             }
         } else if (!visibleTrackIds_.empty()) {
-            // Dropping at the end - adopt the last track's parent
             TrackId lastTrackId = visibleTrackIds_.back();
             const auto* lastTrack = trackManager.getTrack(lastTrackId);
             if (lastTrack) {
@@ -2219,40 +2366,52 @@ void TrackHeadersPanel::executeDrop() {
             }
         }
 
-        // Calculate the target position in TrackManager order
-        int targetIndex;
+        // Calculate the initial target position in TrackManager order
+        int baseTargetIndex;
         if (dropTargetIndex_ >= static_cast<int>(visibleTrackIds_.size())) {
-            // Drop at the end
-            targetIndex = trackManager.getNumTracks();
+            baseTargetIndex = trackManager.getNumTracks();
         } else {
-            // Get the track at drop target position
             TrackId targetTrackId = visibleTrackIds_[dropTargetIndex_];
-            targetIndex = trackManager.getTrackIndex(targetTrackId);
+            baseTargetIndex = trackManager.getTrackIndex(targetTrackId);
         }
 
-        // Adjust if dragging from above
-        int currentIndex = trackManager.getTrackIndex(draggedTrackId);
-        if (currentIndex < targetIndex) {
-            targetIndex--;
-        }
+        // Move each track in display order, adjusting target index as we go
+        int insertAt = baseTargetIndex;
+        for (auto trackId : tracksToMove) {
+            const auto* track = trackManager.getTrack(trackId);
+            if (!track)
+                continue;
 
-        // Only change group membership if moving to a different parent
-        if (draggedTrack->parentId != targetParentId) {
-            // Remove from current group
-            trackManager.removeTrackFromGroup(draggedTrackId);
-
-            // Add to new group if target has a parent
-            if (targetParentId != INVALID_TRACK_ID) {
-                trackManager.addTrackToGroup(draggedTrackId, targetParentId);
+            // Update group membership if needed
+            if (track->parentId != targetParentId) {
+                trackManager.removeTrackFromGroup(trackId);
+                if (targetParentId != INVALID_TRACK_ID) {
+                    trackManager.addTrackToGroup(trackId, targetParentId);
+                }
             }
-        }
 
-        // Move to new position
-        trackManager.moveTrack(draggedTrackId, targetIndex);
+            // Adjust insertion index: if track is currently above insertAt, removing it
+            // shifts insertAt down by one
+            int currentIndex = trackManager.getTrackIndex(trackId);
+            int adjustedTarget = insertAt;
+            if (currentIndex < adjustedTarget) {
+                adjustedTarget--;
+            }
+
+            trackManager.moveTrack(trackId, adjustedTarget);
+
+            // Next track goes after this one
+            insertAt = trackManager.getTrackIndex(trackId) + 1;
+        }
     } else if (dropTargetType_ == DropTargetType::OntoGroup && dropTargetIndex_ >= 0) {
         TrackId groupId = trackHeaders[dropTargetIndex_]->trackId;
-        trackManager.addTrackToGroup(draggedTrackId, groupId);
+        for (auto trackId : tracksToMove) {
+            trackManager.addTrackToGroup(trackId, groupId);
+        }
     }
+
+    if (isMultiDrag)
+        UndoManager::getInstance().endCompoundOperation();
 
     // TrackManager will notify listeners which triggers tracksChanged()
 }
@@ -2273,10 +2432,17 @@ void TrackHeadersPanel::paintDragFeedback(juce::Graphics& g) {
     if (!isDraggingToReorder_ || draggedTrackIndex_ < 0)
         return;
 
-    // Draw semi-transparent overlay on dragged track
-    auto draggedArea = getTrackHeaderArea(draggedTrackIndex_);
+    // Draw semi-transparent overlay on all dragged tracks
     g.setColour(DarkTheme::getColour(DarkTheme::ACCENT_BLUE).withAlpha(0.3f));
-    g.fillRect(draggedArea);
+    bool isMultiDrag =
+        selectedTrackIndices_.size() > 1 && selectedTrackIndices_.count(draggedTrackIndex_) > 0;
+    if (isMultiDrag) {
+        for (int idx : selectedTrackIndices_) {
+            g.fillRect(getTrackHeaderArea(idx));
+        }
+    } else {
+        g.fillRect(getTrackHeaderArea(draggedTrackIndex_));
+    }
 
     // Draw appropriate drop indicator
     if (dropTargetType_ == DropTargetType::BetweenTracks) {

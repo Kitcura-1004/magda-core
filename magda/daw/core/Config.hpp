@@ -254,6 +254,41 @@ class Config {
         renderFolder = folder;
     }
 
+    double getRenderSampleRate() const {
+        return renderSampleRate;
+    }
+    void setRenderSampleRate(double rate) {
+        renderSampleRate = rate;
+    }
+
+    int getRenderBitDepth() const {
+        return renderBitDepth;
+    }
+    void setRenderBitDepth(int depth) {
+        renderBitDepth = depth;
+    }
+
+    std::string getRenderFilePattern() const {
+        return renderFilePattern;
+    }
+    void setRenderFilePattern(const std::string& pattern) {
+        renderFilePattern = pattern;
+    }
+
+    std::string getBounceFilePattern() const {
+        return bounceFilePattern;
+    }
+    void setBounceFilePattern(const std::string& pattern) {
+        bounceFilePattern = pattern;
+    }
+
+    int getBounceBitDepth() const {
+        return bounceBitDepth;
+    }
+    void setBounceBitDepth(int depth) {
+        bounceBitDepth = depth;
+    }
+
     // AI Configuration
     std::string getOpenAIApiKey() const {
         return openaiApiKey;
@@ -303,6 +338,21 @@ class Config {
         // Snap to even (stereo pair boundary)
         channel &= ~1;
         previewOutputChannel = channel;
+    }
+
+    // Auto-save Configuration
+    bool getAutoSaveEnabled() const {
+        return autoSaveEnabled;
+    }
+    void setAutoSaveEnabled(bool enabled) {
+        autoSaveEnabled = enabled;
+    }
+
+    int getAutoSaveIntervalSeconds() const {
+        return autoSaveIntervalSeconds;
+    }
+    void setAutoSaveIntervalSeconds(int seconds) {
+        autoSaveIntervalSeconds = std::max(10, seconds);
     }
 
     // Save/load to platform-appropriate location:
@@ -357,6 +407,10 @@ class Config {
     // Auto-monitor settings
     bool autoMonitorSelectedTrack = false;  // Auto-enable input monitor on selected track
 
+    // Auto-save settings
+    bool autoSaveEnabled = true;       // Auto-save enabled by default
+    int autoSaveIntervalSeconds = 60;  // Save every 60 seconds
+
     // Preview output channel (stereo pair offset: 0 = outputs 1-2, 2 = outputs 3-4, etc.)
     int previewOutputChannel = 0;
 
@@ -379,6 +433,12 @@ class Config {
 
     // Render settings
     std::string renderFolder = "";  // Custom render output folder (empty = renders/ beside source)
+    double renderSampleRate = 44100.0;  // 44100, 48000, 96000, 192000
+    int renderBitDepth = 24;            // 16, 24, 32
+    // File naming pattern tokens: <project-name>, <clip-name>, <track-name>, <date-time>
+    std::string renderFilePattern = "<project-name>_<date-time>";
+    std::string bounceFilePattern = "<clip-name>_<date-time>";
+    int bounceBitDepth = 32;  // 16, 24, 32 — default 32-bit for internal bounces
 
     // Audio device settings
     std::string preferredAudioDevice = "";   // Preferred audio interface (empty = system default)

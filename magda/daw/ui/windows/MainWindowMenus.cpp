@@ -31,6 +31,9 @@ void MainWindow::setupMenuCallbacks() {
 
     // File menu callbacks
     callbacks.onNewProject = [this]() {
+        SelectionManager::getInstance().clearSelection();
+        if (mainComponent && mainComponent->mainView)
+            mainComponent->mainView->getTimelineController().dispatch(ClearTimeSelectionEvent{});
         auto& projectManager = ProjectManager::getInstance();
         if (!projectManager.newProject()) {
             auto message = juce::String("Could not create new project.");
@@ -49,6 +52,8 @@ void MainWindow::setupMenuCallbacks() {
                                        defaults.timeSignatureDenominator, defaults.loopEnabled,
                                        defaults.loopStartBeats, defaults.loopEndBeats);
             }
+            // Select master channel by default
+            SelectionManager::getInstance().selectTrack(MASTER_TRACK_ID);
         }
     };
 
@@ -75,6 +80,10 @@ void MainWindow::setupMenuCallbacks() {
             if (mainComponent)
                 mainComponent->showLoadingMessage("Loading project...");
 
+            SelectionManager::getInstance().clearSelection();
+            if (mainComponent && mainComponent->mainView)
+                mainComponent->mainView->getTimelineController().dispatch(
+                    ClearTimeSelectionEvent{});
             auto& projectManager = ProjectManager::getInstance();
             projectManager.loadProjectAsync(
                 file,
@@ -117,6 +126,10 @@ void MainWindow::setupMenuCallbacks() {
         if (mainComponent)
             mainComponent->showLoadingMessage("Loading project...");
 
+        SelectionManager::getInstance().clearSelection();
+        if (mainComponent && mainComponent->mainView)
+            mainComponent->mainView->getTimelineController().dispatch(ClearTimeSelectionEvent{});
+
         auto& projectManager = ProjectManager::getInstance();
         projectManager.loadProjectAsync(
             file,
@@ -145,6 +158,9 @@ void MainWindow::setupMenuCallbacks() {
     };
 
     callbacks.onCloseProject = [this]() {
+        SelectionManager::getInstance().clearSelection();
+        if (mainComponent && mainComponent->mainView)
+            mainComponent->mainView->getTimelineController().dispatch(ClearTimeSelectionEvent{});
         auto& projectManager = ProjectManager::getInstance();
         if (!projectManager.closeProject()) {
             juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::WarningIcon, "Close Project",
@@ -200,8 +216,10 @@ void MainWindow::setupMenuCallbacks() {
                         juce::AlertWindow::WarningIcon, "Save Project As",
                         "Failed to save project: " + projectManager.getLastError());
                 } else {
+                    // Use actual saved path (saveProjectAs may wrap in subdirectory)
                     auto& config = Config::getInstance();
-                    config.addRecentProject(file.getFullPathName().toStdString());
+                    config.addRecentProject(
+                        projectManager.getCurrentProjectFile().getFullPathName().toStdString());
                     config.save();
                     MenuManager::getInstance().menuItemsChanged();
                 }
@@ -253,8 +271,10 @@ void MainWindow::setupMenuCallbacks() {
                     juce::AlertWindow::WarningIcon, "Save Project As",
                     "Failed to save project: " + projectManager.getLastError());
             } else {
+                // Use actual saved path (saveProjectAs may wrap in subdirectory)
                 auto& config = Config::getInstance();
-                config.addRecentProject(file.getFullPathName().toStdString());
+                config.addRecentProject(
+                    projectManager.getCurrentProjectFile().getFullPathName().toStdString());
                 config.save();
                 MenuManager::getInstance().menuItemsChanged();
             }

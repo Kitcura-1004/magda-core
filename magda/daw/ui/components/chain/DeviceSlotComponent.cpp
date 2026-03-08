@@ -862,12 +862,7 @@ void DeviceSlotComponent::resizedContent(juce::Rectangle<int> contentArea) {
             samplerUI_->setVisible(true);
         }
         if (drumGridUI_) {
-            // Minimum height: grid width 250px → 60px pads (250-9gaps)/4
-            // = 4×60px + 3×3px gaps + 24px pagination + 12px margins = 285px
-            constexpr int minDrumGridHeight = 285;
-            auto drumGridArea = contentArea.reduced(4);
-            if (drumGridArea.getHeight() < minDrumGridHeight)
-                drumGridArea.setHeight(minDrumGridHeight);
+            auto drumGridArea = contentArea.reduced(4, 2);
             drumGridUI_->setBounds(drumGridArea);
             drumGridUI_->setVisible(true);
         }
@@ -1619,6 +1614,19 @@ void DeviceSlotComponent::createCustomUI() {
             }
         };
 
+        samplerUI_->onRootNoteChanged = [this](int note) {
+            auto* audioEngine = magda::TrackManager::getInstance().getAudioEngine();
+            if (!audioEngine)
+                return;
+            auto* bridge = audioEngine->getAudioBridge();
+            if (!bridge)
+                return;
+            auto plugin = bridge->getPlugin(device_.id);
+            if (auto* sampler = dynamic_cast<daw::audio::MagdaSamplerPlugin*>(plugin.get())) {
+                sampler->setRootNote(note);
+            }
+        };
+
         // Playhead position callback
         samplerUI_->getPlaybackPosition = [this]() -> double {
             auto* audioEngine = magda::TrackManager::getInstance().getAudioEngine();
@@ -2233,6 +2241,7 @@ void DeviceSlotComponent::updateCustomUI() {
         float loopStart = 0.0f, loopEnd = 0.0f;
         float velAmount = 1.0f;
         bool loopEnabled = false;
+        int rootNote = 60;
         juce::String sampleName;
 
         if (device_.parameters.size() >= 7) {
@@ -2264,15 +2273,25 @@ void DeviceSlotComponent::updateCustomUI() {
                     if (file.existsAsFile())
                         sampleName = file.getFileNameWithoutExtension();
                     loopEnabled = sampler->loopEnabledValue.get();
-                    samplerUI_->setWaveformData(sampler->getWaveform(), sampler->getSampleRate(),
-                                                sampler->getSampleLengthSeconds());
+                    // Read marker values from automatable params (CachedValues may be stale
+                    // when user drags markers via the UI parameter change path)
+                    sampleStart = sampler->sampleStartParam->getCurrentValue();
+                    sampleEnd = sampler->sampleEndParam->getCurrentValue();
+                    loopStart = sampler->loopStartParam->getCurrentValue();
+                    loopEnd = sampler->loopEndParam->getCurrentValue();
+                    rootNote = sampler->getRootNote();
+                    // Only set waveform data if not already loaded (avoids resetting zoom/scroll)
+                    if (!samplerUI_->hasWaveform())
+                        samplerUI_->setWaveformData(sampler->getWaveform(),
+                                                    sampler->getSampleRate(),
+                                                    sampler->getSampleLengthSeconds());
                 }
             }
         }
 
         samplerUI_->updateParameters(attack, decay, sustain, release, pitch, fine, level,
                                      sampleStart, sampleEnd, loopEnabled, loopStart, loopEnd,
-                                     velAmount, sampleName);
+                                     velAmount, sampleName, rootNote);
     }
 
     if (drumGridUI_ &&

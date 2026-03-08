@@ -511,6 +511,9 @@ MainWindow::MainComponent::MainComponent(AudioEngine* externalEngine) {
         }
     }
 #endif
+
+    // Select master channel by default so the inspector isn't empty on startup
+    SelectionManager::getInstance().selectTrack(MASTER_TRACK_ID);
 }
 
 void MainWindow::MainComponent::setupResizeHandles() {
@@ -622,6 +625,10 @@ void MainWindow::MainComponent::setupAudioEngineCallbacks(AudioEngine* engine) {
     positionTimer_->onSessionPlayheadUpdate = [this](double sessionPos) {
         if (sessionView)
             sessionView->setSessionPlayheadPosition(sessionPos);
+    };
+    positionTimer_->onCpuUsageUpdate = [this](float cpu) {
+        if (transportPanel)
+            transportPanel->setCpuUsage(cpu);
     };
     positionTimer_->start();  // Start once and keep running
 
@@ -866,10 +873,6 @@ void MainWindow::MainComponent::resized() {
         juce::jlimit(minRightWidth, std::max(minRightWidth, maxRightWidth), rightPanelWidth);
     bottomPanelHeight = juce::jlimit(minBottomHeight, std::max(minBottomHeight, maxBottomHeight),
                                      bottomPanelHeight);
-
-    DBG("BottomPanel: height=" << bottomPanelHeight << " minHeight=" << minBottomHeight
-                               << " maxHeight=" << maxBottomHeight << " collapsed="
-                               << (int)bottomPanelCollapsed << " windowH=" << getHeight());
 
     auto bounds = getLocalBounds();
 

@@ -496,10 +496,11 @@ bool MainWindow::MainComponent::perform(const InvocationInfo& info) {
             }
             // Time selection delete (no ripple — clips after selection stay in place)
             if (hasActiveTimeSelection()) {
-                const auto& sel = mainView->getTimelineController().getState().selection;
+                const auto& state = mainView->getTimelineController().getState();
+                const auto& sel = state.selection;
                 auto trackIds = resolveTimeSelectionTrackIds();
                 auto cmd = std::make_unique<DeleteTimeSelectionCommand>(sel.startTime, sel.endTime,
-                                                                        trackIds);
+                                                                        trackIds, state.tempo.bpm);
                 UndoManager::getInstance().executeCommand(std::move(cmd));
 
                 // Move edit cursor to deletion point and clear selection
@@ -522,26 +523,47 @@ bool MainWindow::MainComponent::perform(const InvocationInfo& info) {
                 selectionManager.clearSelection();
                 return true;
             }
-            // No notes or clips selected — delete selected track
-            TrackId selectedTrack = selectionManager.getSelectedTrack();
-            if (selectedTrack != INVALID_TRACK_ID) {
+            // No notes or clips selected — delete selected track(s)
+            const auto& selectedTracks = selectionManager.getSelectedTracks();
+            if (!selectedTracks.empty()) {
                 if (Config::getInstance().getConfirmTrackDelete()) {
-                    auto trackId = selectedTrack;
-                    auto* trackInfo = TrackManager::getInstance().getTrack(trackId);
-                    juce::String trackName = trackInfo ? trackInfo->name : "this track";
+                    auto trackIds = selectedTracks;  // copy for lambda capture
+                    juce::String message;
+                    if (trackIds.size() == 1) {
+                        auto* trackInfo = TrackManager::getInstance().getTrack(*trackIds.begin());
+                        juce::String trackName = trackInfo ? trackInfo->name : "this track";
+                        message = "Are you sure you want to delete \"" + trackName + "\"?";
+                    } else {
+                        message = "Are you sure you want to delete " +
+                                  juce::String(static_cast<int>(trackIds.size())) + " tracks?";
+                    }
                     juce::AlertWindow::showOkCancelBox(
-                        juce::AlertWindow::WarningIcon, "Delete Track",
-                        "Are you sure you want to delete \"" + trackName + "\"?", "Delete",
+                        juce::AlertWindow::WarningIcon, "Delete Track(s)", message, "Delete",
                         "Cancel", nullptr,
-                        juce::ModalCallbackFunction::create([trackId](int result) {
+                        juce::ModalCallbackFunction::create([trackIds](int result) {
                             if (result == 1) {
-                                auto cmd = std::make_unique<DeleteTrackCommand>(trackId);
-                                UndoManager::getInstance().executeCommand(std::move(cmd));
+                                if (trackIds.size() > 1)
+                                    UndoManager::getInstance().beginCompoundOperation(
+                                        "Delete Tracks");
+                                for (auto id : trackIds) {
+                                    auto cmd = std::make_unique<DeleteTrackCommand>(id);
+                                    UndoManager::getInstance().executeCommand(std::move(cmd));
+                                }
+                                if (trackIds.size() > 1)
+                                    UndoManager::getInstance().endCompoundOperation();
+                                SelectionManager::getInstance().clearSelection();
                             }
                         }));
                 } else {
-                    auto cmd = std::make_unique<DeleteTrackCommand>(selectedTrack);
-                    UndoManager::getInstance().executeCommand(std::move(cmd));
+                    if (selectedTracks.size() > 1)
+                        UndoManager::getInstance().beginCompoundOperation("Delete Tracks");
+                    for (auto trackId : selectedTracks) {
+                        auto cmd = std::make_unique<DeleteTrackCommand>(trackId);
+                        UndoManager::getInstance().executeCommand(std::move(cmd));
+                    }
+                    if (selectedTracks.size() > 1)
+                        UndoManager::getInstance().endCompoundOperation();
+                    selectionManager.clearSelection();
                 }
                 return true;
             }
@@ -942,40 +964,82 @@ bool MainWindow::MainComponent::keyPressed(const juce::KeyPress& key) {
         return true;
     }
 
-    // Cmd/Ctrl+T: Add Track (through undo system)
-    if (key == juce::KeyPress('t', juce::ModifierKeys::commandModifier, 0)) {
-        auto cmd = std::make_unique<CreateTrackCommand>(TrackType::Audio);
+    // Cmd/Ctrl+Shift+T: Add Group Track (through undo system)
+    if (key ==
+        juce::KeyPress('t', juce::ModifierKeys::commandModifier | juce::ModifierKeys::shiftModifier,
+                       0)) {
+        TrackId selectedTrack = SelectionManager::getInstance().getSelectedTrack();
+        auto cmd =
+            std::make_unique<CreateTrackCommand>(TrackType::Group, juce::String(), selectedTrack);
         UndoManager::getInstance().executeCommand(std::move(cmd));
         return true;
     }
 
-    // Delete or Backspace: Delete selected track (through undo system)
-    if (key == juce::KeyPress::deleteKey || key == juce::KeyPress::backspaceKey) {
+    // Cmd/Ctrl+T: Add Track (through undo system)
+    if (key == juce::KeyPress('t', juce::ModifierKeys::commandModifier, 0)) {
         TrackId selectedTrack = SelectionManager::getInstance().getSelectedTrack();
-        if (selectedTrack != INVALID_TRACK_ID) {
-            auto cmd = std::make_unique<DeleteTrackCommand>(selectedTrack);
-            UndoManager::getInstance().executeCommand(std::move(cmd));
+        auto cmd =
+            std::make_unique<CreateTrackCommand>(TrackType::Audio, juce::String(), selectedTrack);
+        UndoManager::getInstance().executeCommand(std::move(cmd));
+        return true;
+    }
+
+    // Delete or Backspace: Delete selected track(s) (through undo system)
+    if (key == juce::KeyPress::deleteKey || key == juce::KeyPress::backspaceKey) {
+        const auto& selectedTracks = SelectionManager::getInstance().getSelectedTracks();
+        if (!selectedTracks.empty()) {
+            if (selectedTracks.size() > 1) {
+                UndoManager::getInstance().beginCompoundOperation("Delete Tracks");
+            }
+            for (auto trackId : selectedTracks) {
+                auto cmd = std::make_unique<DeleteTrackCommand>(trackId);
+                UndoManager::getInstance().executeCommand(std::move(cmd));
+            }
+            if (selectedTracks.size() > 1) {
+                UndoManager::getInstance().endCompoundOperation();
+            }
+            SelectionManager::getInstance().clearSelection();
             return true;
         }
         // Don't consume - let clips handle delete if no track action
         return false;
     }
 
-    // Cmd/Ctrl+D: Duplicate selected track with content (through undo system)
+    // Cmd/Ctrl+D: Duplicate selected track(s) with content (through undo system)
     if (key == juce::KeyPress('d', juce::ModifierKeys::commandModifier, 0)) {
-        TrackId selectedTrack = SelectionManager::getInstance().getSelectedTrack();
-        if (selectedTrack != INVALID_TRACK_ID) {
-            auto cmd = std::make_unique<DuplicateTrackCommand>(selectedTrack, true);
-            UndoManager::getInstance().executeCommand(std::move(cmd));
+        const auto& selectedTracks = SelectionManager::getInstance().getSelectedTracks();
+        if (!selectedTracks.empty()) {
+            if (selectedTracks.size() > 1) {
+                UndoManager::getInstance().beginCompoundOperation("Duplicate Tracks");
+            }
+            for (auto trackId : selectedTracks) {
+                auto cmd = std::make_unique<DuplicateTrackCommand>(trackId, true);
+                UndoManager::getInstance().executeCommand(std::move(cmd));
+            }
+            if (selectedTracks.size() > 1) {
+                UndoManager::getInstance().endCompoundOperation();
+            }
             return true;
         }
         // No track was duplicated, let the key press fall through to duplicate clips
         return false;
     }
 
-    // M: Toggle mute on selected track
+    // M: Toggle mute on selected track(s)
     if (key == juce::KeyPress('m') || key == juce::KeyPress('M')) {
-        if (mixerView && !mixerView->isSelectedMaster()) {
+        const auto& selectedTracks = SelectionManager::getInstance().getSelectedTracks();
+        if (selectedTracks.size() > 1) {
+            // Multi-track: toggle mute on all selected tracks
+            UndoManager::getInstance().beginCompoundOperation("Toggle Mute");
+            for (auto trackId : selectedTracks) {
+                auto* trackInfo = TrackManager::getInstance().getTrack(trackId);
+                if (trackInfo) {
+                    UndoManager::getInstance().executeCommand(
+                        std::make_unique<SetTrackMuteCommand>(trackId, !trackInfo->muted));
+                }
+            }
+            UndoManager::getInstance().endCompoundOperation();
+        } else if (mixerView && !mixerView->isSelectedMaster()) {
             int selectedIndex = mixerView->getSelectedChannel();
             if (selectedIndex >= 0) {
                 const auto& tracks = TrackManager::getInstance().getTracks();
@@ -989,10 +1053,22 @@ bool MainWindow::MainComponent::keyPressed(const juce::KeyPress& key) {
         return true;
     }
 
-    // Shift+S: Toggle solo on selected track
+    // Shift+S: Toggle solo on selected track(s)
     if ((key == juce::KeyPress('s') || key == juce::KeyPress('S')) &&
         key.getModifiers().isShiftDown() && !key.getModifiers().isCommandDown()) {
-        if (mixerView && !mixerView->isSelectedMaster()) {
+        const auto& selectedTracks = SelectionManager::getInstance().getSelectedTracks();
+        if (selectedTracks.size() > 1) {
+            // Multi-track: toggle solo on all selected tracks
+            UndoManager::getInstance().beginCompoundOperation("Toggle Solo");
+            for (auto trackId : selectedTracks) {
+                auto* trackInfo = TrackManager::getInstance().getTrack(trackId);
+                if (trackInfo) {
+                    UndoManager::getInstance().executeCommand(
+                        std::make_unique<SetTrackSoloCommand>(trackId, !trackInfo->soloed));
+                }
+            }
+            UndoManager::getInstance().endCompoundOperation();
+        } else if (mixerView && !mixerView->isSelectedMaster()) {
             int selectedIndex = mixerView->getSelectedChannel();
             if (selectedIndex >= 0) {
                 const auto& tracks = TrackManager::getInstance().getTracks();

@@ -315,6 +315,7 @@ class ClipManager {
      * @brief Get all clips on a specific track
      */
     std::vector<ClipId> getClipsOnTrack(TrackId trackId) const;
+    std::vector<ClipId> getClipsOnTrack(TrackId trackId, ClipView view) const;
 
     /**
      * @brief Get clip at a specific position on a track
@@ -466,6 +467,9 @@ class ClipManager {
      * Called internally by clip creation/move methods.
      */
     void resolveOverlaps(ClipId dominantClipId);
+
+    /// Reset a looped clip's length to its base loop length and disable looping
+    void resetLoopedClipLength(ClipInfo& clip);
 
   private:
     ClipManager() = default;

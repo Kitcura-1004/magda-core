@@ -831,3 +831,93 @@ TEST_CASE("ClipOperations::trimAudioFromLeft - loopStart tracks offset",
         REQUIRE(clip.loopStart == Catch::Approx(clip.offset));
     }
 }
+
+// ============================================================================
+// Auto-tempo (beat mode) audio clips: use BPM ratio, not speedRatio
+// ============================================================================
+
+TEST_CASE("ClipOperations::resizeContainerFromLeft - auto-tempo offset uses BPM ratio",
+          "[clip][resize][left][autotempo]") {
+    SECTION("Non-looped auto-tempo: offset uses beats as authoritative") {
+        ClipInfo clip;
+        clip.startTime = 0.0;
+        clip.length = 4.0;
+        clip.type = ClipType::Audio;
+        clip.audioFilePath = "test.wav";
+        clip.offset = 0.0;
+        clip.offsetBeats = 0.0;
+        clip.speedRatio = 1.0;
+        clip.autoTempo = true;
+        clip.sourceBPM = 140.0;
+
+        // Shrink by 1 second at 120 BPM
+        ClipOperations::resizeContainerFromLeft(clip, 3.0, 120.0);
+
+        // deltaBeats = 1.0 * 120/60 = 2.0 beats
+        // offsetBeats = 0 + 2.0 = 2.0
+        // offset (seconds) = 2.0 * 60/140 = 6/7
+        REQUIRE(clip.offsetBeats == Catch::Approx(2.0));
+        REQUIRE(clip.offset == Catch::Approx(120.0 / 140.0));
+    }
+
+    SECTION("Looped auto-tempo: offset wraps using beats") {
+        ClipInfo clip;
+        clip.startTime = 0.0;
+        clip.length = 8.0;
+        clip.type = ClipType::Audio;
+        clip.audioFilePath = "test.wav";
+        clip.offset = 0.0;
+        clip.offsetBeats = 0.0;
+        clip.loopStart = 0.0;
+        clip.loopStartBeats = 0.0;
+        clip.loopLength = 2.0;                      // 2 source seconds
+        clip.loopLengthBeats = 2.0 * 140.0 / 60.0;  // source beats
+        clip.loopEnabled = true;
+        clip.speedRatio = 1.0;
+        clip.autoTempo = true;
+        clip.sourceBPM = 140.0;
+
+        // Shrink by 1 second at 120 BPM
+        ClipOperations::resizeContainerFromLeft(clip, 7.0, 120.0);
+
+        // deltaBeats = 1.0 * 120/60 = 2.0 project beats
+        // wrapPhase(0 + 2.0, 4.667) = 2.0 beats
+        // offset (seconds) = 2.0 * 60/140 = 6/7
+        REQUIRE(clip.offsetBeats == Catch::Approx(2.0));
+        REQUIRE(clip.offset == Catch::Approx(120.0 / 140.0));
+    }
+
+    SECTION("Non-auto-tempo still uses speedRatio") {
+        ClipInfo clip;
+        clip.startTime = 0.0;
+        clip.length = 4.0;
+        clip.type = ClipType::Audio;
+        clip.audioFilePath = "test.wav";
+        clip.offset = 0.0;
+        clip.speedRatio = 2.0;
+        clip.autoTempo = false;
+        clip.sourceBPM = 140.0;
+
+        ClipOperations::resizeContainerFromLeft(clip, 3.0, 120.0);
+
+        // Should use speedRatio (2.0), not BPM ratio
+        REQUIRE(clip.offset == Catch::Approx(2.0));
+    }
+
+    SECTION("Auto-tempo with matching BPMs gives same result as speedRatio=1") {
+        ClipInfo clip;
+        clip.startTime = 0.0;
+        clip.length = 4.0;
+        clip.type = ClipType::Audio;
+        clip.audioFilePath = "test.wav";
+        clip.offset = 0.0;
+        clip.speedRatio = 1.0;
+        clip.autoTempo = true;
+        clip.sourceBPM = 120.0;  // Same as project
+
+        ClipOperations::resizeContainerFromLeft(clip, 3.0, 120.0);
+
+        // 120/120 = 1.0, same as speedRatio
+        REQUIRE(clip.offset == Catch::Approx(1.0));
+    }
+}

@@ -112,6 +112,10 @@ struct ClipInfo {
     // TE: Clip::offset (but TE stores in stretched time, we use source time)
     double offset = 0.0;  // Start position in source file (source-time seconds)
 
+    // Beat-based offset (authoritative for autoTempo clips)
+    // Source beats from file start. offset (seconds) is derived: offsetBeats * 60/sourceBPM
+    double offsetBeats = 0.0;
+
     // Looping - defines the region that loops
     // TE: AudioClipBase::loopStart, loopLength, isLooping()
     bool loopEnabled = false;  // Whether to loop the source region
@@ -129,6 +133,13 @@ struct ClipInfo {
 
     bool warpEnabled = false;  // Whether warp markers are active on this clip
     int timeStretchMode = 0;   // TimeStretcher::Mode (0 = default/auto)
+
+    // Warp marker positions (only populated when warpEnabled == true)
+    struct WarpMarker {
+        double sourceTime;
+        double warpTime;
+    };
+    std::vector<WarpMarker> warpMarkers;
 
     // =========================================================================
     // Auto-tempo / Musical mode (beat-based length)
@@ -195,7 +206,8 @@ struct ClipInfo {
     std::vector<MidiNote> midiNotes;
     std::vector<MidiCCData> midiCCData;
     std::vector<MidiPitchBendData> midiPitchBendData;
-    double midiOffset = 0.0;  // Start offset in beats (for non-destructive trim)
+    double midiOffset = 0.0;  // User-controlled start offset in beats (playback / offset marker)
+    double midiTrimOffset = 0.0;  // Left-resize trim offset in beats (content origin on timeline)
 
     // Session view properties
     int sceneIndex = -1;  // -1 = not in session view (arrangement only)
@@ -260,23 +272,32 @@ struct ClipInfo {
         return offset - loopStart;
     }
 
-    /// TE offset in stretched time.
+    /// TE offset in timeline seconds (source / speedRatio).
+    /// TE expects offset in the same time domain as clip start (timeline seconds).
     /// Looped: phase within the loop region (offset - loopStart).
     /// Non-looped: raw trim point in the source file.
-    double getTeOffset(bool looped) const {
+    /// For autoTempo clips, offsetBeats is authoritative and converted to
+    /// timeline seconds via projectBPM at the TE boundary.
+    double getTeOffset(bool looped, double projectBPM = 0.0) const {
+        if (autoTempo && projectBPM > 0.0) {
+            // Convert source beats to timeline seconds for TE
+            if (looped)
+                return (offsetBeats - loopStartBeats) * 60.0 / projectBPM;
+            return offsetBeats * 60.0 / projectBPM;
+        }
         if (looped)
-            return (offset - loopStart) * speedRatio;
-        return offset * speedRatio;
+            return sourceToTimeline(offset - loopStart);
+        return sourceToTimeline(offset);
     }
 
-    /// TE loop start in stretched time
+    /// TE loop start in timeline seconds (source / speedRatio)
     double getTeLoopStart() const {
-        return loopStart * speedRatio;
+        return sourceToTimeline(loopStart);
     }
 
-    /// TE loop end in stretched time
+    /// TE loop end in timeline seconds (source / speedRatio)
     double getTeLoopEnd() const {
-        return (loopStart + getSourceLength()) * speedRatio;
+        return sourceToTimeline(loopStart + getSourceLength());
     }
 
     /// Sync loopStart to match offset (keeps loop region anchored to playback start)

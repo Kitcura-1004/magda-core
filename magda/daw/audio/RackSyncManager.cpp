@@ -142,6 +142,9 @@ void RackSyncManager::removeRack(RackId rackId) {
         edit_.getRackList().removeRackType(synced.rackType);
     }
 
+    // Clear LFO callbacks before destroying CurveSnapshotHolders
+    clearLFOCustomWaveCallbacks(synced.innerModifiers);
+
     DBG("RackSyncManager: Removed rack " << rackId);
 
     syncedRacks_.erase(it);
@@ -206,12 +209,15 @@ void RackSyncManager::captureAllPluginStates() {
 
     for (auto& [rackId, synced] : syncedRacks_) {
         for (auto& [deviceId, plugin] : synced.innerPlugins) {
-            auto* ext = dynamic_cast<te::ExternalPlugin*>(plugin.get());
-            if (!ext)
-                continue;
+            juce::String stateStr;
 
-            ext->flushPluginStateToValueTree();
-            auto stateStr = ext->state.getProperty(te::IDs::state).toString();
+            if (auto* ext = dynamic_cast<te::ExternalPlugin*>(plugin.get())) {
+                ext->flushPluginStateToValueTree();
+                stateStr = ext->state.getProperty(te::IDs::state).toString();
+            } else {
+                if (auto xml = plugin->state.createXml())
+                    stateStr = xml->toString();
+            }
 
             // Always overwrite pluginState (even if empty) to avoid stale state
             if (auto* devInfo = trackManager.getDevice(synced.trackId, deviceId)) {
@@ -242,6 +248,8 @@ void RackSyncManager::clear() {
 
             macroList.removeMacroParameter(*macroParam);
         }
+        // Clear LFO callbacks before destroying CurveSnapshotHolders
+        clearLFOCustomWaveCallbacks(synced.innerModifiers);
     }
     syncedRacks_.clear();
 }
@@ -312,7 +320,7 @@ void RackSyncManager::updateAllModifierProperties(TrackId trackId) {
                             if (!snapHolder)
                                 snapHolder = std::make_unique<CurveSnapshotHolder>();
                             applyLFOProperties(lfo, modInfo, snapHolder.get());
-                            if (modInfo.running && modInfo.triggerMode != LFOTriggerMode::Free)
+                            if (modInfo.triggered && modInfo.triggerMode != LFOTriggerMode::Free)
                                 triggerLFONoteOnWithReset(lfo);
                         }
 
@@ -333,9 +341,12 @@ void RackSyncManager::updateAllModifierProperties(TrackId trackId) {
                                     for (auto* assignment : param->getAssignments()) {
                                         if (assignment->isForModifierSource(*modifier)) {
                                             float effectiveAmount = link.amount;
-                                            if (modInfo.triggerMode != LFOTriggerMode::Free &&
-                                                !modInfo.running && !modInfo.oneShot)
-                                                effectiveAmount = 0.0f;
+                                            if (!renderingActive_ &&
+                                                modInfo.triggerMode != LFOTriggerMode::Free &&
+                                                !modInfo.running) {
+                                                if (!modInfo.oneShot || modInfo.phase < 1.0f)
+                                                    effectiveAmount = 0.0f;
+                                            }
                                             assignment->value = effectiveAmount;
                                             assignment->offset = 0.0f;
                                             break;
@@ -626,6 +637,9 @@ void RackSyncManager::syncModifiers(SyncedRack& synced, const RackInfo& rackInfo
     auto& modList = rackType->getModifierList();
 
     // Remove existing TE modifiers before recreating
+    // Clear LFO callbacks before destroying CurveSnapshotHolders
+    clearLFOCustomWaveCallbacks(synced.innerModifiers);
+
     for (auto& [modId, mod] : synced.innerModifiers) {
         if (!mod)
             continue;
@@ -710,8 +724,11 @@ void RackSyncManager::syncModifiers(SyncedRack& synced, const RackInfo& rackInfo
                 auto* param = params[static_cast<size_t>(link.target.paramIndex)];
                 if (param) {
                     float initialAmount = link.amount;
-                    if (modInfo.triggerMode != LFOTriggerMode::Free && !modInfo.running)
-                        initialAmount = 0.0f;
+                    if (!renderingActive_ && modInfo.triggerMode != LFOTriggerMode::Free &&
+                        !modInfo.running) {
+                        if (!modInfo.oneShot || modInfo.phase < 1.0f)
+                            initialAmount = 0.0f;
+                    }
                     param->addModifier(*modifier, initialAmount);
                 }
             }

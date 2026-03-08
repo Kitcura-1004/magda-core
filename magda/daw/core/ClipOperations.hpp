@@ -78,28 +78,63 @@ class ClipOperations {
         // be updated when the user explicitly changes it, not during tempo-driven resizes.
 
         if (clip.type == ClipType::Audio && !clip.audioFilePath.isEmpty()) {
-            if (!clip.loopEnabled) {
-                // Non-looped: adjust offset so content stays at timeline position
-                double sourceDelta = actualDelta * clip.speedRatio;
-                clip.offset = juce::jmax(0.0, clip.offset + sourceDelta);
-                clip.loopStart = clip.offset;
-            } else {
-                // Looped: adjust offset (wrapped within loop region) so content stays at timeline
-                // position.  loopStart is the user-defined loop anchor — it must NOT move.
-                double sourceLength =
-                    clip.loopLength > 0.0 ? clip.loopLength : clip.length * clip.speedRatio;
-                if (sourceLength > 0.0) {
-                    double phaseDelta = actualDelta * clip.speedRatio;
-                    double relOffset = clip.offset - clip.loopStart;
-                    clip.offset = clip.loopStart + wrapPhase(relOffset + phaseDelta, sourceLength);
+            bool isAutoTempo = clip.isBeatsAuthoritative() && clip.sourceBPM > 0.0 && bpm > 0.0;
+
+            if (isAutoTempo) {
+                // Auto-tempo: work in beats (authoritative), derive seconds
+                double deltaBeats = actualDelta * bpm / 60.0;
+                if (!clip.loopEnabled) {
+                    clip.offsetBeats = juce::jmax(0.0, clip.offsetBeats + deltaBeats);
+                } else if (clip.loopLengthBeats > 0.0) {
+                    double relBeats = clip.offsetBeats - clip.loopStartBeats;
+                    clip.offsetBeats = clip.loopStartBeats +
+                                       wrapPhase(relBeats + deltaBeats, clip.loopLengthBeats);
                 }
+                // Derive source-time seconds for paint/display
+                clip.offset = clip.offsetBeats * 60.0 / clip.sourceBPM;
+                if (!clip.loopEnabled)
+                    clip.loopStart = clip.offset;
+            } else {
+                // Manual stretch: work in source-time seconds
+                double toSource = clip.speedRatio;
+                if (!clip.loopEnabled) {
+                    double sourceDelta = actualDelta * toSource;
+                    clip.offset = juce::jmax(0.0, clip.offset + sourceDelta);
+                    clip.loopStart = clip.offset;
+                } else {
+                    double sourceLength =
+                        clip.loopLength > 0.0 ? clip.loopLength : clip.length * toSource;
+                    if (sourceLength > 0.0) {
+                        double phaseDelta = actualDelta * toSource;
+                        double relOffset = clip.offset - clip.loopStart;
+                        clip.offset =
+                            clip.loopStart + wrapPhase(relOffset + phaseDelta, sourceLength);
+                    }
+                }
+            }
+        } else if (clip.type == ClipType::MIDI) {
+            // MIDI phase lives in midiOffset (beats). Do NOT touch clip.offset.
+            double beatsPerSecond = bpm / 60.0;
+            double deltaBeat = actualDelta * beatsPerSecond;
+            if (clip.loopEnabled && clip.loopLengthBeats > 0.0) {
+                // Looped: wrap midiOffset phase within loop for content alignment.
+                // Piano roll is forced to relative mode for looped clips, so
+                // midiTrimOffset is not needed.
+                clip.midiOffset = wrapPhase(clip.midiOffset + deltaBeat, clip.loopLengthBeats);
+            } else {
+                // Non-looped: midiOffset stays unchanged (user-controlled).
+                // midiTrimOffset tracks the cumulative left-resize delta (in beats) so the
+                // piano roll (absolute mode) keeps notes at their timeline positions.
+                // Positive = clip start moved right (shrunk), negative = moved left (expanded).
+                clip.midiTrimOffset += deltaBeat;
             }
         }
 
         clip.startTime = newStartTime;
         clip.length = newLength;
-        if (clip.isBeatsAuthoritative() && bpm > 0.0) {
+        if (bpm > 0.0)
             clip.startBeats = newStartTime * bpm / 60.0;
+        if (clip.isBeatsAuthoritative() && bpm > 0.0) {
             clip.lengthBeats = newLength * bpm / 60.0;
         }
     }
@@ -152,8 +187,9 @@ class ClipOperations {
         clip.startTime = juce::jmax(0.0, clip.startTime + timelineDelta);
         clip.length = juce::jmax(MIN_CLIP_LENGTH, clip.length - timelineDelta);
 
-        if (clip.isBeatsAuthoritative() && bpm > 0.0) {
+        if (bpm > 0.0)
             clip.startBeats = clip.startTime * bpm / 60.0;
+        if (clip.isBeatsAuthoritative() && bpm > 0.0) {
             clip.lengthBeats = clip.length * bpm / 60.0;
         }
     }
@@ -202,6 +238,10 @@ class ClipOperations {
 
         clip.length = newLength;
         clip.speedRatio = newSpeedRatio;
+
+        // Keep loopLength in sync for non-looped clips
+        if (!clip.loopEnabled)
+            clip.loopLength = clip.timelineToSource(clip.length);
     }
 
     /**
@@ -227,6 +267,10 @@ class ClipOperations {
         clip.length = newLength;
         clip.startTime = rightEdge - newLength;
         clip.speedRatio = newSpeedRatio;
+
+        // Keep loopLength in sync for non-looped clips
+        if (!clip.loopEnabled)
+            clip.loopLength = clip.timelineToSource(clip.length);
     }
 
     // ========================================================================
@@ -486,6 +530,10 @@ class ClipOperations {
         if (enabled) {
             clip.analogPitch = false;  // Analog pitch is incompatible with autoTempo
 
+            // Convert current offset to beats
+            if (clip.sourceBPM > 0.0)
+                clip.offsetBeats = clip.offset * clip.sourceBPM / 60.0;
+
             // Convert current timeline position to beats
             clip.startBeats = (clip.startTime * bpm) / 60.0;
 
@@ -655,6 +703,165 @@ class ClipOperations {
         if (clip.loopEnabled && clip.loopLength > 0.0) {
             clip.loopLength = dragStartExtent / newSpeedRatio;
         }
+    }
+
+    // =========================================================================
+    // MIDI Flatten (render loops/offsets into flat note list)
+    // =========================================================================
+
+    /**
+     * @brief Flatten a MIDI clip's notes, expanding loops and applying offsets.
+     *
+     * Looped: repeats notes for each loop cycle across lengthBeats, applying midiOffset phase.
+     * Non-looped: shifts notes by -midiTrimOffset, clips to 0..lengthBeats.
+     * After flattening, looping is disabled and offsets are reset to 0.
+     */
+    static inline void flattenMidiClip(ClipInfo& clip) {
+        if (clip.type != ClipType::MIDI)
+            return;
+
+        std::vector<MidiNote> flatNotes;
+        double clipLen = clip.lengthBeats;
+
+        if (clip.loopEnabled && clip.loopLengthBeats > 0.0) {
+            double loopLen = clip.loopLengthBeats;
+            double phase = clip.midiOffset;
+
+            // Number of full loop cycles that fit in the clip
+            int numCycles = static_cast<int>(std::ceil(clipLen / loopLen));
+
+            for (int cycle = 0; cycle < numCycles; ++cycle) {
+                double cycleStart = cycle * loopLen - phase;
+
+                for (const auto& note : clip.midiNotes) {
+                    // Only include notes within the loop region
+                    if (note.startBeat >= loopLen || note.startBeat + note.lengthBeats <= 0.0)
+                        continue;
+
+                    double noteStart = cycleStart + note.startBeat;
+                    double noteLen = note.lengthBeats;
+
+                    // Clip note to loop boundary
+                    if (note.startBeat + noteLen > loopLen)
+                        noteLen = loopLen - note.startBeat;
+
+                    // Skip notes entirely outside clip range
+                    if (noteStart + noteLen <= 0.0 || noteStart >= clipLen)
+                        continue;
+
+                    // Trim to clip boundaries
+                    if (noteStart < 0.0) {
+                        noteLen += noteStart;
+                        noteStart = 0.0;
+                    }
+                    if (noteStart + noteLen > clipLen)
+                        noteLen = clipLen - noteStart;
+
+                    if (noteLen > 0.0) {
+                        MidiNote flat = note;
+                        flat.startBeat = noteStart;
+                        flat.lengthBeats = noteLen;
+                        flatNotes.push_back(flat);
+                    }
+                }
+            }
+
+            // Flatten CC data
+            std::vector<MidiCCData> flatCC;
+            for (int cycle = 0; cycle < numCycles; ++cycle) {
+                double cycleStart = cycle * loopLen - phase;
+                for (const auto& cc : clip.midiCCData) {
+                    if (cc.beatPosition >= loopLen)
+                        continue;
+                    double pos = cycleStart + cc.beatPosition;
+                    if (pos < 0.0 || pos >= clipLen)
+                        continue;
+                    MidiCCData flat = cc;
+                    flat.beatPosition = pos;
+                    flatCC.push_back(flat);
+                }
+            }
+            clip.midiCCData = std::move(flatCC);
+
+            // Flatten pitch bend data
+            std::vector<MidiPitchBendData> flatPB;
+            for (int cycle = 0; cycle < numCycles; ++cycle) {
+                double cycleStart = cycle * loopLen - phase;
+                for (const auto& pb : clip.midiPitchBendData) {
+                    if (pb.beatPosition >= loopLen)
+                        continue;
+                    double pos = cycleStart + pb.beatPosition;
+                    if (pos < 0.0 || pos >= clipLen)
+                        continue;
+                    MidiPitchBendData flat = pb;
+                    flat.beatPosition = pos;
+                    flatPB.push_back(flat);
+                }
+            }
+            clip.midiPitchBendData = std::move(flatPB);
+
+            clip.loopEnabled = false;
+            clip.midiOffset = 0.0;
+            clip.loopLengthBeats = 0.0;
+            clip.loopLength = 0.0;
+            clip.loopStart = 0.0;
+            clip.loopStartBeats = 0.0;
+        } else {
+            // Non-looped: apply midiTrimOffset
+            double trimOffset = clip.midiTrimOffset;
+
+            for (const auto& note : clip.midiNotes) {
+                double noteStart = note.startBeat - trimOffset;
+                double noteLen = note.lengthBeats;
+
+                // Skip notes entirely outside clip range
+                if (noteStart + noteLen <= 0.0 || noteStart >= clipLen)
+                    continue;
+
+                // Trim to clip boundaries
+                if (noteStart < 0.0) {
+                    noteLen += noteStart;
+                    noteStart = 0.0;
+                }
+                if (noteStart + noteLen > clipLen)
+                    noteLen = clipLen - noteStart;
+
+                if (noteLen > 0.0) {
+                    MidiNote flat = note;
+                    flat.startBeat = noteStart;
+                    flat.lengthBeats = noteLen;
+                    flatNotes.push_back(flat);
+                }
+            }
+
+            // Apply trim to CC data
+            std::vector<MidiCCData> flatCC;
+            for (const auto& cc : clip.midiCCData) {
+                double pos = cc.beatPosition - trimOffset;
+                if (pos < 0.0 || pos >= clipLen)
+                    continue;
+                MidiCCData flat = cc;
+                flat.beatPosition = pos;
+                flatCC.push_back(flat);
+            }
+            clip.midiCCData = std::move(flatCC);
+
+            // Apply trim to pitch bend data
+            std::vector<MidiPitchBendData> flatPB;
+            for (const auto& pb : clip.midiPitchBendData) {
+                double pos = pb.beatPosition - trimOffset;
+                if (pos < 0.0 || pos >= clipLen)
+                    continue;
+                MidiPitchBendData flat = pb;
+                flat.beatPosition = pos;
+                flatPB.push_back(flat);
+            }
+            clip.midiPitchBendData = std::move(flatPB);
+
+            clip.midiTrimOffset = 0.0;
+        }
+
+        clip.midiNotes = std::move(flatNotes);
     }
 
   private:

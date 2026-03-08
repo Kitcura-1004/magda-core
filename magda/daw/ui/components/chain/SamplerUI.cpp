@@ -2,6 +2,9 @@
 
 #include <BinaryData.h>
 
+#include <cmath>
+
+#include "ui/themes/CursorManager.hpp"
 #include "ui/themes/DarkTheme.hpp"
 #include "ui/themes/FontManager.hpp"
 
@@ -23,6 +26,60 @@ SamplerUI::SamplerUI() {
             onLoadSampleRequested();
     };
     addAndMakeVisible(*loadButton_);
+
+    // Root note slider (MIDI note 0-127, displayed as note name)
+    rootNoteSlider_.setRange(0, 127, 1);
+    rootNoteSlider_.setValue(60, juce::dontSendNotification);
+    rootNoteSlider_.setValueFormatter([](double v) {
+        static const char* noteNames[] = {"C",  "C#", "D",  "D#", "E",  "F",
+                                          "F#", "G",  "G#", "A",  "A#", "B"};
+        int note = juce::roundToInt(v);
+        int octave = (note / 12) - 2;  // C3 = 60
+        return juce::String(noteNames[note % 12]) + juce::String(octave);
+    });
+    rootNoteSlider_.setValueParser([](const juce::String& text) {
+        // Parse note names like "C3", "F#4", "Bb2"
+        juce::String t = text.trim().toUpperCase();
+        if (t.isEmpty())
+            return 60.0;
+        static const char* noteNames[] = {"C",  "C#", "D",  "D#", "E",  "F",
+                                          "F#", "G",  "G#", "A",  "A#", "B"};
+        // Try sharp notation first
+        int semitone = -1;
+        int nameLen = 0;
+        for (int i = 0; i < 12; ++i) {
+            juce::String nn(noteNames[i]);
+            if (t.startsWith(nn) && nn.length() > nameLen) {
+                semitone = i;
+                nameLen = nn.length();
+            }
+        }
+        // Handle flat (b) as alias for sharp of note below
+        if (t.length() >= 2 && t[1] == 'B' && t[0] >= 'A' && t[0] <= 'G') {
+            // e.g., "Bb" = A#
+            for (int i = 0; i < 12; ++i) {
+                juce::String nn(noteNames[i]);
+                if (nn.length() == 1 && nn[0] == t[0]) {
+                    semitone = (i + 11) % 12;  // one semitone below
+                    nameLen = 2;
+                    break;
+                }
+            }
+        }
+        if (semitone < 0)
+            return 60.0;
+        juce::String octStr = t.substring(nameLen).trim();
+        int octave = octStr.isEmpty() ? 3 : octStr.getIntValue();
+        return juce::jlimit(0.0, 127.0, static_cast<double>((octave + 2) * 12 + semitone));
+    });
+    rootNoteSlider_.onValueChanged = [this](double value) {
+        if (onRootNoteChanged)
+            onRootNoteChanged(juce::roundToInt(value));
+    };
+    addAndMakeVisible(rootNoteSlider_);
+
+    setupLabel(rootNoteLabel_, "ROOT");
+    addAndMakeVisible(rootNoteLabel_);
 
     // --- Time slider setup helper ---
     auto setupTimeSlider = [this](LinkableTextSlider& slider, int paramIndex, double min,
@@ -197,7 +254,7 @@ void SamplerUI::setupLabel(juce::Label& label, const juce::String& text) {
 void SamplerUI::updateParameters(float attack, float decay, float sustain, float release,
                                  float pitch, float fine, float level, float sampleStart,
                                  float sampleEnd, bool loopEnabled, float loopStart, float loopEnd,
-                                 float velAmount, const juce::String& sampleName) {
+                                 float velAmount, const juce::String& sampleName, int rootNote) {
     attackSlider_.setValue(attack, juce::dontSendNotification);
     decaySlider_.setValue(decay, juce::dontSendNotification);
     sustainSlider_.setValue(sustain, juce::dontSendNotification);
@@ -207,6 +264,8 @@ void SamplerUI::updateParameters(float attack, float decay, float sustain, float
     levelSlider_.setValue(level, juce::dontSendNotification);
     waveformGain_ = juce::Decibels::decibelsToGain(level);
     velAmountSlider_.setValue(velAmount, juce::dontSendNotification);
+
+    rootNoteSlider_.setValue(rootNote, juce::dontSendNotification);
 
     startSlider_.setValue(sampleStart, juce::dontSendNotification);
     endSlider_.setValue(sampleEnd, juce::dontSendNotification);
@@ -350,19 +409,21 @@ void SamplerUI::filesDropped(const juce::StringArray& files, int /*x*/, int /*y*
 // =============================================================================
 
 juce::Rectangle<int> SamplerUI::getWaveformBounds() const {
-    auto area = getLocalBounds().reduced(8);
-    area.removeFromTop(26);  // Skip sample name row (22 + 4 gap)
-    // Controls below: header(14) + gap(2) + 2 rows of label(12)+slider(20)+gap(2) = 84
-    static constexpr int kControlsHeight = 48;
-    int waveHeight = juce::jmax(30, area.getHeight() - kControlsHeight);
+    auto area = getLocalBounds().reduced(4);
+    area.removeFromTop(22);  // Skip sample name row (20 + 2 gap)
+    // Controls below: label(12) + slider(18) + margin = 38
+    static constexpr int kControlsHeight = 38;
+    int waveHeight = juce::jmax(30, area.getHeight() - kControlsHeight - 2);
     return area.removeFromTop(waveHeight);
 }
 
 float SamplerUI::secondsToPixelX(double seconds, juce::Rectangle<int> waveArea) const {
     if (sampleLength_ <= 0.0)
         return static_cast<float>(waveArea.getX());
-    return static_cast<float>(waveArea.getX() +
-                              (seconds - scrollOffsetSeconds_) * pixelsPerSecond_);
+    float x =
+        static_cast<float>(waveArea.getX() + (seconds - scrollOffsetSeconds_) * pixelsPerSecond_);
+    // Clamp so rightmost markers remain visible within the clip region
+    return juce::jmin(x, static_cast<float>(waveArea.getRight() - 1));
 }
 
 double SamplerUI::pixelXToSeconds(float pixelX, juce::Rectangle<int> waveArea) const {
@@ -428,6 +489,17 @@ void SamplerUI::mouseDown(const juce::MouseEvent& e) {
         return;
     }
 
+    // Cmd+click => zoom drag (drag up = zoom in, drag down = zoom out)
+    if (e.mods.isCommandDown()) {
+        currentDrag_ = DragTarget::Zoom;
+        zoomDragStartY_ = e.getPosition().y;
+        zoomDragStartPPS_ = pixelsPerSecond_;
+        zoomDragAnchorTime_ = pixelXToSeconds(static_cast<float>(e.getPosition().x), waveArea);
+        zoomDragAnchorPixelOffset_ = e.getPosition().x - waveArea.getX();
+        setMouseCursor(CursorManager::getInstance().getZoomCursor());
+        return;
+    }
+
     // Try hit-testing existing markers/loop bar first
     currentDrag_ = markerHitTest(e, waveArea);
 
@@ -441,8 +513,6 @@ void SamplerUI::mouseDown(const juce::MouseEvent& e) {
     if (currentDrag_ == DragTarget::None) {
         if (e.mods.isShiftDown()) {
             currentDrag_ = DragTarget::LoopStart;
-        } else if (e.mods.isCommandDown()) {
-            currentDrag_ = DragTarget::LoopEnd;
         } else {
             currentDrag_ = DragTarget::SampleStart;
         }
@@ -482,6 +552,48 @@ void SamplerUI::mouseDrag(const juce::MouseEvent& e) {
         double visibleDuration = static_cast<double>(waveArea.getWidth()) / pixelsPerSecond_;
         double maxScroll = juce::jmax(0.0, sampleLength_ - visibleDuration);
         scrollOffsetSeconds_ = juce::jlimit(0.0, maxScroll, scrollDragStartOffset_ - timeDelta);
+
+        if (waveformBuffer_ != nullptr)
+            buildWaveformPath(waveformBuffer_, waveArea.getWidth(), waveArea.getHeight() - 4);
+        repaint();
+        return;
+    }
+
+    if (currentDrag_ == DragTarget::Zoom) {
+        int deltaY = zoomDragStartY_ - e.getPosition().y;  // drag up = positive = zoom in
+
+        // Update cursor based on zoom direction
+        if (deltaY > 0)
+            setMouseCursor(CursorManager::getInstance().getZoomInCursor());
+        else if (deltaY < 0)
+            setMouseCursor(CursorManager::getInstance().getZoomOutCursor());
+        else
+            setMouseCursor(CursorManager::getInstance().getZoomCursor());
+
+        // Minimum zoom: entire sample fits in view
+        double minPPS = static_cast<double>(waveArea.getWidth()) / sampleLength_;
+
+        // Log-scale zoom with adaptive sensitivity
+        double zoomRange = std::log(kMaxPixelsPerSecond) - std::log(minPPS);
+        double zoomPosition = (std::log(zoomDragStartPPS_) - std::log(minPPS)) / zoomRange;
+        double sensitivity = 20.0 + zoomPosition * 10.0;
+        double absDeltaY = std::abs(static_cast<double>(deltaY));
+        if (absDeltaY > 80.0)
+            sensitivity /= 1.0 + (absDeltaY - 80.0) / 150.0;
+
+        double exponent = static_cast<double>(deltaY) / sensitivity;
+        double newPPS = zoomDragStartPPS_ * std::pow(2.0, exponent);
+        newPPS = juce::jlimit(minPPS, kMaxPixelsPerSecond, newPPS);
+        pixelsPerSecond_ = newPPS;
+
+        // Keep anchor time under the same pixel
+        scrollOffsetSeconds_ = zoomDragAnchorTime_ -
+                               static_cast<double>(zoomDragAnchorPixelOffset_) / pixelsPerSecond_;
+
+        // Clamp scroll
+        double visibleDuration = static_cast<double>(waveArea.getWidth()) / pixelsPerSecond_;
+        double maxScroll = juce::jmax(0.0, sampleLength_ - visibleDuration);
+        scrollOffsetSeconds_ = juce::jlimit(0.0, maxScroll, scrollOffsetSeconds_);
 
         if (waveformBuffer_ != nullptr)
             buildWaveformPath(waveformBuffer_, waveArea.getWidth(), waveArea.getHeight() - 4);
@@ -538,6 +650,11 @@ void SamplerUI::mouseMove(const juce::MouseEvent& e) {
     auto waveArea = getWaveformBounds();
     if (!waveArea.contains(e.getPosition()) || !hasWaveform_) {
         setMouseCursor(juce::MouseCursor::NormalCursor);
+        return;
+    }
+
+    if (e.mods.isCommandDown()) {
+        setMouseCursor(CursorManager::getInstance().getZoomCursor());
         return;
     }
 
@@ -707,26 +824,16 @@ void SamplerUI::paint(juce::Graphics& g) {
         g.drawText("Drop sample or click Load", waveformArea, juce::Justification::centred);
     }
 
-    // --- Column headers and separators below waveform ---
-    auto ctrlArea = getLocalBounds().reduced(8);
-    ctrlArea.removeFromTop(26);  // sample name row
+    // --- Vertical separators between control columns ---
+    auto ctrlArea = getLocalBounds().reduced(4);
+    ctrlArea.removeFromTop(22);  // sample name row
     auto waveBounds = getWaveformBounds();
-    ctrlArea.removeFromTop(waveBounds.getHeight() + 4);  // waveform + gap
+    ctrlArea.removeFromTop(waveBounds.getHeight() + 2);  // waveform + gap
 
-    auto headerArea = ctrlArea.removeFromTop(14);
-    int totalW = headerArea.getWidth();
+    int totalW = ctrlArea.getWidth();
     int col1W = totalW * 3 / 8;
     int col2W = totalW * 2 / 8;
 
-    // Header text
-    g.setFont(FontManager::getInstance().getUIFont(10.0f));
-    g.setColour(DarkTheme::getSecondaryTextColour().brighter(0.3f));
-    g.drawText("START / END / LOOP", headerArea.removeFromLeft(col1W),
-               juce::Justification::centred);
-    g.drawText("PITCH", headerArea.removeFromLeft(col2W), juce::Justification::centred);
-    g.drawText("AMP", headerArea, juce::Justification::centred);
-
-    // Vertical separators
     int sep1X = ctrlArea.getX() + col1W;
     int sep2X = ctrlArea.getX() + col1W + col2W;
     int sepTop = ctrlArea.getY() + 2;
@@ -741,34 +848,33 @@ void SamplerUI::paint(juce::Graphics& g) {
 // =============================================================================
 
 void SamplerUI::resized() {
-    auto area = getLocalBounds().reduced(8);
+    auto area = getLocalBounds().reduced(4);
 
-    // Row 1: Sample name + Load button
-    auto sampleRow = area.removeFromTop(22);
-    loadButton_->setBounds(sampleRow.removeFromRight(22));
+    // Row 1: Sample name + Root note + Load button
+    auto sampleRow = area.removeFromTop(20);
+    loadButton_->setBounds(sampleRow.removeFromRight(20));
+    sampleRow.removeFromRight(4);
+    // Root note: label + slider on the right side of the header
+    auto rootArea = sampleRow.removeFromRight(70);
+    rootNoteLabel_.setBounds(rootArea.removeFromLeft(30));
+    rootNoteSlider_.setBounds(rootArea);
     sampleRow.removeFromRight(4);
     sampleNameLabel_.setBounds(sampleRow);
-    area.removeFromTop(4);
+    area.removeFromTop(2);
 
-    // Row 2: Waveform display (painted, not a component) — absorbs remaining space
-    // Controls below: header(14) + gap(2) + 2 rows of label(12)+slider(20)+gap(2) = 84
-    static constexpr int kControlsHeight = 48;
-    int waveHeight = juce::jmax(30, area.getHeight() - kControlsHeight);
+    // Waveform display — absorbs remaining space above controls
+    // Controls: label(12) + slider(18) = 30
+    static constexpr int kControlsHeight = 30;
+    int waveHeight = juce::jmax(30, area.getHeight() - kControlsHeight - 2);
     area.removeFromTop(waveHeight);
-    area.removeFromTop(4);
+    area.removeFromTop(2);
 
-    // --- Three-column control layout ---
-    // Column headers are painted in paint(), reserve space here
     auto controlsArea = area;
-    controlsArea.removeFromTop(14);  // header height
-    controlsArea.removeFromTop(2);   // gap
 
     // Split into 3 columns: Start/Loop (3/8) | Pitch (2/8) | Amp (3/8)
     int totalW = controlsArea.getWidth();
     int col1W = totalW * 3 / 8;
     int col2W = totalW * 2 / 8;
-    int col3W = totalW - col1W - col2W;
-
     auto col1 = controlsArea.removeFromLeft(col1W).reduced(2, 0);
     auto col2 = controlsArea.removeFromLeft(col2W).reduced(2, 0);
     auto col3 = controlsArea.reduced(2, 0);
@@ -786,7 +892,7 @@ void SamplerUI::resized() {
     loopEndLabel_.setBounds(c1LabelRow);
 
     // Sliders: [start] | [end] | [icon][lstart] | [lend]
-    auto c1Row = col1.removeFromTop(20);
+    auto c1Row = col1.removeFromTop(18);
     startSlider_.setBounds(c1Row.removeFromLeft(quarterC1).reduced(1, 0));
     endSlider_.setBounds(c1Row.removeFromLeft(quarterC1).reduced(1, 0));
     loopButton_->setBounds(c1Row.removeFromLeft(iconW));
@@ -801,7 +907,7 @@ void SamplerUI::resized() {
     fineLabel_.setBounds(c2LabelRow);
 
     // Sliders: [pitch] | [fine]
-    auto c2Row = col2.removeFromTop(20);
+    auto c2Row = col2.removeFromTop(18);
     pitchSlider_.setBounds(c2Row.removeFromLeft(halfCol2).reduced(1, 0));
     fineSlider_.setBounds(c2Row.reduced(1, 0));
 
@@ -817,7 +923,7 @@ void SamplerUI::resized() {
     velAmountLabel_.setBounds(c3LabelRow);
 
     // Sliders: [atk] | [dec] | [sus] | [rel] | [level] | [vel]
-    auto c3Row = col3.removeFromTop(20);
+    auto c3Row = col3.removeFromTop(18);
     attackSlider_.setBounds(c3Row.removeFromLeft(sixthCol3).reduced(1, 0));
     decaySlider_.setBounds(c3Row.removeFromLeft(sixthCol3).reduced(1, 0));
     sustainSlider_.setBounds(c3Row.removeFromLeft(sixthCol3).reduced(1, 0));

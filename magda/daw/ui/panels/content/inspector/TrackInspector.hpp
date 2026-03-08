@@ -1,6 +1,7 @@
 #pragma once
 
 #include <map>
+#include <unordered_set>
 
 #include "../../common/DraggableValueLabel.hpp"
 #include "../../mixer/InputTypeSelector.hpp"
@@ -40,6 +41,12 @@ class TrackInspector : public BaseInspector,
      */
     void setSelectedTrack(magda::TrackId trackId);
 
+    /**
+     * @brief Set multiple selected tracks for multi-track display
+     * @param trackIds Set of selected track IDs
+     */
+    void setSelectedTracks(const std::unordered_set<magda::TrackId>& trackIds);
+
     // TrackManagerListener interface
     void tracksChanged() override;
     void trackPropertyChanged(int trackId) override;
@@ -54,11 +61,20 @@ class TrackInspector : public BaseInspector,
   private:
     // Current selection
     magda::TrackId selectedTrackId_ = magda::INVALID_TRACK_ID;
+    std::unordered_set<magda::TrackId> selectedTrackIds_;  // For multi-track mode
+    bool isMultiTrackMode_ = false;
+
+    // Base values for relative multi-track drag (captured at drag start)
+    std::unordered_map<magda::TrackId, float> multiTrackBaseVolumes_;
+    std::unordered_map<magda::TrackId, float> multiTrackBasePans_;
+    double multiTrackDragStartDb_ = 0.0;
+    double multiTrackDragStartPan_ = 0.0;
 
     // Track properties section
     juce::Label trackNameLabel_;
     juce::Label trackNameValue_;
     juce::TextButton muteButton_;
+    std::unique_ptr<juce::DrawableButton> speakerButton_;  // Speaker icon for master mute
     juce::TextButton soloButton_;
     juce::TextButton recordButton_;
     juce::TextButton monitorButton_;
@@ -95,6 +111,7 @@ class TrackInspector : public BaseInspector,
 
     // Update methods
     void updateFromSelectedTrack();
+    void updateFromMultiTrackSelection();
     void showTrackControls(bool show);
     void rebuildSendsUI();
     void showAddSendMenu();

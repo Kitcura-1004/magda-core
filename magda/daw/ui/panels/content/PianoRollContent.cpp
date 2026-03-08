@@ -413,6 +413,11 @@ void PianoRollContent::setupGridCallbacks() {
         magda::UndoManager::getInstance().executeCommand(std::move(cmd));
         magda::SelectionManager::getInstance().clearNoteSelection();
     };
+
+    // Edit cursor set from grid (Alt+click on grid line) — local to MIDI editor
+    gridComponent_->onEditCursorSet = [this](double positionSeconds) {
+        setLocalEditCursor(positionSeconds);
+    };
 }
 
 // ============================================================================
@@ -713,9 +718,8 @@ void PianoRollContent::updateGridSize() {
             tempo = controller->getState().tempo.bpm;
         }
         double beatsPerSecond = tempo / 60.0;
-        double loopPhaseBeats = (clip->offset - clip->loopStart) * beatsPerSecond;
         double sourceLengthBeats = clip->loopLength * beatsPerSecond;
-        gridComponent_->setLoopRegion(loopPhaseBeats, sourceLengthBeats, clip->loopEnabled);
+        gridComponent_->setLoopRegion(0.0, sourceLengthBeats, clip->loopEnabled);
     } else {
         gridComponent_->setLoopRegion(0.0, 0.0, false);
     }
@@ -761,8 +765,8 @@ void PianoRollContent::setRelativeTimeMode(bool relative) {
                     // Relative mode: show only selected clips
                     gridComponent_->setClips(trackId, selectedMidiClips, selectedMidiClips);
                 } else {
-                    // Absolute mode: show ALL MIDI clips on this track
-                    auto allClipsOnTrack = clipManager.getClipsOnTrack(trackId);
+                    // Absolute mode: show MIDI clips on this track matching the editing clip's view
+                    auto allClipsOnTrack = clipManager.getClipsOnTrack(trackId, clip->view);
 
                     // Filter to MIDI clips only
                     std::vector<magda::ClipId> allMidiClips;
@@ -869,7 +873,8 @@ void PianoRollContent::clipsChanged() {
             if (relativeTimeMode_) {
                 gridComponent_->setClips(trackId, selectedMidiClips, selectedMidiClips);
             } else {
-                auto allClipsOnTrack = clipManager.getClipsOnTrack(trackId);
+                // Only show clips matching the editing clip's view (arrangement or session)
+                auto allClipsOnTrack = clipManager.getClipsOnTrack(trackId, clip->view);
                 std::vector<magda::ClipId> allMidiClips;
                 for (magda::ClipId id : allClipsOnTrack) {
                     auto* c = clipManager.getClip(id);
@@ -969,8 +974,8 @@ void PianoRollContent::clipSelectionChanged(magda::ClipId clipId) {
                 // Relative mode: show only selected clips
                 gridComponent_->setClips(trackId, selectedMidiClips, selectedMidiClips);
             } else {
-                // Absolute mode: show ALL MIDI clips on this track
-                auto allClipsOnTrack = clipManager.getClipsOnTrack(trackId);
+                // Absolute mode: show MIDI clips on this track matching the editing clip's view
+                auto allClipsOnTrack = clipManager.getClipsOnTrack(trackId, clip->view);
 
                 // Filter to MIDI clips only
                 std::vector<magda::ClipId> allMidiClips;

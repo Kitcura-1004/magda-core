@@ -7,8 +7,6 @@
 #include <functional>
 #include <map>
 #include <memory>
-#include <set>
-#include <unordered_map>
 
 #include "../core/DeviceInfo.hpp"
 #include "../core/TypeIds.hpp"
@@ -119,10 +117,9 @@ class PluginManager {
      * @brief Clean up all PluginManager state for a deleted track
      * @param trackId The MAGDA track ID being removed
      *
-     * Purges all map entries (deviceToPlugin_, pluginToDevice_, deviceProcessors_,
-     * deviceModifiers_, deviceMacroParams_, pendingLoads_, sidechainMonitors_,
-     * midiReceiveMapping_) for the deleted track. Also removes racks belonging
-     * to the track and cleans up cross-track sidechain references.
+     * Purges syncedDevices_ entries for the deleted track, along with the
+     * pluginToDevice_ reverse index, sidechainMonitors_, and racks.
+     * Also cleans up cross-track sidechain references.
      */
     void cleanupTrackPlugins(TrackId trackId);
 
@@ -194,7 +191,7 @@ class PluginManager {
      * @brief Register a DeviceProcessor for a plugin inside a rack
      *
      * Creates an ExternalPluginProcessor (for external plugins), calls
-     * populateParameters(), and stores it in deviceProcessors_ so parameter
+     * populateParameters(), and stores it in syncedDevices_ so parameter
      * enumeration works the same as for standalone plugins.
      *
      * @param deviceId The MAGDA device ID inside the rack
@@ -210,6 +207,11 @@ class PluginManager {
      * @param trackInfo The TrackInfo for the multi-out track
      */
     void syncMultiOutTrack(TrackId trackId, const TrackInfo& trackInfo);
+
+    /**
+     * @brief Sync master channel plugins to TE's master plugin list
+     */
+    void syncMasterPlugins();
 
     /**
      * @brief Get the InstrumentRackManager for multi-output access
@@ -235,7 +237,7 @@ class PluginManager {
     /**
      * @brief Capture native state from all loaded external plugins into DeviceInfo
      *
-     * Iterates deviceToPlugin_, calls flushPluginStateToValueTree() on each
+     * Iterates syncedDevices_, calls flushPluginStateToValueTree() on each
      * ExternalPlugin, reads the base64 state property, and writes it to the
      * corresponding DeviceInfo::pluginState in TrackManager.
      */
@@ -315,13 +317,37 @@ class PluginManager {
     void triggerSidechainNoteOn(TrackId sourceTrackId);
 
     /**
+     * @brief Gate (zero) all cached LFO values for a track when no notes are held.
+     *
+     * Called from SidechainMonitorPlugin on the audio/render thread when
+     * localHeldNoteCount_ reaches 0. Sets currentValue = 0 on note-triggered
+     * LFOs so the modulation stops, matching the message-thread assignment
+     * gating behavior during live playback.
+     */
+    void gateSidechainLFOs(TrackId sourceTrackId);
+
+    /**
      * @brief Rebuild the sidechain LFO cache for all tracks
      *
      * Must be called on the message thread after sidechain config, modifier,
      * or track structure changes. Collects te::LFOModifier* pointers from
-     * deviceModifiers_ and RackSyncManager into a flat per-track array.
+     * syncedDevices_ modifiers and RackSyncManager into a flat per-track array.
      */
     void rebuildSidechainLFOCache();
+
+    /**
+     * @brief Prepare LFO assignments for offline rendering.
+     *
+     * Sets all MIDI/Audio-triggered LFO assignment values to their link.amount
+     * (enabling modulation) and prevents the message-thread timer from zeroing
+     * them during the render. Call restoreAfterRendering() when done.
+     */
+    void prepareForRendering();
+
+    /**
+     * @brief Restore normal LFO gating after offline rendering.
+     */
+    void restoreAfterRendering();
 
     /**
      * @brief Route a macro value change to the appropriate TE infrastructure
@@ -401,6 +427,11 @@ class PluginManager {
     te::Plugin::Ptr createLevelMeter(te::AudioTrack* track);
     te::Plugin::Ptr createFourOscSynth(te::AudioTrack* track);
 
+    // Create a TE internal plugin, restoring saved ValueTree state if available.
+    // Falls back to creating a fresh plugin from xmlTypeName when no saved state exists.
+    te::Plugin::Ptr createInternalPlugin(const juce::String& xmlTypeName,
+                                         const juce::String& savedPluginState);
+
     // References to dependencies (not owned)
     te::Engine& engine_;
     te::Edit& edit_;
@@ -425,39 +456,40 @@ class PluginManager {
     // Only MIDI-triggered mods need the monitor (audio peaks come from LevelMeterPlugin).
     bool trackNeedsSidechainMonitor(TrackId trackId) const;
 
-    // Plugin/device mappings and processors
-    std::map<DeviceId, te::Plugin::Ptr> deviceToPlugin_;
+    // Per-device consolidated state. All device-scoped data lives here,
+    // keyed by DeviceId. Cleanup is a single erase().
+    struct SyncedDevice {
+        te::Plugin::Ptr plugin;                      // Always set on creation
+        std::unique_ptr<DeviceProcessor> processor;  // nullptr until async load completes
+        std::vector<te::Modifier::Ptr> modifiers;    // Can be empty
+        std::map<ModId, std::unique_ptr<CurveSnapshotHolder>>
+            curveSnapshots;                              // ModId-only (device scope implicit)
+        std::map<int, te::MacroParameter*> macroParams;  // Can be empty
+        te::Plugin::Ptr midiReceivePlugin;               // Can be null
+        bool isPendingLoad = false;                      // In-flight async load
+    };
+    std::map<DeviceId, SyncedDevice> syncedDevices_;
+
+    // Reverse index: TE Plugin* → DeviceId (maintained alongside .plugin assignments)
     std::map<te::Plugin*, DeviceId> pluginToDevice_;
-    std::map<DeviceId, std::unique_ptr<DeviceProcessor>> deviceProcessors_;
-
-    // Device-level TE modifiers (created by syncDeviceModifiers)
-    std::map<DeviceId, std::vector<te::Modifier::Ptr>> deviceModifiers_;
-
-    // Double-buffered curve snapshots for custom LFO waveforms (keyed by ModId)
-    std::unordered_map<int, std::unique_ptr<CurveSnapshotHolder>> curveSnapshots_;
-
-    // Device-level TE macro parameters (created by syncDeviceMacros)
-    std::map<DeviceId, std::map<int, te::MacroParameter*>> deviceMacroParams_;
 
     // Sidechain monitor plugins (sourceTrackId → SidechainMonitorPlugin)
     std::map<TrackId, te::Plugin::Ptr> sidechainMonitors_;
-
-    // MIDI receive plugins (deviceId → MidiReceivePlugin inserted before the device)
-    std::map<DeviceId, te::Plugin::Ptr> midiReceiveMapping_;
 
     // Pre-computed sidechain LFO cache: indexed by source TrackId.
     // Audio/MIDI threads read under cacheLock_; message thread writes during rebuild.
     struct PerTrackEntry {
         static constexpr int kMaxLFOs = 64;
         std::array<te::LFOModifier*, kMaxLFOs> lfos{};
+        std::array<bool, kMaxLFOs> isCrossTrack{};  // true = sidechain destination on another track
         int count = 0;
     };
     static constexpr int kMaxCacheTracks = 512;
     std::array<PerTrackEntry, kMaxCacheTracks> sidechainLFOCache_{};
     juce::SpinLock cacheLock_;
 
-    // In-flight async plugin loads (prevents duplicate loads on re-entrant syncTrackPlugins)
-    std::set<DeviceId> pendingLoads_;
+    // When true, skip zeroing MIDI-triggered LFO assignments (during offline render)
+    bool renderingActive_ = false;
 
     // Thread safety
     mutable juce::CriticalSection pluginLock_;

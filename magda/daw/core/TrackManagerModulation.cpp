@@ -670,9 +670,13 @@ void TrackManager::updateAllMods(double deltaTime, double bpm, bool transportJus
         noteOffsThisTick.swap(pendingMidiNoteOffs_);
     }
 
-    // Read audio-thread sidechain triggers from the lock-free bus
+    // Read audio-thread sidechain triggers from the lock-free bus.
+    // These are kept separate from external MIDI — they only feed into
+    // sidechain-sourced devices, not into the track's own MIDI trigger signal.
     auto& bus = SidechainTriggerBus::getInstance();
     std::array<float, kMaxBusTracks> audioPeakLevels{};
+    std::map<TrackId, int> busNoteOnsThisTick;
+    std::map<TrackId, int> busNoteOffsThisTick;
     for (const auto& track : tracks_) {
         if (track.id < 0 || track.id >= kMaxBusTracks)
             continue;
@@ -683,25 +687,34 @@ void TrackManager::updateAllMods(double deltaTime, double bpm, bool transportJus
         lastBusNoteOn_[track.id] = currentNoteOn;
         lastBusNoteOff_[track.id] = currentNoteOff;
         if (busNewNoteOns > 0)
-            noteOnsThisTick[track.id] += busNewNoteOns;
+            busNoteOnsThisTick[track.id] = busNewNoteOns;
         if (busNewNoteOffs > 0)
-            noteOffsThisTick[track.id] += busNewNoteOffs;
+            busNoteOffsThisTick[track.id] = busNewNoteOffs;
         audioPeakLevels[track.id] = bus.getAudioPeakLevel(track.id);
     }
 
     // Compute per-track MIDI trigger signals for LFOs.
-    // midiNoteOnTracks: any note-on this tick (retriggers LFO phase on every note)
-    // midiAllNotesOffTracks: held count went from >0 to 0 (gate close)
+    // Both external MIDI (pendingMidiNoteOns_) and internal MIDI (SidechainTriggerBus)
+    // feed into the trigger signal, but held-note tracking (for gate-close detection)
+    // uses only external MIDI to avoid corruption from imprecise bus note-off counts.
     std::set<TrackId> midiNoteOnTracks;
     std::set<TrackId> midiAllNotesOffTracks;
     {
-        // Any track with note-ons this tick gets a retrigger signal
+        // External MIDI trigger signals
         for (const auto& [id, count] : noteOnsThisTick) {
             if (count > 0)
                 midiNoteOnTracks.insert(id);
         }
 
-        // Track held-note state for gate-close detection (all notes off)
+        // Internal (bus) MIDI trigger signals
+        for (const auto& [id, count] : busNoteOnsThisTick) {
+            if (count > 0)
+                midiNoteOnTracks.insert(id);
+        }
+
+        // Track held-note state for gate-close detection (external MIDI only,
+        // because bus note-off counts can be imprecise and would corrupt the
+        // held count, preventing gate-close from ever firing)
         std::set<TrackId> activeTracks;
         for (const auto& [id, _] : noteOnsThisTick)
             activeTracks.insert(id);
@@ -717,6 +730,13 @@ void TrackManager::updateAllMods(double deltaTime, double bpm, bool transportJus
 
             if (prevHeld > 0 && newHeld == 0)
                 midiAllNotesOffTracks.insert(trackId);
+        }
+
+        // Bus gate-close: if bus has note-offs and no external held notes,
+        // treat as gate close
+        for (const auto& [id, count] : busNoteOffsThisTick) {
+            if (count > 0 && midiHeldNotes_[id] == 0 && busNoteOnsThisTick.count(id) == 0)
+                midiAllNotesOffTracks.insert(id);
         }
     }
 

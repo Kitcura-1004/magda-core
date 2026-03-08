@@ -88,12 +88,21 @@ void Config::save() {
     root->setProperty("autoMonitorSelectedTrack", autoMonitorSelectedTrack);
     root->setProperty("previewOutputChannel", previewOutputChannel);
 
+    // Auto-save
+    root->setProperty("autoSaveEnabled", autoSaveEnabled);
+    root->setProperty("autoSaveIntervalSeconds", autoSaveIntervalSeconds);
+
     // Export audio
     root->setProperty("exportFormat", toJuceString(exportFormat));
     root->setProperty("exportSampleRate", exportSampleRate);
 
     // Render
     root->setProperty("renderFolder", toJuceString(renderFolder));
+    root->setProperty("renderSampleRate", renderSampleRate);
+    root->setProperty("renderBitDepth", renderBitDepth);
+    root->setProperty("renderFilePattern", toJuceString(renderFilePattern));
+    root->setProperty("bounceFilePattern", toJuceString(bounceFilePattern));
+    root->setProperty("bounceBitDepth", bounceBitDepth);
 
     // Audio devices
     root->setProperty("preferredAudioDevice", toJuceString(preferredAudioDevice));
@@ -235,10 +244,18 @@ void Config::load() {
     autoMonitorSelectedTrack = getBool("autoMonitorSelectedTrack", autoMonitorSelectedTrack);
     previewOutputChannel = getInt("previewOutputChannel", previewOutputChannel);
 
+    autoSaveEnabled = getBool("autoSaveEnabled", autoSaveEnabled);
+    autoSaveIntervalSeconds = getInt("autoSaveIntervalSeconds", autoSaveIntervalSeconds);
+
     exportFormat = getString("exportFormat", exportFormat);
     exportSampleRate = getDouble("exportSampleRate", exportSampleRate);
 
     renderFolder = getString("renderFolder", renderFolder);
+    renderSampleRate = getDouble("renderSampleRate", renderSampleRate);
+    renderBitDepth = getInt("renderBitDepth", renderBitDepth);
+    renderFilePattern = getString("renderFilePattern", renderFilePattern);
+    bounceFilePattern = getString("bounceFilePattern", bounceFilePattern);
+    bounceBitDepth = getInt("bounceBitDepth", bounceBitDepth);
 
     preferredAudioDevice = getString("preferredAudioDevice", preferredAudioDevice);
     preferredInputDevice = getString("preferredInputDevice", preferredInputDevice);

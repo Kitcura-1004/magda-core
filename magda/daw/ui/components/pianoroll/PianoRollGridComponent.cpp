@@ -3,6 +3,7 @@
 #include "../../state/TimelineController.hpp"
 #include "../../state/TimelineEvents.hpp"
 #include "../../themes/DarkTheme.hpp"
+#include "PhaseMarker.hpp"
 #include "core/ClipManager.hpp"
 #include "core/MidiNoteCommands.hpp"
 #include "core/SelectionManager.hpp"
@@ -14,6 +15,7 @@ namespace magda {
 PianoRollGridComponent::PianoRollGridComponent() {
     setName("PianoRollGrid");
     setWantsKeyboardFocus(true);
+    setRepaintsOnMouseActivity(true);
     ClipManager::getInstance().addListener(this);
 }
 
@@ -103,30 +105,34 @@ void PianoRollGridComponent::paint(juce::Graphics& g) {
                        bounds.getHeight());
         }
 
-        // Clip end boundary
-        int clipEndX = beatToPixel(clipStartBeats_ + clipLengthBeats_);
-        if (clipEndX >= 0 && clipEndX <= bounds.getRight()) {
-            g.setColour(DarkTheme::getAccentColour().withAlpha(0.8f));
-            g.fillRect(clipEndX - 1, 0, 3, bounds.getHeight());
-        }
+        // Clip end boundary and dimming (only for non-looped clips)
+        if (!loopEnabled_) {
+            int clipEndX = beatToPixel(clipStartBeats_ + clipLengthBeats_);
+            if (clipEndX >= 0 && clipEndX <= bounds.getRight()) {
+                g.setColour(DarkTheme::getAccentColour().withAlpha(0.8f));
+                g.fillRect(clipEndX - 1, 0, 3, bounds.getHeight());
+            }
 
-        // Dim area after clip end
-        if (clipEndX < bounds.getRight()) {
-            g.setColour(juce::Colour(0x60000000));
-            g.fillRect(clipEndX, bounds.getY(), bounds.getRight() - clipEndX, bounds.getHeight());
+            if (clipEndX < bounds.getRight()) {
+                g.setColour(juce::Colour(0x60000000));
+                g.fillRect(clipEndX, bounds.getY(), bounds.getRight() - clipEndX,
+                           bounds.getHeight());
+            }
         }
     } else if (clipLengthBeats_ > 0) {
-        // In relative mode, just show end boundary at clip length
-        int clipEndX = beatToPixel(clipLengthBeats_);
-        if (clipEndX >= 0 && clipEndX <= bounds.getRight()) {
-            g.setColour(DarkTheme::getAccentColour().withAlpha(0.8f));
-            g.fillRect(clipEndX - 1, 0, 3, bounds.getHeight());
-        }
+        // In relative mode, just show end boundary at clip length (non-looped only)
+        if (!loopEnabled_) {
+            int clipEndX = beatToPixel(clipLengthBeats_);
+            if (clipEndX >= 0 && clipEndX <= bounds.getRight()) {
+                g.setColour(DarkTheme::getAccentColour().withAlpha(0.8f));
+                g.fillRect(clipEndX - 1, 0, 3, bounds.getHeight());
+            }
 
-        // Dim area after clip end
-        if (clipEndX < bounds.getRight()) {
-            g.setColour(juce::Colour(0x60000000));
-            g.fillRect(clipEndX, bounds.getY(), bounds.getRight() - clipEndX, bounds.getHeight());
+            if (clipEndX < bounds.getRight()) {
+                g.setColour(juce::Colour(0x60000000));
+                g.fillRect(clipEndX, bounds.getY(), bounds.getRight() - clipEndX,
+                           bounds.getHeight());
+            }
         }
     }
 
@@ -152,16 +158,15 @@ void PianoRollGridComponent::paint(juce::Graphics& g) {
         }
     }
 
-    // Draw content offset marker (yellow vertical line)
+    // Draw loop phase marker (yellow vertical line)
     if (clipIds_.size() <= 1 && clipId_ != INVALID_CLIP_ID) {
-        const auto* offsetClip = ClipManager::getInstance().getClip(clipId_);
-        if (offsetClip && offsetClip->midiOffset > 0.0) {
-            double offsetBeat =
-                relativeMode_ ? offsetClip->midiOffset : (clipStartBeats_ + offsetClip->midiOffset);
-            int offsetX = beatToPixel(offsetBeat);
-            if (offsetX >= 0 && offsetX <= bounds.getRight()) {
-                g.setColour(DarkTheme::getColour(DarkTheme::OFFSET_MARKER));
-                g.fillRect(offsetX - 1, 0, 2, bounds.getHeight());
+        const auto* phaseClip = ClipManager::getInstance().getClip(clipId_);
+        if (phaseClip && phaseClip->loopEnabled) {
+            double phaseBeat =
+                relativeMode_ ? phaseClip->midiOffset : (clipStartBeats_ + phaseClip->midiOffset);
+            int phaseX = beatToPixel(phaseBeat);
+            if (phaseX >= 0 && phaseX <= bounds.getRight()) {
+                paintPhaseMarker(g, phaseClip, phaseX, bounds.getHeight(), nearPhaseMarker_);
             }
         }
     }
@@ -218,10 +223,9 @@ void PianoRollGridComponent::paint(juce::Graphics& g) {
             // Wrap playhead within loop region when looping is enabled
             if (loopEnabled_ && loopLengthBeats_ > 0.0) {
                 double beatPos = relativeMode_ ? displayBeat : (displayBeat - clipStartBeats_);
-                beatPos = std::fmod(beatPos - loopOffsetBeats_, loopLengthBeats_);
+                beatPos = std::fmod(beatPos, loopLengthBeats_);
                 if (beatPos < 0.0)
                     beatPos += loopLengthBeats_;
-                beatPos += loopOffsetBeats_;
                 displayBeat = relativeMode_ ? beatPos : (clipStartBeats_ + beatPos);
             }
 
@@ -441,8 +445,8 @@ void PianoRollGridComponent::mouseUp(const juce::MouseEvent& e) {
         }
         double positionSeconds = absoluteBeat * (60.0 / tempo);
 
-        if (auto* controller = TimelineController::getCurrent()) {
-            controller->dispatch(SetEditCursorEvent{positionSeconds});
+        if (onEditCursorSet) {
+            onEditCursorSet(positionSeconds);
         }
         return;
     }
@@ -498,15 +502,37 @@ void PianoRollGridComponent::mouseUp(const juce::MouseEvent& e) {
 }
 
 void PianoRollGridComponent::mouseMove(const juce::MouseEvent& e) {
-    if (e.mods.isAltDown() && isNearGridLine(e.x)) {
+    // Get mouse position relative to this component (important for child-forwarded events)
+    auto localPos = e.getEventRelativeTo(this).getPosition();
+
+    if (e.mods.isAltDown() && isNearGridLine(localPos.x)) {
         setMouseCursor(juce::MouseCursor::IBeamCursor);
     } else {
         setMouseCursor(juce::MouseCursor::NormalCursor);
+    }
+
+    // Check proximity to phase marker for hover display
+    bool wasNear = nearPhaseMarker_;
+    nearPhaseMarker_ = false;
+
+    if (clipIds_.size() <= 1 && clipId_ != INVALID_CLIP_ID) {
+        const auto* clip = ClipManager::getInstance().getClip(clipId_);
+        double phaseBeat = relativeMode_ ? 0.0 : clipStartBeats_;
+        int phaseX = beatToPixel(phaseBeat);
+        nearPhaseMarker_ = isNearPhaseMarker(localPos.x, phaseX, clip);
+    }
+
+    if (nearPhaseMarker_ != wasNear) {
+        repaint();
     }
 }
 
 void PianoRollGridComponent::mouseExit(const juce::MouseEvent& /*e*/) {
     setMouseCursor(juce::MouseCursor::NormalCursor);
+    if (nearPhaseMarker_) {
+        nearPhaseMarker_ = false;
+        repaint();
+    }
 }
 
 void PianoRollGridComponent::mouseDoubleClick(const juce::MouseEvent& e) {
@@ -841,7 +867,6 @@ void PianoRollGridComponent::setLeftPadding(int padding) {
 void PianoRollGridComponent::setClipStartBeats(double startBeats) {
     if (clipStartBeats_ != startBeats) {
         clipStartBeats_ = startBeats;
-        updateNoteComponentBounds();
         repaint();
     }
 }
@@ -882,38 +907,33 @@ void PianoRollGridComponent::updateNotePosition(NoteComponent* note, double beat
     if (!note)
         return;
 
+    // Relative mode: notes at content-relative beats.
+    // Absolute mode: midiTrimOffset compensates for startTime changes from
+    // left-resize so notes stay at their timeline positions.
+    ClipId clipId = note->getSourceClipId();
+    const auto* clip = ClipManager::getInstance().getClip(clipId);
+
     double displayBeat;
     if (relativeMode_) {
-        // For multi-clip, offset by the clip's distance from the earliest clip
-        if (clipIds_.size() > 1) {
-            ClipId clipId = note->getSourceClipId();
-            const auto* clip = ClipManager::getInstance().getClip(clipId);
-            if (clip) {
-                double tempo = 120.0;
-                if (auto* controller = TimelineController::getCurrent()) {
-                    tempo = controller->getState().tempo.bpm;
-                }
-                double clipOffsetBeats = clip->startTime * (tempo / 60.0) - clipStartBeats_;
-                displayBeat = clipOffsetBeats + beat;
-            } else {
-                displayBeat = beat;
+        if (clipIds_.size() > 1 && clip) {
+            double tempo = 120.0;
+            if (auto* controller = TimelineController::getCurrent()) {
+                tempo = controller->getState().tempo.bpm;
             }
+            double clipOffsetBeats = clip->startTime * (tempo / 60.0) - clipStartBeats_;
+            displayBeat = clipOffsetBeats + beat;
         } else {
             displayBeat = beat;
         }
     } else {
-        // In ABS mode, use the note's own clip start position (not the grid-wide clipStartBeats_)
-        ClipId clipId = note->getSourceClipId();
-        const auto* clip = ClipManager::getInstance().getClip(clipId);
         if (clip) {
             double tempo = 120.0;
             if (auto* controller = TimelineController::getCurrent()) {
                 tempo = controller->getState().tempo.bpm;
             }
             double clipStartBeats = clip->startTime * (tempo / 60.0);
-            double offset =
-                (clip->view == ClipView::Session || clip->loopEnabled) ? clip->midiOffset : 0.0;
-            displayBeat = clipStartBeats + beat - offset;
+            double trimCompensation = (clip->type == ClipType::MIDI) ? clip->midiTrimOffset : 0.0;
+            displayBeat = clipStartBeats + beat - trimCompensation;
         } else {
             displayBeat = clipStartBeats_ + beat;
         }
@@ -1504,11 +1524,11 @@ void PianoRollGridComponent::updateNoteComponentBounds() {
 
         const auto& note = clip->midiNotes[noteIndex];
 
-        // Calculate display position
+        // Relative mode: notes at content-relative beats.
+        // Absolute mode: midiTrimOffset compensates for left-resize.
         double displayBeat;
+
         if (relativeMode_) {
-            // Relative: note at its clip-relative position
-            // For multi-clip, offset by the clip's distance from the earliest clip
             if (clipIds_.size() > 1) {
                 double tempo = 120.0;
                 if (auto* controller = TimelineController::getCurrent()) {
@@ -1520,16 +1540,13 @@ void PianoRollGridComponent::updateNoteComponentBounds() {
                 displayBeat = note.startBeat;
             }
         } else {
-            // Absolute: convert to timeline position
-            // Get tempo from TimelineController
             double tempo = 120.0;
             if (auto* controller = TimelineController::getCurrent()) {
                 tempo = controller->getState().tempo.bpm;
             }
             double clipStartBeats = clip->startTime * (tempo / 60.0);
-            double offset =
-                (clip->view == ClipView::Session || clip->loopEnabled) ? clip->midiOffset : 0.0;
-            displayBeat = clipStartBeats + note.startBeat - offset;
+            double trimCompensation = (clip->type == ClipType::MIDI) ? clip->midiTrimOffset : 0.0;
+            displayBeat = clipStartBeats + note.startBeat - trimCompensation;
         }
 
         int x = beatToPixel(displayBeat);

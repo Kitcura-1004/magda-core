@@ -19,6 +19,7 @@
 #include "core/TrackPropertyCommands.hpp"
 #include "core/UndoManager.hpp"
 #include "engine/TracktionEngineWrapper.hpp"
+#include "project/ProjectManager.hpp"
 
 namespace magda {
 
@@ -70,6 +71,10 @@ MainView::MainView(AudioEngine* audioEngine)
     DBG("CONFIG: Timeline length=" << config.getDefaultTimelineLengthBars() << " bars ("
                                    << timelineLength << " seconds at 120 BPM)");
     DBG("CONFIG: Default zoom view=" << config.getDefaultZoomViewBars() << " bars");
+
+    // Apply auto-save settings from config
+    magda::ProjectManager::getInstance().setAutoSaveEnabled(config.getAutoSaveEnabled(),
+                                                            config.getAutoSaveIntervalSeconds());
 
     // Make this component focusable to receive keyboard events
     setWantsKeyboardFocus(true);
@@ -138,7 +143,8 @@ void MainView::setupComponents() {
                                              false);  // false = don't delete
     addAndMakeVisible(*trackHeadersViewport);
 
-    // Create track content viewport
+    // Create track content viewport — also set as scroll target for headers panel
+    // (wired after content viewport creation below)
     trackContentViewport = std::make_unique<juce::Viewport>();
     trackContentViewport->setWantsKeyboardFocus(
         false);  // Let TrackContentPanel handle keyboard focus
@@ -148,6 +154,9 @@ void MainView::setupComponents() {
     trackContentViewport->setViewedComponent(trackContentPanel.get(), false);
     trackContentViewport->setScrollBarsShown(false, false, true, true);
     addAndMakeVisible(*trackContentViewport);
+
+    // Wire track headers scroll to content viewport
+    trackHeadersPanel->setScrollTarget(trackContentViewport.get());
 
     // Create grid overlay component (vertical time grid lines - below selection and playhead)
     gridOverlay = std::make_unique<GridOverlayComponent>();
@@ -433,7 +442,10 @@ void MainView::timelineStateChanged(const TimelineState& state, ChangeFlags chan
         trackContentPanel->setVerticalZoom(verticalZoom);
 
         timelineViewport->setViewPosition(state.zoom.scrollX, 0);
-        trackContentViewport->setViewPosition(state.zoom.scrollX, state.zoom.scrollY);
+        // Preserve current vertical scroll — state.zoom.scrollY may be stale
+        // since vertical scrolling doesn't always dispatch to the controller
+        int currentScrollY = trackContentViewport->getViewPositionY();
+        trackContentViewport->setViewPosition(state.zoom.scrollX, currentScrollY);
 
         updateContentSizes();
         updateHorizontalZoomScrollBar();
@@ -1885,13 +1897,6 @@ MainView::MasterHeaderPanel::~MasterHeaderPanel() {
 }
 
 void MainView::MasterHeaderPanel::setupControls() {
-    // Name label
-    nameLabel = std::make_unique<juce::Label>("masterName", "Master");
-    nameLabel->setColour(juce::Label::textColourId, DarkTheme::getColour(DarkTheme::TEXT_PRIMARY));
-    nameLabel->setColour(juce::Label::backgroundColourId, juce::Colours::transparentBlack);
-    nameLabel->setFont(FontManager::getInstance().getUIFont(12.0f));
-    addAndMakeVisible(*nameLabel);
-
     // Speaker on/off button (toggles master mute)
     auto speakerOnIcon = juce::Drawable::createFromImageData(BinaryData::volume_up_svg,
                                                              BinaryData::volume_up_svgSize);
@@ -1903,9 +1908,10 @@ void MainView::MasterHeaderPanel::setupControls() {
     speakerButton->setImages(speakerOnIcon.get(), nullptr, nullptr, nullptr, speakerOffIcon.get());
     speakerButton->setClickingTogglesState(true);
     speakerButton->setColour(juce::DrawableButton::backgroundColourId,
-                             juce::Colours::transparentBlack);
+                             DarkTheme::getColour(DarkTheme::SURFACE));
     speakerButton->setColour(juce::DrawableButton::backgroundOnColourId,
                              DarkTheme::getColour(DarkTheme::STATUS_ERROR).withAlpha(0.3f));
+    speakerButton->setEdgeIndent(2);
     speakerButton->onClick = [this]() {
         UndoManager::getInstance().executeCommand(
             std::make_unique<SetMasterMuteCommand>(speakerButton->getToggleState()));
@@ -1924,24 +1930,7 @@ void MainView::MasterHeaderPanel::setupControls() {
     };
     addAndMakeVisible(*volumeLabel);
 
-    // Pan as draggable L/C/R label
-    panLabel = std::make_unique<DraggableValueLabel>(DraggableValueLabel::Format::Pan);
-    panLabel->setRange(-1.0, 1.0, 0.0);  // Full left to full right, default center
-    panLabel->setDoubleClickResetsValue(true);
-    panLabel->onValueChange = [this]() {
-        UndoManager::getInstance().executeCommand(
-            std::make_unique<SetMasterPanCommand>(static_cast<float>(panLabel->getValue())));
-    };
-    addAndMakeVisible(*panLabel);
-
-    // Peak meter with label
-    peakLabel = std::make_unique<juce::Label>("peak", "Peak");
-    peakLabel->setColour(juce::Label::textColourId,
-                         DarkTheme::getColour(DarkTheme::TEXT_SECONDARY));
-    peakLabel->setFont(FontManager::getInstance().getUIFont(9.0f));
-    peakLabel->setJustificationType(juce::Justification::centredRight);
-    addAndMakeVisible(*peakLabel);
-
+    // Peak meter
     peakMeter = std::make_unique<HorizontalStereoMeter>();
     addAndMakeVisible(*peakMeter);
 
@@ -1951,23 +1940,6 @@ void MainView::MasterHeaderPanel::setupControls() {
     peakValueLabel->setFont(FontManager::getInstance().getUIFont(9.0f));
     peakValueLabel->setJustificationType(juce::Justification::centredLeft);
     addAndMakeVisible(*peakValueLabel);
-
-    // VU meter with label
-    vuLabel = std::make_unique<juce::Label>("vu", "VU");
-    vuLabel->setColour(juce::Label::textColourId, DarkTheme::getColour(DarkTheme::TEXT_SECONDARY));
-    vuLabel->setFont(FontManager::getInstance().getUIFont(9.0f));
-    vuLabel->setJustificationType(juce::Justification::centredRight);
-    addAndMakeVisible(*vuLabel);
-
-    vuMeter = std::make_unique<HorizontalStereoMeter>();
-    addAndMakeVisible(*vuMeter);
-
-    vuValueLabel = std::make_unique<juce::Label>("vuValue", "-inf");
-    vuValueLabel->setColour(juce::Label::textColourId,
-                            DarkTheme::getColour(DarkTheme::TEXT_SECONDARY));
-    vuValueLabel->setFont(FontManager::getInstance().getUIFont(9.0f));
-    vuValueLabel->setJustificationType(juce::Justification::centredLeft);
-    addAndMakeVisible(*vuValueLabel);
 }
 
 void MainView::MasterHeaderPanel::paint(juce::Graphics& g) {
@@ -1984,44 +1956,28 @@ void MainView::MasterHeaderPanel::mouseDown(const juce::MouseEvent& /*event*/) {
 }
 
 void MainView::MasterHeaderPanel::resized() {
-    auto contentArea = getLocalBounds().reduced(4);
+    auto contentArea = getLocalBounds().reduced(2);
+    contentArea.removeFromLeft(4);  // Extra left padding
 
-    // Top row: Name label, speaker button, volume label, pan label
+    // Use 80% width, left-aligned
+    int usableWidth = contentArea.getWidth() * 80 / 100;
+    contentArea.setWidth(usableWidth);
+
+    // Both rows use same right-side width so volume and meter align
+    int rightColWidth = 22;  // speaker(18) + gap(4), or valueLabel(20) + gap(2)
+
+    // Top row: volume + speaker
     auto topRow = contentArea.removeFromTop(18);
-    nameLabel->setBounds(topRow.removeFromLeft(44));
-    topRow.removeFromLeft(2);
-    speakerButton->setBounds(topRow.removeFromLeft(18).withSizeKeepingCentre(16, 16));
-    topRow.removeFromLeft(4);
-    volumeLabel->setBounds(topRow.removeFromLeft(44));
-    topRow.removeFromLeft(4);
-    panLabel->setBounds(topRow.removeFromLeft(36));
+    speakerButton->setBounds(topRow.removeFromRight(18).withSizeKeepingCentre(16, 16));
+    topRow.removeFromRight(4);
+    volumeLabel->setBounds(topRow);
 
     contentArea.removeFromTop(2);  // Spacing
 
-    // Bottom area: meters
-    // Calculate meter layout based on remaining height
-    int remainingHeight = contentArea.getHeight();
-    int meterRowHeight = (remainingHeight - 2) / 2;  // 2px gap between meters
-    int labelWidth = 28;
-    int valueWidth = 36;
-
-    // Peak meter row
-    auto peakRow = contentArea.removeFromTop(meterRowHeight);
-    peakLabel->setBounds(peakRow.removeFromLeft(labelWidth));
-    peakRow.removeFromLeft(2);
-    peakValueLabel->setBounds(peakRow.removeFromRight(valueWidth));
-    peakRow.removeFromRight(2);
+    // Bottom row: peak meter + value
+    auto peakRow = contentArea.removeFromTop(18);
+    peakValueLabel->setBounds(peakRow.removeFromRight(rightColWidth));
     peakMeter->setBounds(peakRow);
-
-    contentArea.removeFromTop(2);  // Spacing between meters
-
-    // VU meter row
-    auto vuRow = contentArea.removeFromTop(meterRowHeight);
-    vuLabel->setBounds(vuRow.removeFromLeft(labelWidth));
-    vuRow.removeFromLeft(2);
-    vuValueLabel->setBounds(vuRow.removeFromRight(valueWidth));
-    vuRow.removeFromRight(2);
-    vuMeter->setBounds(vuRow);
 }
 
 void MainView::MasterHeaderPanel::masterChannelChanged() {
@@ -2032,9 +1988,6 @@ void MainView::MasterHeaderPanel::masterChannelChanged() {
     // Convert linear gain to dB for volume label
     float db = gainToDb(master.volume);
     volumeLabel->setValue(db, juce::dontSendNotification);
-
-    // Pan value
-    panLabel->setValue(master.pan, juce::dontSendNotification);
 
     repaint();
 }
@@ -2050,20 +2003,6 @@ void MainView::MasterHeaderPanel::setPeakLevels(float leftPeak, float rightPeak)
         float db = gainToDb(maxPeak);
         juce::String text = (db <= MIN_DB) ? "-inf" : juce::String(db, 1);
         peakValueLabel->setText(text, juce::dontSendNotification);
-    }
-}
-
-void MainView::MasterHeaderPanel::setVuLevels(float leftVu, float rightVu) {
-    if (vuMeter) {
-        vuMeter->setLevels(leftVu, rightVu);
-    }
-
-    // Update VU value label (show current max of both channels)
-    float maxVu = std::max(leftVu, rightVu);
-    if (vuValueLabel) {
-        float db = gainToDb(maxVu);
-        juce::String text = (db <= MIN_DB) ? "-inf" : juce::String(db, 1);
-        vuValueLabel->setText(text, juce::dontSendNotification);
     }
 }
 

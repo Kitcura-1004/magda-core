@@ -200,6 +200,9 @@ class PianoRollGridComponent : public juce::Component,
     std::function<void(ClipId, std::vector<size_t>)> onDuplicateNotes;
     std::function<void(ClipId, std::vector<size_t>)> onDeleteNotes;
 
+    // Edit cursor click on grid (Alt+click) — position in seconds
+    std::function<void(double)> onEditCursorSet;
+
   private:
     ClipId clipId_ = INVALID_CLIP_ID;      // Primary selected clip (for backward compatibility)
     std::vector<ClipId> selectedClipIds_;  // All selected clips (editable)
@@ -240,6 +243,7 @@ class PianoRollGridComponent : public juce::Component,
     double loopOffsetBeats_ = 0.0;
     double loopLengthBeats_ = 0.0;
     bool loopEnabled_ = false;
+    bool nearPhaseMarker_ = false;  // Mouse is near the phase/offset marker position
 
     // Note components
     std::vector<std::unique_ptr<NoteComponent>> noteComponents_;

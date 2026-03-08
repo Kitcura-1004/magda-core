@@ -105,12 +105,36 @@ inline void applyLFOProperties(te::LFOModifier* lfo, const ModInfo& modInfo,
  * Use this instead of calling lfo->triggerNoteOn() directly so that one-shot
  * custom waveforms restart from the beginning.
  */
-inline void triggerLFONoteOnWithReset(te::LFOModifier* lfo) {
+inline void triggerLFONoteOnWithReset(te::LFOModifier* lfo, bool forceZeroValue = true) {
     auto* holder =
         static_cast<CurveSnapshotHolder*>(lfo->customWaveUserData.load(std::memory_order_acquire));
     if (holder)
         holder->resetOneShot();
-    lfo->triggerNoteOn();
+    lfo->triggerNoteOn(forceZeroValue);
+}
+
+/**
+ * @brief Clear customWaveUserData on LFO modifiers before destroying their CurveSnapshotHolders.
+ *
+ * Must be called before erasing/clearing curveSnapshots maps to prevent the audio thread
+ * from dereferencing a dangling userData pointer in evaluateCallback.
+ */
+inline void clearLFOCustomWaveCallbacks(const std::vector<te::Modifier::Ptr>& modifiers) {
+    for (auto& mod : modifiers) {
+        if (auto* lfo = dynamic_cast<te::LFOModifier*>(mod.get())) {
+            lfo->customWaveFunction.store(nullptr, std::memory_order_release);
+            lfo->customWaveUserData.store(nullptr, std::memory_order_release);
+        }
+    }
+}
+
+template <typename ModMap> inline void clearLFOCustomWaveCallbacks(const ModMap& modifierMap) {
+    for (auto& [id, mod] : modifierMap) {
+        if (auto* lfo = dynamic_cast<te::LFOModifier*>(mod.get())) {
+            lfo->customWaveFunction.store(nullptr, std::memory_order_release);
+            lfo->customWaveUserData.store(nullptr, std::memory_order_release);
+        }
+    }
 }
 
 }  // namespace magda

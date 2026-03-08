@@ -144,7 +144,16 @@ class RackSyncManager {
      */
     bool needsModifierResync(TrackId trackId) const;
 
+    /** Set by PluginManager during offline rendering to skip assignment zeroing */
+    void setRenderingActive(bool active) {
+        renderingActive_ = active;
+    }
+    bool isRenderingActive() const {
+        return renderingActive_;
+    }
+
   private:
+    bool renderingActive_ = false;
     /**
      * @brief Internal state for a synced rack
      */
@@ -160,8 +169,8 @@ class RackSyncManager {
         std::map<ModId, te::Modifier::Ptr> innerModifiers;
         std::map<int, te::MacroParameter*> innerMacroParams;  // index → TE MacroParameter
 
-        // Double-buffered curve snapshots for custom LFO waveforms (keyed by ModId)
-        std::unordered_map<int, std::unique_ptr<CurveSnapshotHolder>> curveSnapshots;
+        // Double-buffered curve snapshots for custom LFO waveforms (scoped per-rack)
+        std::map<ModId, std::unique_ptr<CurveSnapshotHolder>> curveSnapshots;
     };
 
     /**

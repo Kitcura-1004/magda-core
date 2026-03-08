@@ -196,9 +196,15 @@ void AudioBridge::trackPropertyChanged(int trackId) {
             // (armed tracks should receive MIDI even when not selected)
             updateMidiRoutingForSelection();
 
-            // Sync recordArmed state to InputDeviceInstance
+            // Sync recordArmed state to InputDeviceInstance.
+            // Only sync when transport is stopped — if the transport is already
+            // playing (e.g. session clips running), calling setRecordingEnabled()
+            // causes TE to start recording immediately, capturing the session
+            // clip's own MIDI output as "ghost notes".  The armed state is
+            // stored in TrackInfo and will be picked up when transport.record()
+            // is called explicitly.
             auto* playbackContext = edit_.getCurrentPlaybackContext();
-            if (playbackContext) {
+            if (playbackContext && !edit_.getTransport().isPlaying()) {
                 bool foundAnyDest = false;
                 // Find any input device instances (MIDI or audio) routed to this track
                 for (auto* inputDeviceInstance : playbackContext->getAllInputs()) {
@@ -419,6 +425,9 @@ void AudioBridge::devicePropertyChanged(DeviceId deviceId) {
             // Push gain to the audio-graph atomic so DeviceGainNode picks it up
             deviceMetering_.setGain(deviceId, device->gainValue);
 
+            // When bypass changes, resync modifiers so they are removed/restored
+            pluginManager_.resyncDeviceModifiers(track.id);
+
             // Sync sidechain routing if changed
             auto* tePlugin = pluginManager_.getPlugin(deviceId).get();
             if (tePlugin && tePlugin->canSidechain()) {
@@ -519,6 +528,27 @@ void AudioBridge::captureAllPluginStates() {
     pluginManager_.captureAllPluginStates();
 }
 
+void AudioBridge::captureWarpMarkerStates() {
+    auto& cm = ClipManager::getInstance();
+    for (auto& clip : cm.getArrangementClips()) {
+        if (clip.type == ClipType::Audio && clip.warpEnabled) {
+            auto markers = clipSynchronizer_.getWarpMarkers(clip.id);
+            DBG("captureWarpMarkerStates: clip " << clip.id
+                                                 << " warpEnabled=" << (int)clip.warpEnabled
+                                                 << " markers=" << (int)markers.size());
+            auto* mutableClip = cm.getClip(clip.id);
+            if (mutableClip) {
+                mutableClip->warpMarkers.clear();
+                for (const auto& m : markers) {
+                    mutableClip->warpMarkers.push_back({m.sourceTime, m.warpTime});
+                }
+                DBG("captureWarpMarkerStates: stored " << mutableClip->warpMarkers.size()
+                                                       << " markers into ClipInfo");
+            }
+        }
+    }
+}
+
 te::Plugin::Ptr AudioBridge::loadBuiltInPlugin(const TrackId trackId, const juce::String& type) {
     return pluginManager_.loadBuiltInPlugin(trackId, type);
 }
@@ -606,14 +636,26 @@ void AudioBridge::syncAll() {
         }
     }
 
+    // First pass: create all TE tracks so routing targets exist
     for (const auto& track : tracks) {
         ensureTrackMapping(track.id);
+    }
+
+    // Second pass: sync plugins, routing, and state
+    for (const auto& track : tracks) {
         syncTrackPlugins(track.id);
 
         if (auto* teTrack = getAudioTrack(track.id)) {
             // Sync mute/solo state to TE (essential on project load)
             teTrack->setMute(track.muted);
             teTrack->setSolo(track.soloed);
+
+            // Sync audio output routing (group/aux targets now exist from first pass)
+            trackController_.setTrackAudioOutput(track.id, track.audioOutputDevice);
+
+            // Sync volume/pan
+            setTrackVolume(track.id, track.volume);
+            setTrackPan(track.id, track.pan);
 
             // Sync frozen state from TE → MAGDA (e.g. on edit load)
             bool teFrozen = teTrack->isFrozen(te::AudioTrack::individualFreeze);

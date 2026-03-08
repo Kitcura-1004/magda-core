@@ -834,9 +834,9 @@ void TimelineComponent::drawTimeMarkers(juce::Graphics& g) {
         double secondsPerBeat = 60.0 / tempoBPM;
         double secondsPerBar = secondsPerBeat * timeSignatureNumerator;
 
-        double pixelsPerBeatZoom = timeDurationToPixels(secondsPerBeat);
+        // Use zoom directly (pixels/beat) — avoid int truncation from timeDurationToPixels
         double markerIntervalBeats = GridConstants::computeGridInterval(
-            gridQuantize, pixelsPerBeatZoom, timeSignatureNumerator, minPixelSpacing);
+            gridQuantize, zoom, timeSignatureNumerator, minPixelSpacing);
 
         double markerIntervalSeconds = secondsPerBeat * markerIntervalBeats;
         double barLengthBeats = static_cast<double>(timeSignatureNumerator);
@@ -851,14 +851,24 @@ void TimelineComponent::drawTimeMarkers(juce::Graphics& g) {
         double pixelsPerBar = timeDurationToPixels(secondsPerBar);
         double pixelsPerSubdiv = timeDurationToPixels(markerIntervalSeconds);
 
-        // Determine bar label interval (show every Nth bar when zoomed out)
-        int barLabelInterval = 1;
-        if (pixelsPerBar < 40) {
-            barLabelInterval = 8;
-        } else if (pixelsPerBar < 60) {
-            barLabelInterval = 4;
-        } else if (pixelsPerBar < 90) {
-            barLabelInterval = 2;
+        // Determine bar label interval: show a label at every grid line that
+        // falls on a bar boundary.  When the grid interval spans multiple bars
+        // (e.g. 2 bars, 4 bars) we use that as the label interval so every
+        // visible grid line gets a label.
+        int gridBarMultiple = 1;
+        if (markerIntervalBeats >= barLengthBeats)
+            gridBarMultiple = static_cast<int>(std::round(markerIntervalBeats / barLengthBeats));
+
+        int barLabelInterval = gridBarMultiple;
+        // If individual bars are very narrow and the grid is at single-bar
+        // resolution, thin out labels to avoid overlap
+        if (gridBarMultiple <= 1) {
+            if (pixelsPerBar < 20)
+                barLabelInterval = 8;
+            else if (pixelsPerBar < 30)
+                barLabelInterval = 4;
+            else if (pixelsPerBar < 40)
+                barLabelInterval = 2;
         }
 
         // Pass 1: Draw grid ticks
@@ -1296,16 +1306,16 @@ double TimelineComponent::getSnapInterval() const {
         return 1.0;  // Default to 1 second
     } else {
         // Bars/beats mode - find first power-of-2 beat fraction that fits
+        // zoom is in pixels per beat
         double secondsPerBeat = 60.0 / tempoBPM;
-        double ppb = zoom * secondsPerBeat;  // Convert pixels/sec to pixels/beat
 
-        double frac = GridConstants::findBeatSubdivision(ppb, minPixelSpacing);
+        double frac = GridConstants::findBeatSubdivision(zoom, minPixelSpacing);
         if (frac > 0) {
             return secondsPerBeat * frac;
         }
 
         // Fall back to bar multiples
-        int mult = GridConstants::findBarMultiple(ppb, timeSignatureNumerator, minPixelSpacing);
+        int mult = GridConstants::findBarMultiple(zoom, timeSignatureNumerator, minPixelSpacing);
         return secondsPerBeat * timeSignatureNumerator * mult;
     }
 }

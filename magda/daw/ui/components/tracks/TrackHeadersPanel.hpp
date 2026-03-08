@@ -14,6 +14,7 @@
 #include "../mixer/InputTypeSelector.hpp"
 #include "../mixer/RoutingSelector.hpp"
 #include "core/AutomationManager.hpp"
+#include "core/SelectionManager.hpp"
 #include "core/TrackManager.hpp"
 #include "core/ViewModeController.hpp"
 
@@ -26,6 +27,7 @@ class TrackHeadersPanel : public juce::Component,
                           public juce::DragAndDropTarget,
                           public juce::Timer,
                           public TrackManagerListener,
+                          public SelectionManagerListener,
                           public ViewModeListener,
                           public AutomationManagerListener {
   public:
@@ -46,6 +48,10 @@ class TrackHeadersPanel : public juce::Component,
     void trackDevicesChanged(magda::TrackId trackId) override;
     void trackSelectionChanged(magda::TrackId trackId) override;
 
+    // SelectionManagerListener
+    void selectionTypeChanged(SelectionType newType) override;
+    void multiTrackSelectionChanged(const std::unordered_set<TrackId>& trackIds) override;
+
     // ViewModeListener
     void viewModeChanged(ViewMode mode, const AudioEngineProfile& profile) override;
 
@@ -63,6 +69,13 @@ class TrackHeadersPanel : public juce::Component,
     void paint(juce::Graphics& g) override;
     void resized() override;
     bool keyPressed(const juce::KeyPress& key) override;
+    void mouseWheelMove(const juce::MouseEvent& event,
+                        const juce::MouseWheelDetails& wheel) override;
+
+    // Scroll target — set this to the content viewport so wheel events scroll it
+    void setScrollTarget(juce::Viewport* viewport) {
+        scrollTarget_ = viewport;
+    }
 
     // Track management
     void selectTrack(int index);
@@ -113,6 +126,7 @@ class TrackHeadersPanel : public juce::Component,
         int depth = 0;             // Hierarchy depth for indentation
         bool isGroup = false;      // Is this a group track?
         bool isMultiOut = false;   // Is this a multi-out child track?
+        bool isMaster = false;     // Is this the master track?
         bool isCollapsed = false;  // Is group collapsed?
         bool selected = false;
         bool muted = false;
@@ -137,7 +151,7 @@ class TrackHeadersPanel : public juce::Component,
         std::unique_ptr<juce::TextButton> monitorButton;       // Input monitor button
         std::unique_ptr<DraggableValueLabel> volumeLabel;      // Volume as draggable dB label
         std::unique_ptr<DraggableValueLabel> panLabel;         // Pan as draggable L/C/R label
-        std::unique_ptr<juce::TextButton> collapseButton;      // For groups
+        std::unique_ptr<juce::DrawableButton> collapseButton;  // For groups
         std::unique_ptr<SvgButton> automationButton;           // Show automation lanes
         std::unique_ptr<InputTypeSelector> inputTypeSelector;  // Hidden, kept for internal state
         std::unique_ptr<RoutingSelector> audioInputSelector;   // Audio input
@@ -167,11 +181,14 @@ class TrackHeadersPanel : public juce::Component,
     std::vector<std::unique_ptr<TrackHeader>> trackHeaders;
     std::vector<TrackId> visibleTrackIds_;  // Track IDs in display order
     std::unordered_map<TrackId, std::vector<AutomationLaneId>> visibleAutomationLanes_;
-    int selectedTrackIndex = -1;
+    std::unordered_set<int> selectedTrackIndices_;
     double verticalZoom = 1.0;  // Track height multiplier
     ViewMode currentViewMode_ = ViewMode::Arrange;
     MixerLookAndFeel sliderLookAndFeel_;  // Custom look and feel for sliders
     AudioEngine* audioEngine_ = nullptr;  // Reference to audio engine for metering
+
+    // Scroll forwarding
+    juce::Viewport* scrollTarget_ = nullptr;
 
     // I/O routing visibility
     bool showIORouting_ = true;
@@ -193,6 +210,7 @@ class TrackHeadersPanel : public juce::Component,
     int dragStartX_ = 0;
     int dragStartY_ = 0;
     int currentDragY_ = 0;
+    int deferredSingleSelectIndex_ = -1;  // Deferred single-select on mouseUp (multi-select drag)
 
     // Drop target state (track reorder)
     enum class DropTargetType { None, BetweenTracks, OntoGroup };
@@ -227,6 +245,7 @@ class TrackHeadersPanel : public juce::Component,
     void paintTrackHeader(juce::Graphics& g, const TrackHeader& header, juce::Rectangle<int> area,
                           bool isSelected);
     void paintResizeHandle(juce::Graphics& g, juce::Rectangle<int> area);
+    void updateCollapseButtonIcon(TrackHeader& header);
     juce::Rectangle<int> getTrackHeaderArea(int trackIndex) const;
     juce::Rectangle<int> getResizeHandleArea(int trackIndex) const;
     bool isResizeHandleArea(const juce::Point<int>& point, int& trackIndex) const;
@@ -270,8 +289,8 @@ class TrackHeadersPanel : public juce::Component,
     void paintAutomationLaneHeaders(juce::Graphics& g, int trackIndex);
 
     // Indentation
-    static constexpr int INDENT_WIDTH = 20;
-    static constexpr int COLLAPSE_BUTTON_SIZE = 16;
+    static constexpr int INDENT_WIDTH = 12;
+    static constexpr int COLLAPSE_BUTTON_SIZE = 10;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(TrackHeadersPanel)
 };

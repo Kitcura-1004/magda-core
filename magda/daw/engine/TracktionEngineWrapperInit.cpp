@@ -3,7 +3,10 @@
 #include "../audio/SessionClipScheduler.hpp"
 #include "../audio/SessionRecorder.hpp"
 #include "../core/Config.hpp"
+#include "../core/ViewModeController.hpp"
 #include "../project/ProjectManager.hpp"
+#include "../ui/state/TimelineController.hpp"
+#include "../ui/state/TimelineEvents.hpp"
 #include "MagdaEngineBehaviour.hpp"
 #include "MagdaUIBehaviour.hpp"
 #include "PluginScanCoordinator.hpp"
@@ -313,11 +316,54 @@ void TracktionEngineWrapper::createEditAndBridges() {
     audioBridge_->setEngineWrapper(this);
     audioBridge_->enableAllMidiInputDevices();
 
-    // Wire up plugin state capture before project save
+    // Wire up state capture before project save
     auto* bridge = audioBridge_.get();
     ProjectManager::getInstance().onBeforeSave = [bridge]() {
-        if (bridge)
+        if (bridge) {
             bridge->captureAllPluginStates();
+            bridge->captureWarpMarkerStates();
+        }
+
+        // Capture zoom/scroll state
+        if (auto* tc = TimelineController::getCurrent()) {
+            auto& zoom = tc->getState().zoom;
+            auto& proj = ProjectManager::getInstance().getMutableProjectInfo();
+            proj.horizontalZoom = zoom.horizontalZoom;
+            proj.verticalZoom = zoom.verticalZoom;
+            proj.scrollX = zoom.scrollX;
+            proj.scrollY = zoom.scrollY;
+        }
+
+        // Capture active view mode
+        auto viewMode = ViewModeController::getInstance().getViewMode();
+        ProjectManager::getInstance().getMutableProjectInfo().activeView =
+            static_cast<int>(viewMode);
+    };
+
+    // Wire up state restore after project load
+    ProjectManager::getInstance().onAfterLoad = [](const ProjectInfo& info) {
+        // Restore active view mode
+        auto viewMode = static_cast<ViewMode>(info.activeView);
+        ViewModeController::getInstance().setViewMode(viewMode);
+
+        // Restore zoom/scroll state
+        if (info.horizontalZoom > 0.0) {
+            double hz = info.horizontalZoom;
+            int sx = info.scrollX;
+            int sy = info.scrollY;
+            // Try immediate dispatch first
+            if (auto* tc = TimelineController::getCurrent()) {
+                tc->dispatch(SetZoomEvent{hz});
+                tc->dispatch(SetScrollPositionEvent{sx, sy});
+            }
+            // Also defer to catch cases where UI isn't ready yet
+            juce::MessageManager::callAsync([hz, sx, sy]() {
+                if (auto* tc = TimelineController::getCurrent()) {
+                    tc->dispatch(SetZoomEvent{hz});
+                    tc->dispatch(SetScrollPositionEvent{sx, sy});
+                }
+            });
+        }
     };
 
     // Create MidiBridge for MIDI device management
@@ -397,8 +443,9 @@ void TracktionEngineWrapper::shutdown() {
         sessionScheduler_.reset();
     }
 
-    // Clear the pre-save callback before destroying AudioBridge
+    // Clear the pre-save/post-load callbacks before destroying AudioBridge
     ProjectManager::getInstance().onBeforeSave = nullptr;
+    ProjectManager::getInstance().onAfterLoad = nullptr;
 
     // Clear MidiBridge's reference to AudioBridge before destroying it
     if (midiBridge_)

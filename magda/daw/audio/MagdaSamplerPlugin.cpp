@@ -100,16 +100,30 @@ void SamplerVoice::renderNextBlock(juce::AudioBuffer<float>& outputBuffer, int s
             return;
         }
 
+        // Loop wrap before reading — ensure position is valid
+        if (loopEnabled && loopEndSample > loopStartSample) {
+            if (sourceSamplePosition >= loopEndSample) {
+                double loopLen = loopEndSample - loopStartSample;
+                sourceSamplePosition =
+                    loopStartSample + std::fmod(sourceSamplePosition - loopStartSample, loopLen);
+            }
+        }
+
         int pos0 = static_cast<int>(sourceSamplePosition);
         float frac = static_cast<float>(sourceSamplePosition - pos0);
 
-        // Stop at sample end (if set) or end of file
-        int endLimit =
-            (sampleEndSample > 0.0) ? static_cast<int>(sampleEndSample) : totalSamples - 1;
-        if (pos0 >= endLimit) {
-            clearCurrentNote();
-            return;
+        // Stop at sample end (if set) or end of file — skip when looping
+        if (!(loopEnabled && loopEndSample > loopStartSample)) {
+            int endLimit =
+                (sampleEndSample > 0.0) ? static_cast<int>(sampleEndSample) : totalSamples - 1;
+            if (pos0 >= endLimit) {
+                clearCurrentNote();
+                return;
+            }
         }
+
+        // Bounds safety
+        pos0 = juce::jlimit(0, totalSamples - 1, pos0);
 
         float gain = envLevel * velocityGain;
 
@@ -132,14 +146,6 @@ void SamplerVoice::renderNextBlock(juce::AudioBuffer<float>& outputBuffer, int s
         }
 
         sourceSamplePosition += pitchRatio;
-
-        if (loopEnabled && loopEndSample > loopStartSample) {
-            if (sourceSamplePosition >= loopEndSample) {
-                double loopLen = loopEndSample - loopStartSample;
-                sourceSamplePosition =
-                    loopStartSample + std::fmod(sourceSamplePosition - loopEndSample, loopLen);
-            }
-        }
     }
 
     if (!adsr.isActive())
@@ -295,9 +301,40 @@ MagdaSamplerPlugin::MagdaSamplerPlugin(const te::PluginCreationInfo& info) : Plu
     // Restore sample from saved state
     juce::String savedPath = samplePathValue.get();
     if (savedPath.isNotEmpty()) {
+        // Save parameter values before loadSample resets them
+        int savedRootNote = rootNoteValue.get();
+        float savedStart = sampleStartValue.get();
+        float savedEnd = sampleEndValue.get();
+        float savedLoopStart = loopStartValue.get();
+        float savedLoopEnd = loopEndValue.get();
+
         juce::File savedFile(savedPath);
         if (savedFile.existsAsFile())
             loadSample(savedFile);
+
+        // Restore root note (loadSample overwrites with detected metadata)
+        setRootNote(savedRootNote);
+
+        // Re-apply saved values if they were set (non-zero end means user had set it)
+        double lenSec = getSampleLengthSeconds();
+        float maxLen = static_cast<float>(lenSec);
+
+        if (savedStart > 0.001f && savedStart < maxLen) {
+            sampleStartParam->setParameter(savedStart, juce::dontSendNotification);
+            sampleStartValue = savedStart;
+        }
+        if (savedEnd > 0.001f && savedEnd < maxLen) {
+            sampleEndParam->setParameter(savedEnd, juce::dontSendNotification);
+            sampleEndValue = savedEnd;
+        }
+        if (savedLoopStart > 0.001f && savedLoopStart < maxLen) {
+            loopStartParam->setParameter(savedLoopStart, juce::dontSendNotification);
+            loopStartValue = savedLoopStart;
+        }
+        if (savedLoopEnd > 0.001f && savedLoopEnd < maxLen) {
+            loopEndParam->setParameter(savedLoopEnd, juce::dontSendNotification);
+            loopEndValue = savedLoopEnd;
+        }
     }
 }
 
@@ -359,12 +396,11 @@ void MagdaSamplerPlugin::loadSample(const juce::File& file) {
     samplePathValue = file.getFullPathName();
     rootNoteValue = detectedRootNote;
 
-    // Reset sample start and update loop end to sample length
+    // Reset markers to defaults for new sample loads, preserve on restore
     double lengthSeconds = static_cast<double>(newSound->audioData.getNumSamples()) / sourceSR;
-    float loopEndClamped =
-        juce::jmin(static_cast<float>(lengthSeconds), loopEndParam->getValueRange().getEnd());
-    float endClamped =
-        juce::jmin(static_cast<float>(lengthSeconds), sampleEndParam->getValueRange().getEnd());
+    float maxLen = static_cast<float>(lengthSeconds);
+    float endClamped = juce::jmin(maxLen, sampleEndParam->getValueRange().getEnd());
+    float loopEndClamped = juce::jmin(maxLen, loopEndParam->getValueRange().getEnd());
     sampleStartParam->setParameter(0.0f, juce::dontSendNotification);
     sampleStartValue = 0.0f;
     sampleEndParam->setParameter(endClamped, juce::dontSendNotification);
@@ -570,9 +606,12 @@ void MagdaSamplerPlugin::restorePluginStateFromValueTree(const juce::ValueTree& 
     // Reload sample if path is set
     juce::String path = samplePathValue.get();
     if (path.isNotEmpty()) {
+        int savedRootNote = rootNoteValue.get();
         juce::File file(path);
         if (file.existsAsFile())
             loadSample(file);
+        // Restore root note (loadSample overwrites with detected metadata)
+        setRootNote(savedRootNote);
     }
 }
 

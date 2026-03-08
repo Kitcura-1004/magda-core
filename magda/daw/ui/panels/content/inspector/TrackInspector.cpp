@@ -66,6 +66,26 @@ TrackInspector::TrackInspector() {
     };
     addAndMakeVisible(muteButton_);
 
+    // Speaker icon button (used for master mute instead of "M" text)
+    auto speakerOnIcon = juce::Drawable::createFromImageData(BinaryData::volume_up_svg,
+                                                             BinaryData::volume_up_svgSize);
+    auto speakerOffIcon = juce::Drawable::createFromImageData(BinaryData::volume_off_svg,
+                                                              BinaryData::volume_off_svgSize);
+    speakerButton_ =
+        std::make_unique<juce::DrawableButton>("Speaker", juce::DrawableButton::ImageFitted);
+    speakerButton_->setImages(speakerOnIcon.get(), nullptr, nullptr, nullptr, speakerOffIcon.get());
+    speakerButton_->setClickingTogglesState(true);
+    speakerButton_->setColour(juce::DrawableButton::backgroundColourId,
+                              DarkTheme::getColour(DarkTheme::SURFACE));
+    speakerButton_->setColour(juce::DrawableButton::backgroundOnColourId,
+                              DarkTheme::getColour(DarkTheme::STATUS_ERROR).withAlpha(0.3f));
+    speakerButton_->setEdgeIndent(2);
+    speakerButton_->onClick = [this]() {
+        magda::UndoManager::getInstance().executeCommand(
+            std::make_unique<magda::SetMasterMuteCommand>(speakerButton_->getToggleState()));
+    };
+    addChildComponent(*speakerButton_);  // Hidden by default
+
     // Solo button (TCP style)
     soloButton_.setButtonText("S");
     soloButton_.setLookAndFeel(&magda::daw::ui::SmallButtonLookAndFeel::getInstance());
@@ -168,8 +188,17 @@ TrackInspector::TrackInspector() {
         std::make_unique<magda::DraggableValueLabel>(magda::DraggableValueLabel::Format::Pan);
     panLabel_->setRange(-1.0, 1.0, 0.0);  // -1 (L) to +1 (R), default center
     panLabel_->onValueChange = [this]() {
-        if (selectedTrackId_ != magda::INVALID_TRACK_ID) {
-            float pan = static_cast<float>(panLabel_->getValue());
+        if (selectedTrackId_ == magda::INVALID_TRACK_ID)
+            return;
+        float pan = static_cast<float>(panLabel_->getValue());
+        if (panLabel_->isDragging()) {
+            // Apply directly during drag (no undo command per pixel)
+            if (selectedTrackId_ == magda::MASTER_TRACK_ID)
+                magda::TrackManager::getInstance().setMasterPan(pan);
+            else
+                magda::TrackManager::getInstance().setTrackPan(selectedTrackId_, pan);
+        } else {
+            // Non-drag changes (keyboard edit, double-click reset)
             if (selectedTrackId_ == magda::MASTER_TRACK_ID)
                 magda::UndoManager::getInstance().executeCommand(
                     std::make_unique<magda::SetMasterPanCommand>(pan));
@@ -177,6 +206,18 @@ TrackInspector::TrackInspector() {
                 magda::UndoManager::getInstance().executeCommand(
                     std::make_unique<magda::SetTrackPanCommand>(selectedTrackId_, pan));
         }
+    };
+    panLabel_->onDragEnd = [this](double startValue) {
+        if (selectedTrackId_ == magda::INVALID_TRACK_ID)
+            return;
+        float oldPan = static_cast<float>(startValue);
+        float newPan = static_cast<float>(panLabel_->getValue());
+        if (selectedTrackId_ == magda::MASTER_TRACK_ID)
+            magda::UndoManager::getInstance().executeCommand(
+                std::make_unique<magda::SetMasterPanCommand>(oldPan, newPan));
+        else
+            magda::UndoManager::getInstance().executeCommand(
+                std::make_unique<magda::SetTrackPanCommand>(selectedTrackId_, oldPan, newPan));
     };
     addAndMakeVisible(*panLabel_);
 
@@ -351,143 +392,308 @@ void TrackInspector::resized() {
     const int availableWidth = bounds.getWidth();
     const int stackThreshold = 100;
     const int buttonGap = 2;
-    const int numButtons = 4;
     const int controlRowHeight = 24;
     const int wideThreshold = 160;
 
+    bool showPan = panLabel_->isVisible();
+    bool showSpeaker = speakerButton_->isVisible();
+    // Count visible buttons for layout
+    int visibleButtons = 0;
+    if (muteButton_.isVisible() || showSpeaker)
+        visibleButtons++;
+    if (soloButton_.isVisible())
+        visibleButtons++;
+    if (recordButton_.isVisible())
+        visibleButtons++;
+    if (monitorButton_.isVisible())
+        visibleButtons++;
+
+    // Helper lambda to lay out the button row
+    auto layoutButtons = [&](juce::Rectangle<int>& row, int gap) {
+        if (visibleButtons <= 0)
+            return;
+        if (showSpeaker) {
+            // Speaker icon: fixed square size
+            speakerButton_->setBounds(row.removeFromLeft(controlRowHeight));
+        } else {
+            const int btnWidth = (row.getWidth() - (visibleButtons - 1) * gap) / visibleButtons;
+            muteButton_.setBounds(row.removeFromLeft(btnWidth));
+            if (soloButton_.isVisible()) {
+                row.removeFromLeft(gap);
+                soloButton_.setBounds(row.removeFromLeft(btnWidth));
+            }
+            if (recordButton_.isVisible()) {
+                row.removeFromLeft(gap);
+                recordButton_.setBounds(row.removeFromLeft(btnWidth));
+            }
+            if (monitorButton_.isVisible()) {
+                row.removeFromLeft(gap);
+                monitorButton_.setBounds(row);
+            }
+        }
+    };
+
     if (availableWidth >= wideThreshold) {
-        // Wide: Vol Pan M S R Mon — all on one row
+        // Wide: Vol [Pan] buttons — all on one row
         auto row = bounds.removeFromTop(controlRowHeight);
         const int gap = 2;
-        const int mixPortion = row.getWidth() * 60 / 100;
-        const int btnPortion = row.getWidth() - mixPortion - gap;
-        const int volWidth = (mixPortion - gap) * 80 / 100;
-        gainLabel_->setBounds(row.removeFromLeft(volWidth));
-        row.removeFromLeft(gap);
-        panLabel_->setBounds(row.removeFromLeft(mixPortion - volWidth - gap));
-        row.removeFromLeft(gap);
-        const int btnWidth = (btnPortion - (numButtons - 1) * gap) / numButtons;
-        muteButton_.setBounds(row.removeFromLeft(btnWidth));
-        row.removeFromLeft(gap);
-        soloButton_.setBounds(row.removeFromLeft(btnWidth));
-        row.removeFromLeft(gap);
-        recordButton_.setBounds(row.removeFromLeft(btnWidth));
-        row.removeFromLeft(gap);
-        monitorButton_.setBounds(row);
+        if (showSpeaker) {
+            // Master: volume takes most space, speaker icon is fixed size at end
+            auto speakerArea = row.removeFromRight(36);
+            row.removeFromRight(gap);
+            gainLabel_->setBounds(row);
+            speakerButton_->setBounds(speakerArea);
+        } else {
+            const int mixPortion = row.getWidth() * 60 / 100;
+            if (showPan) {
+                const int volWidth = (mixPortion - gap) * 80 / 100;
+                gainLabel_->setBounds(row.removeFromLeft(volWidth));
+                row.removeFromLeft(gap);
+                panLabel_->setBounds(row.removeFromLeft(mixPortion - volWidth - gap));
+            } else {
+                gainLabel_->setBounds(row.removeFromLeft(mixPortion));
+            }
+            row.removeFromLeft(gap);
+            layoutButtons(row, gap);
+        }
     } else if (availableWidth >= stackThreshold) {
-        // Medium: Vol(80%) Pan(20%) on one row, buttons on second row
+        // Medium: Vol [Pan] on one row, buttons on second row
         auto mixRow = bounds.removeFromTop(controlRowHeight);
-        const int mixGap = 4;
-        const int volWidth = (mixRow.getWidth() - mixGap) * 80 / 100;
-        gainLabel_->setBounds(mixRow.removeFromLeft(volWidth));
-        mixRow.removeFromLeft(mixGap);
-        panLabel_->setBounds(mixRow);
-        bounds.removeFromTop(4);
+        if (showSpeaker) {
+            auto speakerArea = mixRow.removeFromRight(36);
+            mixRow.removeFromRight(buttonGap);
+            gainLabel_->setBounds(mixRow);
+            speakerButton_->setBounds(speakerArea);
+        } else {
+            if (showPan) {
+                const int mixGap = 4;
+                const int volWidth = (mixRow.getWidth() - mixGap) * 80 / 100;
+                gainLabel_->setBounds(mixRow.removeFromLeft(volWidth));
+                mixRow.removeFromLeft(mixGap);
+                panLabel_->setBounds(mixRow);
+            } else {
+                gainLabel_->setBounds(mixRow);
+            }
+            bounds.removeFromTop(4);
 
-        auto buttonRow = bounds.removeFromTop(controlRowHeight);
-        const int btnWidth = (buttonRow.getWidth() - (numButtons - 1) * buttonGap) / numButtons;
-        muteButton_.setBounds(buttonRow.removeFromLeft(btnWidth));
-        buttonRow.removeFromLeft(buttonGap);
-        soloButton_.setBounds(buttonRow.removeFromLeft(btnWidth));
-        buttonRow.removeFromLeft(buttonGap);
-        recordButton_.setBounds(buttonRow.removeFromLeft(btnWidth));
-        buttonRow.removeFromLeft(buttonGap);
-        monitorButton_.setBounds(buttonRow);
+            auto buttonRow = bounds.removeFromTop(controlRowHeight);
+            layoutButtons(buttonRow, buttonGap);
+        }
     } else {
-        // Narrow: Volume, Pan, and buttons all stacked
-        gainLabel_->setBounds(bounds.removeFromTop(controlRowHeight));
-        bounds.removeFromTop(2);
-        panLabel_->setBounds(bounds.removeFromTop(controlRowHeight));
-        bounds.removeFromTop(4);
+        // Narrow: Volume, [Pan], and buttons all stacked
+        auto volRow = bounds.removeFromTop(controlRowHeight);
+        if (showSpeaker) {
+            auto speakerArea = volRow.removeFromRight(36);
+            volRow.removeFromRight(buttonGap);
+            gainLabel_->setBounds(volRow);
+            speakerButton_->setBounds(speakerArea);
+        } else {
+            gainLabel_->setBounds(volRow);
+            if (showPan) {
+                bounds.removeFromTop(2);
+                panLabel_->setBounds(bounds.removeFromTop(controlRowHeight));
+            }
+            bounds.removeFromTop(4);
 
-        auto buttonRow = bounds.removeFromTop(controlRowHeight);
-        const int btnWidth = (buttonRow.getWidth() - (numButtons - 1) * buttonGap) / numButtons;
-        muteButton_.setBounds(buttonRow.removeFromLeft(btnWidth));
-        buttonRow.removeFromLeft(buttonGap);
-        soloButton_.setBounds(buttonRow.removeFromLeft(btnWidth));
-        buttonRow.removeFromLeft(buttonGap);
-        recordButton_.setBounds(buttonRow.removeFromLeft(btnWidth));
-        buttonRow.removeFromLeft(buttonGap);
-        monitorButton_.setBounds(buttonRow);
-    }
-    bounds.removeFromTop(separatorPadding);
-    sectionSeparatorYs_.push_back(bounds.getY());
-    bounds.removeFromTop(separatorPadding);
-
-    // Routing section — dropdowns fill available width
-    const int selectorHeight = 18;
-    const int columnHeaderHeight = 14;
-    const int iconSize = 16;
-    const int dropdownGap = selectorGap;
-    const int dropdownWidth = (bounds.getWidth() - dropdownGap - dropdownGap - iconSize) / 2;
-
-    // Column headers: [Audio] [MIDI]
-    if (audioInputSelector_->isVisible()) {
-        auto headerRow = bounds.removeFromTop(columnHeaderHeight);
-        audioColumnLabel_.setBounds(headerRow.removeFromLeft(dropdownWidth));
-        headerRow.removeFromLeft(dropdownGap);
-        midiColumnLabel_.setBounds(headerRow.removeFromLeft(dropdownWidth));
-        bounds.removeFromTop(2);
-    }
-
-    // Input row: [Audio In] [MIDI In] [inputIcon] — hidden for multi-out child tracks
-    if (audioInputSelector_->isVisible()) {
-        auto inputRow = bounds.removeFromTop(selectorHeight);
-        audioInputSelector_->setBounds(inputRow.removeFromLeft(dropdownWidth));
-        inputRow.removeFromLeft(dropdownGap);
-        inputSelector_->setBounds(inputRow.removeFromLeft(dropdownWidth));
-        inputRow.removeFromLeft(dropdownGap);
-        inputIcon_->setBounds(inputRow.removeFromLeft(iconSize));
-        bounds.removeFromTop(4);
-    }
-
-    // Output row: [Audio Out] [MIDI Out] [outputIcon]
-    auto outputRow = bounds.removeFromTop(selectorHeight);
-    outputSelector_->setBounds(outputRow.removeFromLeft(dropdownWidth));
-    outputRow.removeFromLeft(dropdownGap);
-    midiOutputSelector_->setBounds(outputRow.removeFromLeft(dropdownWidth));
-    outputRow.removeFromLeft(dropdownGap);
-    outputIcon_->setBounds(outputRow.removeFromLeft(iconSize));
-    bounds.removeFromTop(separatorPadding);
-    sectionSeparatorYs_.push_back(bounds.getY());
-    bounds.removeFromTop(separatorPadding);
-
-    // Send/Receive section
-    auto sendHeaderRow = bounds.removeFromTop(16);
-    sendReceiveSectionLabel_.setBounds(sendHeaderRow.removeFromLeft(100));
-    addSendButton_.setBounds(sendHeaderRow.removeFromRight(50).withHeight(16));
-    bounds.removeFromTop(4);
-
-    if (sendDestLabels_.empty()) {
-        noSendsLabel_.setBounds(bounds.removeFromTop(16));
-        noSendsLabel_.setVisible(true);
-    } else {
-        noSendsLabel_.setVisible(false);
-        for (size_t i = 0; i < sendDestLabels_.size(); ++i) {
-            auto sendRow = bounds.removeFromTop(18);
-            sendDestLabels_[i]->setBounds(sendRow.removeFromLeft(60));
-            sendRow.removeFromLeft(4);
-            sendLevelLabels_[i]->setBounds(sendRow.removeFromLeft(50));
-            sendRow.removeFromLeft(4);
-            sendDeleteButtons_[i]->setBounds(sendRow.removeFromLeft(18));
-            bounds.removeFromTop(2);
+            auto buttonRow = bounds.removeFromTop(controlRowHeight);
+            layoutButtons(buttonRow, buttonGap);
         }
     }
-
-    receivesLabel_.setBounds(bounds.removeFromTop(16));
     bounds.removeFromTop(separatorPadding);
     sectionSeparatorYs_.push_back(bounds.getY());
     bounds.removeFromTop(separatorPadding);
 
-    // Clips section
-    clipsSectionLabel_.setBounds(bounds.removeFromTop(16));
-    bounds.removeFromTop(4);
-    clipCountLabel_.setBounds(bounds.removeFromTop(20));
+    // Routing section — only lay out if visible
+    if (outputSelector_->isVisible()) {
+        const int selectorHeight = 18;
+        const int columnHeaderHeight = 14;
+        const int iconSize = 16;
+        const int dropdownGap = selectorGap;
+        const int dropdownWidth = (bounds.getWidth() - dropdownGap - dropdownGap - iconSize) / 2;
+
+        // Column headers: [Audio] [MIDI]
+        if (audioInputSelector_->isVisible()) {
+            auto headerRow = bounds.removeFromTop(columnHeaderHeight);
+            audioColumnLabel_.setBounds(headerRow.removeFromLeft(dropdownWidth));
+            headerRow.removeFromLeft(dropdownGap);
+            midiColumnLabel_.setBounds(headerRow.removeFromLeft(dropdownWidth));
+            bounds.removeFromTop(2);
+        }
+
+        // Input row: [Audio In] [MIDI In] [inputIcon] — hidden for multi-out child tracks
+        if (audioInputSelector_->isVisible()) {
+            auto inputRow = bounds.removeFromTop(selectorHeight);
+            audioInputSelector_->setBounds(inputRow.removeFromLeft(dropdownWidth));
+            inputRow.removeFromLeft(dropdownGap);
+            inputSelector_->setBounds(inputRow.removeFromLeft(dropdownWidth));
+            inputRow.removeFromLeft(dropdownGap);
+            inputIcon_->setBounds(inputRow.removeFromLeft(iconSize));
+            bounds.removeFromTop(4);
+        }
+
+        // Output row: [Audio Out] [MIDI Out] [outputIcon]
+        auto outputRow = bounds.removeFromTop(selectorHeight);
+        outputSelector_->setBounds(outputRow.removeFromLeft(dropdownWidth));
+        outputRow.removeFromLeft(dropdownGap);
+        midiOutputSelector_->setBounds(outputRow.removeFromLeft(dropdownWidth));
+        outputRow.removeFromLeft(dropdownGap);
+        outputIcon_->setBounds(outputRow.removeFromLeft(iconSize));
+        bounds.removeFromTop(separatorPadding);
+        sectionSeparatorYs_.push_back(bounds.getY());
+        bounds.removeFromTop(separatorPadding);
+    }
+
+    // Send/Receive section — only lay out if visible
+    if (sendReceiveSectionLabel_.isVisible()) {
+        auto sendHeaderRow = bounds.removeFromTop(16);
+        sendReceiveSectionLabel_.setBounds(sendHeaderRow.removeFromLeft(100));
+        addSendButton_.setBounds(sendHeaderRow.removeFromRight(50).withHeight(16));
+        bounds.removeFromTop(4);
+
+        if (sendDestLabels_.empty()) {
+            noSendsLabel_.setBounds(bounds.removeFromTop(16));
+            noSendsLabel_.setVisible(true);
+        } else {
+            noSendsLabel_.setVisible(false);
+            for (size_t i = 0; i < sendDestLabels_.size(); ++i) {
+                auto sendRow = bounds.removeFromTop(18);
+                sendDestLabels_[i]->setBounds(sendRow.removeFromLeft(60));
+                sendRow.removeFromLeft(4);
+                sendLevelLabels_[i]->setBounds(sendRow.removeFromLeft(50));
+                sendRow.removeFromLeft(4);
+                sendDeleteButtons_[i]->setBounds(sendRow.removeFromLeft(18));
+                bounds.removeFromTop(2);
+            }
+        }
+
+        receivesLabel_.setBounds(bounds.removeFromTop(16));
+        bounds.removeFromTop(separatorPadding);
+        sectionSeparatorYs_.push_back(bounds.getY());
+        bounds.removeFromTop(separatorPadding);
+    }
+
+    // Clips section — only lay out if visible
+    if (clipsSectionLabel_.isVisible()) {
+        clipsSectionLabel_.setBounds(bounds.removeFromTop(16));
+        bounds.removeFromTop(4);
+        clipCountLabel_.setBounds(bounds.removeFromTop(20));
+    }
 }
 
 void TrackInspector::setSelectedTrack(magda::TrackId trackId) {
+    bool wasMulti = isMultiTrackMode_;
+    isMultiTrackMode_ = false;
+    selectedTrackIds_.clear();
     selectedTrackId_ = trackId;
+
+    // Restore single-track callbacks if switching from multi-track mode
+    if (wasMulti) {
+        muteButton_.onClick = [this]() {
+            if (selectedTrackId_ != magda::INVALID_TRACK_ID) {
+                if (selectedTrackId_ == magda::MASTER_TRACK_ID)
+                    magda::UndoManager::getInstance().executeCommand(
+                        std::make_unique<magda::SetMasterMuteCommand>(
+                            muteButton_.getToggleState()));
+                else
+                    magda::UndoManager::getInstance().executeCommand(
+                        std::make_unique<magda::SetTrackMuteCommand>(selectedTrackId_,
+                                                                     muteButton_.getToggleState()));
+            }
+        };
+        soloButton_.onClick = [this]() {
+            if (selectedTrackId_ != magda::INVALID_TRACK_ID) {
+                magda::UndoManager::getInstance().executeCommand(
+                    std::make_unique<magda::SetTrackSoloCommand>(selectedTrackId_,
+                                                                 soloButton_.getToggleState()));
+            }
+        };
+        trackNameValue_.setEditable(true);
+
+        gainLabel_->clearTextOverride();
+        gainLabel_->onValueChange = [this]() {
+            if (selectedTrackId_ != magda::INVALID_TRACK_ID) {
+                double db = gainLabel_->getValue();
+                float gain =
+                    (db <= -60.0f) ? 0.0f : std::pow(10.0f, static_cast<float>(db) / 20.0f);
+                if (selectedTrackId_ == magda::MASTER_TRACK_ID)
+                    magda::UndoManager::getInstance().executeCommand(
+                        std::make_unique<magda::SetMasterVolumeCommand>(gain));
+                else
+                    magda::UndoManager::getInstance().executeCommand(
+                        std::make_unique<magda::SetTrackVolumeCommand>(selectedTrackId_, gain));
+            }
+        };
+
+        panLabel_->clearTextOverride();
+        panLabel_->onValueChange = [this]() {
+            if (selectedTrackId_ == magda::INVALID_TRACK_ID)
+                return;
+            float pan = static_cast<float>(panLabel_->getValue());
+            if (panLabel_->isDragging()) {
+                if (selectedTrackId_ == magda::MASTER_TRACK_ID)
+                    magda::TrackManager::getInstance().setMasterPan(pan);
+                else
+                    magda::TrackManager::getInstance().setTrackPan(selectedTrackId_, pan);
+            } else {
+                if (selectedTrackId_ == magda::MASTER_TRACK_ID)
+                    magda::UndoManager::getInstance().executeCommand(
+                        std::make_unique<magda::SetMasterPanCommand>(pan));
+                else
+                    magda::UndoManager::getInstance().executeCommand(
+                        std::make_unique<magda::SetTrackPanCommand>(selectedTrackId_, pan));
+            }
+        };
+        panLabel_->onDragEnd = [this](double startValue) {
+            if (selectedTrackId_ == magda::INVALID_TRACK_ID)
+                return;
+            float oldPan = static_cast<float>(startValue);
+            float newPan = static_cast<float>(panLabel_->getValue());
+            if (selectedTrackId_ == magda::MASTER_TRACK_ID)
+                magda::UndoManager::getInstance().executeCommand(
+                    std::make_unique<magda::SetMasterPanCommand>(oldPan, newPan));
+            else
+                magda::UndoManager::getInstance().executeCommand(
+                    std::make_unique<magda::SetTrackPanCommand>(selectedTrackId_, oldPan, newPan));
+        };
+
+        recordButton_.onClick = [this]() {
+            if (selectedTrackId_ != magda::INVALID_TRACK_ID) {
+                magda::TrackManager::getInstance().setTrackRecordArmed(
+                    selectedTrackId_, recordButton_.getToggleState());
+            }
+        };
+        monitorButton_.onClick = [this]() {
+            if (selectedTrackId_ == magda::INVALID_TRACK_ID ||
+                selectedTrackId_ == magda::MASTER_TRACK_ID)
+                return;
+            auto* track = magda::TrackManager::getInstance().getTrack(selectedTrackId_);
+            if (!track)
+                return;
+            magda::InputMonitorMode nextMode;
+            switch (track->inputMonitor) {
+                case magda::InputMonitorMode::Off:
+                    nextMode = magda::InputMonitorMode::In;
+                    break;
+                case magda::InputMonitorMode::In:
+                    nextMode = magda::InputMonitorMode::Auto;
+                    break;
+                case magda::InputMonitorMode::Auto:
+                    nextMode = magda::InputMonitorMode::Off;
+                    break;
+            }
+            magda::UndoManager::getInstance().executeCommand(
+                std::make_unique<magda::SetTrackInputMonitorCommand>(selectedTrackId_, nextMode));
+        };
+    }
+
     updateFromSelectedTrack();
+}
+
+void TrackInspector::setSelectedTracks(const std::unordered_set<magda::TrackId>& trackIds) {
+    isMultiTrackMode_ = true;
+    selectedTrackIds_ = trackIds;
+    selectedTrackId_ = magda::INVALID_TRACK_ID;
+    updateFromMultiTrackSelection();
 }
 
 // ============================================================================
@@ -499,7 +705,18 @@ void TrackInspector::tracksChanged() {
 }
 
 void TrackInspector::trackPropertyChanged(int trackId) {
+    if (isMultiTrackMode_) {
+        // Don't refresh during an active drag — it would reset text overrides and base values
+        if (gainLabel_->isDragging() || panLabel_->isDragging())
+            return;
+        if (selectedTrackIds_.count(static_cast<magda::TrackId>(trackId)) > 0) {
+            updateFromMultiTrackSelection();
+        }
+        return;
+    }
     if (static_cast<magda::TrackId>(trackId) == selectedTrackId_) {
+        if (gainLabel_->isDragging() || panLabel_->isDragging())
+            return;
         updateFromSelectedTrack();
     }
 }
@@ -517,6 +734,8 @@ void TrackInspector::trackSelectionChanged(magda::TrackId trackId) {
 
 void TrackInspector::masterChannelChanged() {
     if (selectedTrackId_ == magda::MASTER_TRACK_ID) {
+        if (gainLabel_->isDragging())
+            return;
         updateFromSelectedTrack();
     }
 }
@@ -543,13 +762,12 @@ void TrackInspector::updateFromSelectedTrack() {
     if (selectedTrackId_ == magda::MASTER_TRACK_ID) {
         const auto& master = magda::TrackManager::getInstance().getMasterChannel();
         trackNameValue_.setText("Master", juce::dontSendNotification);
-        muteButton_.setToggleState(master.muted, juce::dontSendNotification);
+        speakerButton_->setToggleState(master.muted, juce::dontSendNotification);
         soloButton_.setToggleState(false, juce::dontSendNotification);
         recordButton_.setToggleState(false, juce::dontSendNotification);
 
         float gainDb = (master.volume <= 0.0f) ? -60.0f : 20.0f * std::log10(master.volume);
         gainLabel_->setValue(gainDb, juce::dontSendNotification);
-        panLabel_->setValue(master.pan, juce::dontSendNotification);
 
         clipCountLabel_.setText("0 clips", juce::dontSendNotification);
 
@@ -633,6 +851,210 @@ void TrackInspector::updateFromSelectedTrack() {
     repaint();
 }
 
+void TrackInspector::updateFromMultiTrackSelection() {
+    if (selectedTrackIds_.empty()) {
+        showTrackControls(false);
+        resized();
+        repaint();
+        return;
+    }
+
+    auto& tm = magda::TrackManager::getInstance();
+
+    // Header: "N tracks selected"
+    int count = static_cast<int>(selectedTrackIds_.size());
+    trackNameLabel_.setText("Selection", juce::dontSendNotification);
+    trackNameValue_.setText(juce::String(count) + " tracks selected", juce::dontSendNotification);
+    trackNameValue_.setEditable(false);
+
+    // Check button states: "on" only if ALL selected tracks share that state
+    bool allMuted = true;
+    bool allSoloed = true;
+    bool allRecordArmed = true;
+    bool allMonitorOn = true;
+    for (auto tid : selectedTrackIds_) {
+        const auto* track = tm.getTrack(tid);
+        if (!track)
+            continue;
+        if (!track->muted)
+            allMuted = false;
+        if (!track->soloed)
+            allSoloed = false;
+        if (!track->recordArmed)
+            allRecordArmed = false;
+        if (track->inputMonitor == magda::InputMonitorMode::Off)
+            allMonitorOn = false;
+    }
+
+    muteButton_.setToggleState(allMuted, juce::dontSendNotification);
+    soloButton_.setToggleState(allSoloed, juce::dontSendNotification);
+    recordButton_.setToggleState(allRecordArmed, juce::dontSendNotification);
+    monitorButton_.setToggleState(allMonitorOn, juce::dontSendNotification);
+
+    // Rewire button callbacks for multi-track mode
+    muteButton_.onClick = [this]() {
+        bool newState = muteButton_.getToggleState();
+        for (auto tid : selectedTrackIds_) {
+            magda::UndoManager::getInstance().executeCommand(
+                std::make_unique<magda::SetTrackMuteCommand>(tid, newState));
+        }
+    };
+    soloButton_.onClick = [this]() {
+        bool newState = soloButton_.getToggleState();
+        for (auto tid : selectedTrackIds_) {
+            magda::UndoManager::getInstance().executeCommand(
+                std::make_unique<magda::SetTrackSoloCommand>(tid, newState));
+        }
+    };
+    recordButton_.onClick = [this]() {
+        bool newState = recordButton_.getToggleState();
+        for (auto tid : selectedTrackIds_) {
+            magda::TrackManager::getInstance().setTrackRecordArmed(tid, newState);
+        }
+    };
+    monitorButton_.onClick = [this]() {
+        // Cycle all selected tracks to the same next mode based on current button state
+        auto nextMode = monitorButton_.getToggleState() ? magda::InputMonitorMode::In
+                                                        : magda::InputMonitorMode::Off;
+        for (auto tid : selectedTrackIds_) {
+            magda::UndoManager::getInstance().executeCommand(
+                std::make_unique<magda::SetTrackInputMonitorCommand>(tid, nextMode));
+        }
+    };
+
+    // Volume/Pan: check if all values are the same or mixed
+    float firstVolDb = 0.0f;
+    float firstPan = 0.0f;
+    bool volumeMixed = false;
+    bool panMixed = false;
+    bool first = true;
+    for (auto tid : selectedTrackIds_) {
+        const auto* track = tm.getTrack(tid);
+        if (!track)
+            continue;
+        float volDb = (track->volume <= 0.0f) ? -60.0f : 20.0f * std::log10(track->volume);
+        if (first) {
+            firstVolDb = volDb;
+            firstPan = track->pan;
+            first = false;
+        } else {
+            if (std::abs(volDb - firstVolDb) > 0.01f)
+                volumeMixed = true;
+            if (std::abs(track->pan - firstPan) > 0.01f)
+                panMixed = true;
+        }
+    }
+
+    if (volumeMixed) {
+        gainLabel_->setTextOverride("mixed");
+    } else {
+        gainLabel_->clearTextOverride();
+        gainLabel_->setValue(firstVolDb, juce::dontSendNotification);
+    }
+
+    if (panMixed) {
+        panLabel_->setTextOverride("mixed");
+    } else {
+        panLabel_->clearTextOverride();
+        panLabel_->setValue(firstPan, juce::dontSendNotification);
+    }
+
+    // Wire up volume/pan for relative multi-track adjustment
+    // Capture base values when drag starts, then apply delta to all tracks
+    gainLabel_->onValueChange = [this]() {
+        // On first call of a new drag, capture base values
+        if (multiTrackBaseVolumes_.empty()) {
+            auto& tmInner = magda::TrackManager::getInstance();
+            for (auto tid : selectedTrackIds_) {
+                const auto* track = tmInner.getTrack(tid);
+                if (track)
+                    multiTrackBaseVolumes_[tid] = track->volume;
+            }
+            multiTrackDragStartDb_ = gainLabel_->getValue();
+        }
+        double delta = gainLabel_->getValue() - multiTrackDragStartDb_;
+        for (auto& [tid, baseVol] : multiTrackBaseVolumes_) {
+            float baseDb = (baseVol <= 0.0f) ? -60.0f : 20.0f * std::log10(baseVol);
+            float newDb = juce::jlimit(-60.0f, 6.0f, static_cast<float>(baseDb + delta));
+            float newGain = (newDb <= -60.0f) ? 0.0f : std::pow(10.0f, newDb / 20.0f);
+            magda::UndoManager::getInstance().executeCommand(
+                std::make_unique<magda::SetTrackVolumeCommand>(tid, newGain));
+        }
+        gainLabel_->clearTextOverride();
+        // Clear base values when drag ends so next drag re-captures
+        if (!gainLabel_->isDragging())
+            multiTrackBaseVolumes_.clear();
+    };
+
+    panLabel_->onValueChange = [this]() {
+        if (multiTrackBasePans_.empty()) {
+            auto& tmInner = magda::TrackManager::getInstance();
+            for (auto tid : selectedTrackIds_) {
+                const auto* track = tmInner.getTrack(tid);
+                if (track)
+                    multiTrackBasePans_[tid] = track->pan;
+            }
+            multiTrackDragStartPan_ = panLabel_->getValue();
+        }
+        double delta = panLabel_->getValue() - multiTrackDragStartPan_;
+        for (auto& [tid, basePan] : multiTrackBasePans_) {
+            float newPan = juce::jlimit(-1.0f, 1.0f, static_cast<float>(basePan + delta));
+            magda::TrackManager::getInstance().setTrackPan(tid, newPan);
+        }
+        panLabel_->clearTextOverride();
+        if (!panLabel_->isDragging())
+            multiTrackBasePans_.clear();
+    };
+    panLabel_->onDragEnd = [this](double /*startValue*/) {
+        // Create undo commands for all tracks using pre-drag base values
+        for (auto& [tid, basePan] : multiTrackBasePans_) {
+            auto* track = magda::TrackManager::getInstance().getTrack(tid);
+            if (track)
+                magda::UndoManager::getInstance().executeCommand(
+                    std::make_unique<magda::SetTrackPanCommand>(tid, basePan, track->pan));
+        }
+        multiTrackBasePans_.clear();
+    };
+
+    // Show name + buttons + volume/pan; hide routing/sends/clips
+    trackNameLabel_.setVisible(true);
+    trackNameValue_.setVisible(true);
+    muteButton_.setVisible(true);
+    speakerButton_->setVisible(false);
+    soloButton_.setVisible(true);
+    recordButton_.setVisible(true);
+    monitorButton_.setVisible(true);
+    gainLabel_->setVisible(true);
+    panLabel_->setVisible(true);
+
+    routingSectionLabel_.setVisible(false);
+    audioInputSelector_->setVisible(false);
+    inputSelector_->setVisible(false);
+    audioColumnLabel_.setVisible(false);
+    midiColumnLabel_.setVisible(false);
+    inputIcon_->setVisible(false);
+    outputIcon_->setVisible(false);
+    outputSelector_->setVisible(false);
+    midiOutputSelector_->setVisible(false);
+
+    sendReceiveSectionLabel_.setVisible(false);
+    addSendButton_.setVisible(false);
+    noSendsLabel_.setVisible(false);
+    receivesLabel_.setVisible(false);
+    for (auto& l : sendDestLabels_)
+        l->setVisible(false);
+    for (auto& l : sendLevelLabels_)
+        l->setVisible(false);
+    for (auto& b : sendDeleteButtons_)
+        b->setVisible(false);
+
+    clipsSectionLabel_.setVisible(false);
+    clipCountLabel_.setVisible(false);
+
+    resized();
+    repaint();
+}
+
 void TrackInspector::showTrackControls(bool show) {
     bool isMaster = show && selectedTrackId_ == magda::MASTER_TRACK_ID;
     bool isAux = false;
@@ -648,12 +1070,13 @@ void TrackInspector::showTrackControls(bool show) {
 
     trackNameLabel_.setVisible(show);
     trackNameValue_.setVisible(show);
-    muteButton_.setVisible(show);
+    muteButton_.setVisible(show && !isMaster);
+    speakerButton_->setVisible(isMaster);
     soloButton_.setVisible(show && !isMaster);
     recordButton_.setVisible(show && !isMaster && !isAux && !isMultiOut);
     monitorButton_.setVisible(show && !isMaster && !isAux && !isMultiOut);
     gainLabel_->setVisible(show);
-    panLabel_->setVisible(show);
+    panLabel_->setVisible(show && !isMaster);
 
     // Routing section — hidden for master and aux; input selectors hidden for multi-out
     bool showRouting = show && !isMaster && !isAux;

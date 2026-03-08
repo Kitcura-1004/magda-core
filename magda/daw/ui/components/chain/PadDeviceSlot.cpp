@@ -147,6 +147,8 @@ void PadDeviceSlot::setupForSampler(daw::audio::MagdaSamplerPlugin* sampler) {
         sampler->loopEnabledValue = enabled;
     };
 
+    samplerUI_->onRootNoteChanged = [sampler](int note) { sampler->setRootNote(note); };
+
     samplerUI_->getPlaybackPosition = [sampler]() -> double {
         return sampler->getPlaybackPosition();
     };
@@ -172,7 +174,7 @@ void PadDeviceSlot::setupForSampler(daw::audio::MagdaSamplerPlugin* sampler) {
         sampler->releaseValue.get(), sampler->pitchValue.get(), sampler->fineValue.get(),
         sampler->levelValue.get(), sampler->sampleStartValue.get(), sampler->sampleEndValue.get(),
         sampler->loopEnabledValue.get(), sampler->loopStartValue.get(), sampler->loopEndValue.get(),
-        sampler->velAmountValue.get(), sampleName);
+        sampler->velAmountValue.get(), sampleName, sampler->getRootNote());
 
     samplerUI_->setWaveformData(sampler->getWaveform(), sampler->getSampleRate(),
                                 sampler->getSampleLengthSeconds());
@@ -225,21 +227,12 @@ void PadDeviceSlot::setupForExternalPlugin(te::Plugin* plugin) {
 }
 
 void PadDeviceSlot::paint(juce::Graphics& g) {
-    auto bounds = getLocalBounds();
-
-    // Background
     g.setColour(DarkTheme::getColour(DarkTheme::SURFACE));
-    g.fillRoundedRectangle(bounds.toFloat(), 3.0f);
-
-    // Border
-    g.setColour(DarkTheme::getColour(DarkTheme::BORDER));
-    g.drawRoundedRectangle(bounds.toFloat(), 3.0f, 0.5f);
+    g.fillRect(getLocalBounds());
 }
 
 void PadDeviceSlot::resized() {
-    auto area = getLocalBounds().reduced(2);
-    DBG("PadDeviceSlot::resized - width=" + juce::String(getWidth()) +
-        " preferredWidth=" + juce::String(preferredWidth_));
+    auto area = getLocalBounds().reduced(2, 1);
 
     // Header
     auto headerRow = area.removeFromTop(HEADER_HEIGHT);

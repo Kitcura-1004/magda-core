@@ -10,6 +10,7 @@
 #include "ui/debug/DebugSettings.hpp"
 #include "ui/themes/DarkTheme.hpp"
 #include "ui/themes/FontManager.hpp"
+#include "ui/themes/SmallButtonLookAndFeel.hpp"
 
 namespace te = tracktion::engine;
 
@@ -156,6 +157,12 @@ void DrumGridUI::PadButton::paint(juce::Graphics& g) {
 }
 
 void DrumGridUI::PadButton::mouseDown(const juce::MouseEvent& e) {
+    if (e.mods.isPopupMenu()) {
+        if (onRightClicked)
+            onRightClicked(padIndex_, e.getScreenPosition());
+        return;
+    }
+
     // Check if click is on the play button area
     if (playButton_ && playButton_->isVisible() &&
         playButton_->getBounds().contains(e.getPosition())) {
@@ -205,6 +212,10 @@ DrumGridUI::DrumGridUI() {
         padButtons_[static_cast<size_t>(i)].onNotePreview = [this](int padIndex, bool isNoteOn) {
             if (onNotePreview)
                 onNotePreview(padIndex, isNoteOn);
+        };
+        padButtons_[static_cast<size_t>(i)].onRightClicked = [this](int padIndex,
+                                                                    juce::Point<int> screenPos) {
+            showPadContextMenu(padIndex, screenPos);
         };
         addAndMakeVisible(padButtons_[static_cast<size_t>(i)]);
     }
@@ -343,6 +354,7 @@ DrumGridUI::DrumGridUI() {
         btn.setColour(juce::TextButton::textColourOnId, DarkTheme::getTextColour());
         btn.setClickingTogglesState(true);
         btn.setRadioGroupId(1001);
+        btn.setLookAndFeel(&FlatTabButtonLookAndFeel::getInstance());
         addAndMakeVisible(btn);
     };
     setupTabButton(mixTabButton_);
@@ -368,6 +380,8 @@ DrumGridUI::DrumGridUI() {
 
 DrumGridUI::~DrumGridUI() {
     stopTimer();
+    mixTabButton_.setLookAndFeel(nullptr);
+    rangeTabButton_.setLookAndFeel(nullptr);
 }
 
 void DrumGridUI::setDrumGridPlugin(daw::audio::DrumGridPlugin* plugin) {
@@ -521,6 +535,23 @@ void DrumGridUI::setSelectedPad(int padIndex) {
         row->setSelected(rowChainIdx >= 0 && rowChainIdx == selectedChainIdx);
     }
 
+    // Scroll chains viewport to show the selected row
+    if (currentChainsTab_ == ChainsTab::Mix) {
+        for (auto& row : chainRows_) {
+            if (row->isSelected()) {
+                chainsViewport_.setViewPosition(0, row->getY());
+                break;
+            }
+        }
+    } else {
+        for (auto& row : rangeRows_) {
+            if (row->isSelected()) {
+                chainsViewport_.setViewPosition(0, row->getY());
+                break;
+            }
+        }
+    }
+
     resized();
     if (onLayoutChanged)
         onLayoutChanged();
@@ -610,7 +641,7 @@ void DrumGridUI::paintOverChildren(juce::Graphics& g) {
 // =============================================================================
 
 void DrumGridUI::resized() {
-    auto area = getLocalBounds().reduced(6);
+    auto area = getLocalBounds().reduced(4);
 
     bool selectedPadHasContent =
         padInfos_[static_cast<size_t>(selectedPad_)].sampleName.isNotEmpty();
@@ -621,17 +652,18 @@ void DrumGridUI::resized() {
 
     // Left column: toggle button (always present)
     auto toggleCol = area.removeFromLeft(kToggleColWidth);
-    chainsToggleButton_->setBounds(toggleCol.removeFromTop(18).withSizeKeepingCentre(16, 16));
+    chainsToggleButton_->setBounds(toggleCol.removeFromTop(20).withSizeKeepingCentre(20, 20));
 
     // Right side allocation
     auto rightBounds = area;
 
-    // 1. DETAIL — from the right
+    // 1. DETAIL — from the right (reserve space for grid + chains)
     juce::Rectangle<int> detailArea;
     if (showDetailPanel) {
-        int preferredDetailWidth = padChainPanel_.getContentWidth();
-        int detailWidth =
-            juce::jmin(preferredDetailWidth, rightBounds.getWidth() - kPadGridWidth - kGap);
+        int reservedWidth = kPadGridWidth + kGap;
+        if (chainsPanelVisible_)
+            reservedWidth += kChainsPanelWidth + kGap;
+        int detailWidth = rightBounds.getWidth() - reservedWidth;
         detailArea = rightBounds.removeFromRight(juce::jmax(detailWidth, 0));
         rightBounds.removeFromRight(kGap);
     }
@@ -644,8 +676,8 @@ void DrumGridUI::resized() {
         rightBounds.removeFromRight(kGap);
     }
 
-    // 3. PADS — everything remaining
-    auto gridArea = rightBounds;
+    // 3. PADS — fixed width, left-aligned in remaining space
+    auto gridArea = rightBounds.removeFromLeft(juce::jmin(kPadGridWidth, rightBounds.getWidth()));
 
     // --- Chains panel layout (FlexBox column) ---
     if (chainsPanelVisible_) {
@@ -655,22 +687,22 @@ void DrumGridUI::resized() {
         mixTabButton_.setVisible(true);
         rangeTabButton_.setVisible(true);
 
-        // Layout header label above tabs
-        auto chainsHeader = chainsArea.removeFromTop(20);
-        chainsLabel_.setBounds(chainsHeader);
+        chainsLabel_.setVisible(false);
 
-        // Tab buttons row
+        // Reserve tab row space, but position tabs after we know the viewport content width
         auto tabRow = chainsArea.removeFromTop(20);
-        int tabW = tabRow.getWidth() / 2;
-        mixTabButton_.setBounds(tabRow.removeFromLeft(tabW));
-        rangeTabButton_.setBounds(tabRow);
-
         chainsArea.removeFromTop(2);  // small gap below tabs
 
         chainsViewport_.setBounds(chainsArea);
 
         int scrollbarWidth = chainsViewport_.getScrollBarThickness();
         int containerWidth = chainsViewport_.getWidth() - scrollbarWidth;
+
+        // Tab buttons — match the container width (excluding scrollbar)
+        auto tabArea = tabRow.withWidth(containerWidth);
+        int tabW = tabArea.getWidth() / 2;
+        mixTabButton_.setBounds(tabArea.removeFromLeft(tabW));
+        rangeTabButton_.setBounds(tabArea.withWidth(tabArea.getWidth()));
 
         // Add only the visible rows to the container
         chainsContainer_.removeAllChildren();
@@ -698,14 +730,15 @@ void DrumGridUI::resized() {
     }
 
     // --- Pad Grid layout ---
-    auto paginationRow = gridArea.removeFromBottom(22);
+    auto paginationRow = gridArea.removeFromBottom(18);
     gridArea.removeFromBottom(2);
 
     constexpr int padGap = 3;
     constexpr int minPadSize = 40;
+    constexpr int maxPadSize = 65;
     int padSize = juce::jmin((gridArea.getWidth() - padGap * (kGridCols - 1)) / kGridCols,
                              (gridArea.getHeight() - padGap * (kGridRows - 1)) / kGridRows);
-    padSize = juce::jmax(padSize, minPadSize);
+    padSize = juce::jlimit(minPadSize, maxPadSize, padSize);
 
     for (int i = 0; i < kPadsPerPage; ++i) {
         int row = i / kGridCols;
@@ -865,6 +898,9 @@ void DrumGridUI::rebuildChainRows() {
             else if (onClearRequested)
                 onClearRequested(padIndex);
         };
+        row->onRightClicked = [this](int padIndex, juce::Point<int> screenPos) {
+            showChainContextMenu(padIndex, screenPos);
+        };
 
         row->setSelected(i == selectedPad_);
         chainRows_.push_back(std::move(row));
@@ -897,6 +933,38 @@ void DrumGridUI::rebuildChainRows() {
     repaint();
     if (onLayoutChanged)
         onLayoutChanged();
+}
+
+void DrumGridUI::showPadContextMenu(int padIndex, juce::Point<int> screenPos) {
+    setSelectedPad(padIndex);
+
+    auto& info = padInfos_[static_cast<size_t>(padIndex)];
+    if (info.sampleName.isEmpty())
+        return;
+
+    juce::PopupMenu menu;
+    menu.addItem(1, "Delete");
+
+    menu.showMenuAsync(juce::PopupMenu::Options().withTargetScreenArea(
+                           juce::Rectangle<int>(screenPos.x, screenPos.y, 1, 1)),
+                       [this, padIndex](int result) {
+                           if (result == 1 && onClearRequested)
+                               onClearRequested(padIndex);
+                       });
+}
+
+void DrumGridUI::showChainContextMenu(int padIndex, juce::Point<int> screenPos) {
+    setSelectedPad(padIndex);
+
+    juce::PopupMenu menu;
+    menu.addItem(1, "Delete");
+
+    menu.showMenuAsync(juce::PopupMenu::Options().withTargetScreenArea(
+                           juce::Rectangle<int>(screenPos.x, screenPos.y, 1, 1)),
+                       [this, padIndex](int result) {
+                           if (result == 1 && onClearRequested)
+                               onClearRequested(padIndex);
+                       });
 }
 
 int DrumGridUI::getPreferredContentWidth() const {

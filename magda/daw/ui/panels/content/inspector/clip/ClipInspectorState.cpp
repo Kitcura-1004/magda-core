@@ -200,7 +200,9 @@ void ClipInspector::updateFromSelectedClip() {
             if (clip->type == magda::ClipType::MIDI) {
                 clipContentOffsetValue_->setValue(clip->midiOffset, juce::dontSendNotification);
             } else if (clip->type == magda::ClipType::Audio) {
-                double offsetBeats = magda::TimelineUtils::secondsToBeats(clip->offset, bpm);
+                // Use sourceBPM for source-file positions when available
+                double displayBpm = clip->sourceBPM > 0.0 ? clip->sourceBPM : bpm;
+                double offsetBeats = magda::TimelineUtils::secondsToBeats(clip->offset, displayBpm);
                 clipContentOffsetValue_->setValue(offsetBeats, juce::dontSendNotification);
             }
         }
@@ -221,7 +223,11 @@ void ClipInspector::updateFromSelectedClip() {
             clipLoopStartLabel_.setVisible(true);
             clipLoopStartValue_->setVisible(true);
             clipLoopStartValue_->setBeatsPerBar(beatsPerBar);
-            double loopStartBeats = magda::TimelineUtils::secondsToBeats(clip->loopStart, bpm);
+            // For audio clips, loop start/end are source-file positions — use sourceBPM
+            double loopBpm = (clip->type == magda::ClipType::Audio && clip->sourceBPM > 0.0)
+                                 ? clip->sourceBPM
+                                 : bpm;
+            double loopStartBeats = magda::TimelineUtils::secondsToBeats(clip->loopStart, loopBpm);
             clipLoopStartValue_->setValue(loopStartBeats, juce::dontSendNotification);
             clipLoopStartValue_->setEnabled(true);
             clipLoopStartValue_->setAlpha(1.0f);
@@ -234,7 +240,8 @@ void ClipInspector::updateFromSelectedClip() {
             } else {
                 double sourceLength =
                     clip->loopLength > 0.0 ? clip->loopLength : clip->length * clip->speedRatio;
-                loopLengthDisplayBeats = magda::TimelineUtils::secondsToBeats(sourceLength, bpm);
+                loopLengthDisplayBeats =
+                    magda::TimelineUtils::secondsToBeats(sourceLength, loopBpm);
             }
             double loopEndBeats = loopStartBeats + loopLengthDisplayBeats;
             clipLoopEndLabel_.setVisible(true);
@@ -247,9 +254,13 @@ void ClipInspector::updateFromSelectedClip() {
             clipLoopPhaseLabel_.setVisible(true);
             clipLoopPhaseValue_->setVisible(true);
             clipLoopPhaseValue_->setBeatsPerBar(beatsPerBar);
-            double phaseSeconds = clip->offset - clip->loopStart;
-            double phaseBeats = magda::TimelineUtils::secondsToBeats(phaseSeconds, bpm);
-            clipLoopPhaseValue_->setValue(phaseBeats, juce::dontSendNotification);
+            if (clip->type == magda::ClipType::MIDI) {
+                clipLoopPhaseValue_->setValue(clip->midiOffset, juce::dontSendNotification);
+            } else {
+                double phaseSeconds = clip->offset - clip->loopStart;
+                double phaseBeats = magda::TimelineUtils::secondsToBeats(phaseSeconds, loopBpm);
+                clipLoopPhaseValue_->setValue(phaseBeats, juce::dontSendNotification);
+            }
             clipLoopPhaseValue_->setEnabled(true);
             clipLoopPhaseValue_->setAlpha(1.0f);
             clipLoopPhaseLabel_.setAlpha(1.0f);
@@ -328,7 +339,6 @@ void ClipInspector::updateFromSelectedClip() {
         autoPitchToggle_.setVisible(false);     // hidden for now
         autoPitchModeCombo_.setVisible(false);  // hidden for now
         pitchChangeValue_->setVisible(isAudioClip);
-        transposeValue_->setVisible(isAudioClip);
         midiTransposeUpBtn_.setVisible(isMidiClip);
         midiTransposeDownBtn_.setVisible(isMidiClip);
         midiTransposeLabel_.setVisible(isMidiClip);
@@ -344,18 +354,13 @@ void ClipInspector::updateFromSelectedClip() {
             autoPitchToggle_.setToggleState(clip->autoPitch, juce::dontSendNotification);
             autoPitchModeCombo_.setSelectedId(clip->autoPitchMode + 1, juce::dontSendNotification);
             pitchChangeValue_->setValue(clip->pitchChange, juce::dontSendNotification);
-            transposeValue_->setValue(clip->transpose, juce::dontSendNotification);
 
             // autoPitchMode only meaningful when autoPitch is on
             autoPitchModeCombo_.setEnabled(clip->autoPitch);
             autoPitchModeCombo_.setAlpha(clip->autoPitch ? 1.0f : 0.4f);
 
-            // When analogPitch is active: disable/dim transpose and speedRatio controls
+            // When analogPitch is active: disable/dim speedRatio control
             bool analogActive = clip->isAnalogPitchActive();
-
-            // transpose disabled when autoPitch or analogPitch is on
-            transposeValue_->setEnabled(!clip->autoPitch && !analogActive);
-            transposeValue_->setAlpha((clip->autoPitch || analogActive) ? 0.4f : 1.0f);
 
             // When analog pitch is active, dim the speed ratio control
             if (analogActive && clipStretchValue_) {
@@ -428,8 +433,6 @@ void ClipInspector::updateFromSelectedClip() {
             pitchChangeValue_->setValue((clipRange_.minPitchChange + clipRange_.maxPitchChange) /
                                             2.0,
                                         juce::dontSendNotification);
-            transposeValue_->setValue((clipRange_.minTranspose + clipRange_.maxTranspose) / 2.0,
-                                      juce::dontSendNotification);
             clipVolumeValue_->setValue((clipRange_.minVolumeDB + clipRange_.maxVolumeDB) / 2.0,
                                        juce::dontSendNotification);
             clipPanValue_->setValue((clipRange_.minPan + clipRange_.maxPan) / 2.0,
@@ -447,7 +450,6 @@ void ClipInspector::updateFromSelectedClip() {
         // Always set drag starts from current control values (works for single & multi)
         if (isAudioClip) {
             multiPitchChangeDragStart_ = pitchChangeValue_->getValue();
-            multiTransposeDragStart_ = transposeValue_->getValue();
             multiVolumeDragStart_ = clipVolumeValue_->getValue();
             multiPanDragStart_ = clipPanValue_->getValue();
             multiGainDragStart_ = clipGainValue_->getValue();
@@ -512,7 +514,6 @@ void ClipInspector::showClipControls(bool show) {
         analogPitchToggle_.setVisible(false);
         autoPitchModeCombo_.setVisible(false);
         pitchChangeValue_->setVisible(false);
-        transposeValue_->setVisible(false);
         midiTransposeUpBtn_.setVisible(false);
         midiTransposeDownBtn_.setVisible(false);
         midiTransposeLabel_.setVisible(false);
@@ -589,7 +590,6 @@ void ClipInspector::computeClipRange() {
         if (first) {
             clipRange_.valid = true;
             clipRange_.minPitchChange = clipRange_.maxPitchChange = c->pitchChange;
-            clipRange_.minTranspose = clipRange_.maxTranspose = c->transpose;
             clipRange_.minVolumeDB = clipRange_.maxVolumeDB = c->volumeDB;
             clipRange_.minPan = clipRange_.maxPan = c->pan;
             clipRange_.minGainDB = clipRange_.maxGainDB = c->gainDB;
@@ -603,8 +603,6 @@ void ClipInspector::computeClipRange() {
         } else {
             clipRange_.minPitchChange = juce::jmin(clipRange_.minPitchChange, c->pitchChange);
             clipRange_.maxPitchChange = juce::jmax(clipRange_.maxPitchChange, c->pitchChange);
-            clipRange_.minTranspose = juce::jmin(clipRange_.minTranspose, c->transpose);
-            clipRange_.maxTranspose = juce::jmax(clipRange_.maxTranspose, c->transpose);
             clipRange_.minVolumeDB = juce::jmin(clipRange_.minVolumeDB, c->volumeDB);
             clipRange_.maxVolumeDB = juce::jmax(clipRange_.maxVolumeDB, c->volumeDB);
             clipRange_.minPan = juce::jmin(clipRange_.minPan, c->pan);
@@ -631,7 +629,6 @@ void ClipInspector::refreshClipRangeDisplay() {
     if (!clipRange_.valid || selectedClipIds_.size() <= 1) {
         // Single clip: clear any text overrides
         pitchChangeValue_->clearTextOverride();
-        transposeValue_->clearTextOverride();
         clipVolumeValue_->clearTextOverride();
         clipPanValue_->clearTextOverride();
         clipGainValue_->clearTextOverride();
@@ -651,7 +648,6 @@ void ClipInspector::refreshClipRangeDisplay() {
     static const juce::String multiDash("-");
 
     pitchChangeValue_->setTextOverride(multiDash);
-    transposeValue_->setTextOverride(multiDash);
     clipVolumeValue_->setTextOverride(multiDash);
     clipPanValue_->setTextOverride(multiDash);
     clipGainValue_->setTextOverride(multiDash);
