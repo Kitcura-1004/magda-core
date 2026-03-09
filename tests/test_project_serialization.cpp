@@ -87,6 +87,8 @@ TEST_CASE("Project Serialization Basics", "[project][serialization]") {
 
         // Save empty project
         bool saved = projectManager.saveProjectAs(tempFile);
+        INFO("saveProjectAs error: " << projectManager.getLastError());
+        INFO("tempFile: " << tempFile.getFullPathName());
         REQUIRE(saved == true);
         REQUIRE(actualFile.existsAsFile() == true);
 
@@ -215,7 +217,7 @@ TEST_CASE("Project Manager State", "[project][manager]") {
         // Save should clear dirty flag
         auto tempFile = fixture.createTempProjectFile(".mgd");
 
-        projectManager.saveProjectAs(tempFile);
+        REQUIRE(projectManager.saveProjectAs(tempFile) == true);
         REQUIRE(projectManager.hasUnsavedChanges() == false);
 
         // Cleanup
@@ -227,7 +229,7 @@ TEST_CASE("Project Manager State", "[project][manager]") {
 
         auto tempFile = fixture.createTempProjectFile(".mgd");
         auto actualFile = ProjectTestFixture::wrappedPath(tempFile);
-        projectManager.saveProjectAs(tempFile);
+        REQUIRE(projectManager.saveProjectAs(tempFile) == true);
 
         auto currentFile = projectManager.getCurrentProjectFile();
         REQUIRE(currentFile.getFullPathName() == actualFile.getFullPathName());
@@ -244,7 +246,7 @@ TEST_CASE("Project Manager State", "[project][manager]") {
         // Save project - should still be open
         auto tempFile = fixture.createTempProjectFile(".mgd");
         auto actualFile = ProjectTestFixture::wrappedPath(tempFile);
-        projectManager.saveProjectAs(tempFile);
+        REQUIRE(projectManager.saveProjectAs(tempFile) == true);
         REQUIRE(projectManager.hasOpenProject() == true);
 
         // Close project - should not be open
