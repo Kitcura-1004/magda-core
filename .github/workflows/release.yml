@@ -396,8 +396,10 @@ jobs:
           --appdir MAGDA.AppDir \
           --output appimage
 
-        # linuxdeploy names it MAGDA-x86_64.AppImage, rename to include version
-        mv MAGDA-x86_64.AppImage "MAGDA-${VERSION}-Linux-x86_64.AppImage"
+        # Find the generated AppImage (name depends on linuxdeploy version)
+        APPIMAGE_FILE=$(ls -1 *.AppImage | grep -v linuxdeploy | head -1)
+        echo "linuxdeploy produced: $APPIMAGE_FILE"
+        mv "$APPIMAGE_FILE" "MAGDA-${VERSION}-Linux-x86_64.AppImage"
         chmod +x "MAGDA-${VERSION}-Linux-x86_64.AppImage"
         echo "AppImage created:"
         ls -lh "MAGDA-${VERSION}-Linux-x86_64.AppImage"
