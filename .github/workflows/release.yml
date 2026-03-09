@@ -61,6 +61,9 @@ jobs:
         KEYCHAIN_PASSWORD: ${{ secrets.MACOS_KEYCHAIN_PASSWORD }}
       run: |
         security unlock-keychain -p "$KEYCHAIN_PASSWORD" ~/Library/Keychains/login.keychain-db
+        # Allow codesign to access keys without UI prompt
+        security set-key-partition-list -S apple-tool:,apple:,codesign:,productsign: \
+          -s -k "$KEYCHAIN_PASSWORD" ~/Library/Keychains/login.keychain-db
 
     - name: Code sign app bundle
       run: |
