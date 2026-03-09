@@ -211,7 +211,7 @@ jobs:
 
     - name: Extract version
       id: version
-      shell: pwsh
+      shell: powershell
       run: |
         if ("${{ github.event_name }}" -eq "workflow_dispatch") {
           $version = "${{ github.event.inputs.version }}"
@@ -222,17 +222,19 @@ jobs:
         Write-Output "Version: $version"
 
     - name: Configure CMake
+      shell: powershell
       run: |
         cmake -B build -G Ninja `
           -DCMAKE_BUILD_TYPE=Release `
           -DMAGDA_BUILD_TESTS=OFF
 
     - name: Build
+      shell: powershell
       run: cmake --build build --config Release
 
     - name: Locate MAGDA.exe
       id: locate
-      shell: pwsh
+      shell: powershell
       run: |
         $exe = Get-ChildItem -Path build -Recurse -Filter "MAGDA.exe" | Select-Object -First 1
         if ($exe) {
@@ -244,7 +246,7 @@ jobs:
         }
 
     - name: Create installer
-      shell: pwsh
+      shell: powershell
       env:
         VERSION: ${{ steps.version.outputs.version }}
       run: |
@@ -262,7 +264,7 @@ jobs:
         Get-ChildItem "MAGDA-*-Windows-Setup.exe"
 
     - name: Generate checksum
-      shell: pwsh
+      shell: powershell
       env:
         VERSION: ${{ steps.version.outputs.version }}
       run: |
@@ -281,7 +283,7 @@ jobs:
 
     - name: Clean up
       if: always()
-      shell: pwsh
+      shell: powershell
       run: |
         Remove-Item -Recurse -Force build -ErrorAction SilentlyContinue
         Remove-Item -Force "packaging\windows\MAGDA.exe" -ErrorAction SilentlyContinue

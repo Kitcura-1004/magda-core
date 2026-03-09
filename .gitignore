@@ -18,6 +18,9 @@ Build/
 .DS_Store
 *.dSYM/
 
+# Certificates
+*.p12
+
 # Clangd
 .cache/
 
