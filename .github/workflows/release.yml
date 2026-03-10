@@ -1,0 +1,446 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version number (e.g. 0.1.0)'
+        required: true
+        type: string
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build-macos:
+    runs-on: [self-hosted, macOS]
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Init submodules
+      run: git submodule update --init --recursive
+
+    - name: Extract version
+      id: version
+      run: |
+        if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+          VERSION="${{ github.event.inputs.version }}"
+        else
+          VERSION="${GITHUB_REF_NAME#v}"
+        fi
+        echo "version=$VERSION" >> $GITHUB_OUTPUT
+        echo "Version: $VERSION"
+
+    - name: Configure CMake
+      run: |
+        cmake -B build -G Ninja \
+          -DCMAKE_BUILD_TYPE=Release \
+          -DMAGDA_BUILD_TESTS=OFF
+
+    - name: Build
+      run: cmake --build build --config Release
+
+    - name: Verify app bundle
+      run: |
+        APP_PATH="build/magda/daw/magda_daw_app_artefacts/Release/MAGDA.app"
+        if [ ! -d "$APP_PATH" ]; then
+          echo "MAGDA.app not found at $APP_PATH"
+          find build -name "MAGDA.app" -type d || true
+          exit 1
+        fi
+        echo "MAGDA.app found at $APP_PATH"
+        ls -la "$APP_PATH/Contents/MacOS/"
+
+    - name: Import signing certificate
+      env:
+        MACOS_CERTIFICATE_P12: ${{ secrets.MACOS_CERTIFICATE_P12 }}
+        MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+      run: |
+        # Create a temporary keychain for CI
+        KEYCHAIN_PATH="$RUNNER_TEMP/signing.keychain-db"
+        KEYCHAIN_PASSWORD="$(openssl rand -base64 32)"
+
+        security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+        security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+        security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+
+        # Import the p12 certificate
+        echo "$MACOS_CERTIFICATE_P12" | base64 --decode > "$RUNNER_TEMP/certificate.p12"
+        security import "$RUNNER_TEMP/certificate.p12" \
+          -k "$KEYCHAIN_PATH" \
+          -P "$MACOS_CERTIFICATE_PASSWORD" \
+          -T /usr/bin/codesign \
+          -T /usr/bin/productsign
+        rm "$RUNNER_TEMP/certificate.p12"
+
+        # Allow codesign to access keys without UI prompt
+        security set-key-partition-list -S apple-tool:,apple:,codesign:,productsign: \
+          -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+
+        # Add temporary keychain to search list (prepend so it's found first)
+        security list-keychains -d user -s "$KEYCHAIN_PATH" $(security list-keychains -d user | tr -d '"')
+
+        # Verify the identity is available
+        security find-identity -v -p codesigning "$KEYCHAIN_PATH"
+
+    - name: Code sign app bundle
+      run: |
+        APP_PATH="build/magda/daw/magda_daw_app_artefacts/Release/MAGDA.app"
+        IDENTITY="Developer ID Application: Luca Romagnoli (VH54FX3Z7U)"
+        ENTITLEMENTS="packaging/macos/entitlements.plist"
+
+        # Sign the plugin scanner first (nested executable)
+        if [ -f "$APP_PATH/Contents/MacOS/magda_plugin_scanner" ]; then
+          echo "Signing plugin scanner..."
+          codesign --force --verify --verbose --timestamp \
+            --options runtime \
+            --entitlements "$ENTITLEMENTS" \
+            --sign "$IDENTITY" \
+            "$APP_PATH/Contents/MacOS/magda_plugin_scanner"
+        fi
+
+        # Sign any embedded frameworks/dylibs
+        find "$APP_PATH/Contents/Frameworks" -name "*.dylib" -o -name "*.framework" 2>/dev/null | while read -r lib; do
+          echo "Signing: $lib"
+          codesign --force --verify --verbose --timestamp \
+            --options runtime \
+            --sign "$IDENTITY" \
+            "$lib"
+        done
+
+        # Sign the main app bundle
+        echo "Signing MAGDA.app..."
+        codesign --force --verify --verbose --timestamp \
+          --options runtime \
+          --entitlements "$ENTITLEMENTS" \
+          --sign "$IDENTITY" \
+          "$APP_PATH"
+
+    - name: Verify signature
+      run: |
+        APP_PATH="build/magda/daw/magda_daw_app_artefacts/Release/MAGDA.app"
+        echo "Verifying codesign..."
+        codesign --verify --deep --strict --verbose=2 "$APP_PATH"
+        echo "Verifying Gatekeeper assessment..."
+        spctl --assess --type execute -vvv "$APP_PATH" || echo "spctl check failed (may need notarization)"
+
+    - name: Create DMG
+      env:
+        VERSION: ${{ steps.version.outputs.version }}
+      run: |
+        APP_PATH="build/magda/daw/magda_daw_app_artefacts/Release/MAGDA.app"
+        DMG_NAME="MAGDA-${VERSION}-macOS.dmg"
+
+        create-dmg \
+          --volname "MAGDA" \
+          --window-pos 200 120 \
+          --window-size 600 400 \
+          --icon-size 100 \
+          --icon "MAGDA.app" 150 190 \
+          --app-drop-link 450 190 \
+          "$DMG_NAME" \
+          "$APP_PATH"
+
+        echo "DMG created: $DMG_NAME"
+        ls -lh "$DMG_NAME"
+
+    - name: Sign DMG
+      env:
+        VERSION: ${{ steps.version.outputs.version }}
+      run: |
+        DMG_NAME="MAGDA-${VERSION}-macOS.dmg"
+        codesign --force --sign "Developer ID Application: Luca Romagnoli (VH54FX3Z7U)" "$DMG_NAME"
+        codesign --verify --verbose "$DMG_NAME"
+
+    - name: Notarize DMG
+      timeout-minutes: 30
+      env:
+        VERSION: ${{ steps.version.outputs.version }}
+        NOTARIZATION_APPLE_ID: ${{ secrets.NOTARIZATION_APPLE_ID }}
+        NOTARIZATION_PASSWORD: ${{ secrets.NOTARIZATION_PASSWORD }}
+      run: |
+        DMG_NAME="MAGDA-${VERSION}-macOS.dmg"
+
+        echo "Submitting for notarization..."
+        xcrun notarytool submit "$DMG_NAME" \
+          --apple-id "$NOTARIZATION_APPLE_ID" \
+          --password "$NOTARIZATION_PASSWORD" \
+          --team-id "VH54FX3Z7U" \
+          --wait
+
+        echo "Stapling notarization ticket..."
+        xcrun stapler staple "$DMG_NAME"
+
+    - name: Generate checksum
+      env:
+        VERSION: ${{ steps.version.outputs.version }}
+      run: |
+        DMG_NAME="MAGDA-${VERSION}-macOS.dmg"
+        shasum -a 256 "$DMG_NAME" > "${DMG_NAME}.sha256"
+        cat "${DMG_NAME}.sha256"
+
+    - name: Upload artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: macos-release
+        path: |
+          MAGDA-*.dmg
+          MAGDA-*.dmg.sha256
+
+    - name: Clean up
+      if: always()
+      run: |
+        # Remove temporary signing keychain
+        KEYCHAIN_PATH="$RUNNER_TEMP/signing.keychain-db"
+        if [ -f "$KEYCHAIN_PATH" ]; then
+          security delete-keychain "$KEYCHAIN_PATH"
+        fi
+        rm -rf build
+
+  build-windows:
+    runs-on: [self-hosted, Windows]
+    steps:
+    - uses: actions/checkout@v6
+      with:
+        submodules: recursive
+
+    - name: Extract version
+      id: version
+      shell: powershell
+      run: |
+        if ("${{ github.event_name }}" -eq "workflow_dispatch") {
+          $version = "${{ github.event.inputs.version }}"
+        } else {
+          $version = "${{ github.ref_name }}".TrimStart("v")
+        }
+        echo "version=$version" >> $env:GITHUB_OUTPUT
+        Write-Output "Version: $version"
+
+    - name: Configure CMake
+      shell: powershell
+      run: |
+        cmake -B build -G Ninja `
+          -DCMAKE_BUILD_TYPE=Release `
+          -DMAGDA_BUILD_TESTS=OFF
+
+    - name: Build
+      shell: powershell
+      run: cmake --build build --config Release
+
+    - name: Locate MAGDA.exe
+      id: locate
+      shell: powershell
+      run: |
+        $exe = Get-ChildItem -Path build -Recurse -Filter "MAGDA.exe" | Select-Object -First 1
+        if ($exe) {
+          Write-Output "Found: $($exe.FullName)"
+          echo "exe_path=$($exe.FullName)" >> $env:GITHUB_OUTPUT
+        } else {
+          Write-Error "MAGDA.exe not found"
+          exit 1
+        }
+
+    - name: Create installer
+      shell: powershell
+      env:
+        VERSION: ${{ steps.version.outputs.version }}
+      run: |
+        # Copy exe to staging directory alongside NSIS script
+        $stagingDir = "packaging\windows"
+        Copy-Item "${{ steps.locate.outputs.exe_path }}" "$stagingDir\MAGDA.exe"
+
+        # Build installer
+        makensis /DVERSION=$env:VERSION "$stagingDir\magda-installer.nsi"
+
+        # Move installer to workspace root
+        Move-Item "$stagingDir\MAGDA-$env:VERSION-Windows-Setup.exe" "."
+
+        Write-Output "Installer created: MAGDA-$env:VERSION-Windows-Setup.exe"
+        Get-ChildItem "MAGDA-*-Windows-Setup.exe"
+
+    - name: Generate checksum
+      shell: powershell
+      env:
+        VERSION: ${{ steps.version.outputs.version }}
+      run: |
+        $installer = "MAGDA-$env:VERSION-Windows-Setup.exe"
+        $hash = Get-FileHash -Algorithm SHA256 $installer
+        "$($hash.Hash)  $installer" | Out-File -Encoding utf8 "$installer.sha256"
+        Get-Content "$installer.sha256"
+
+    - name: Upload artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: windows-release
+        path: |
+          MAGDA-*-Windows-Setup.exe
+          MAGDA-*-Windows-Setup.exe.sha256
+
+    - name: Clean up
+      if: always()
+      shell: powershell
+      run: |
+        Remove-Item -Recurse -Force build -ErrorAction SilentlyContinue
+        Remove-Item -Force "packaging\windows\MAGDA.exe" -ErrorAction SilentlyContinue
+
+  build-linux:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v6
+      with:
+        submodules: recursive
+
+    - name: Extract version
+      id: version
+      run: |
+        if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+          VERSION="${{ github.event.inputs.version }}"
+        else
+          VERSION="${GITHUB_REF_NAME#v}"
+        fi
+        echo "version=$VERSION" >> $GITHUB_OUTPUT
+        echo "Version: $VERSION"
+
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          build-essential \
+          cmake \
+          ninja-build \
+          pkg-config \
+          libgtk-3-dev \
+          libasound2-dev \
+          libjack-jackd2-dev \
+          ladspa-sdk \
+          libcurl4-openssl-dev \
+          libfreetype6-dev \
+          libx11-dev \
+          libxcomposite-dev \
+          libxcursor-dev \
+          libxext-dev \
+          libxinerama-dev \
+          libxrandr-dev \
+          libxrender-dev \
+          libwebkit2gtk-4.1-dev \
+          libglu1-mesa-dev \
+          mesa-common-dev \
+          libfuse2
+
+    - name: Install linuxdeploy
+      run: |
+        wget -q https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
+        chmod +x linuxdeploy-x86_64.AppImage
+
+    - name: Configure CMake
+      run: |
+        cmake -B build -G Ninja \
+          -DCMAKE_BUILD_TYPE=Release \
+          -DCMAKE_INSTALL_PREFIX=/usr \
+          -DMAGDA_BUILD_TESTS=OFF
+
+    - name: Build
+      run: cmake --build build --config Release
+
+    - name: Prepare AppDir
+      env:
+        VERSION: ${{ steps.version.outputs.version }}
+      run: |
+        APPDIR="MAGDA.AppDir"
+        mkdir -p "$APPDIR/usr/bin"
+        mkdir -p "$APPDIR/usr/share/icons/hicolor/256x256/apps"
+        mkdir -p "$APPDIR/usr/share/applications"
+
+        # Find and copy the binary (look in artefacts directory)
+        BINARY=$(find build -path "*/magda_daw_app_artefacts/Release/MAGDA" -type f -executable | head -1)
+        if [ -z "$BINARY" ]; then
+          BINARY=$(find build -name "MAGDA" -type f -executable | head -1)
+        fi
+        if [ -z "$BINARY" ]; then
+          echo "Could not find MAGDA binary"
+          find build -type f -executable | head -20
+          exit 1
+        fi
+        echo "Found binary: $BINARY"
+        cp "$BINARY" "$APPDIR/usr/bin/MAGDA"
+
+        # Copy icon
+        cp assets/app_icon.png "$APPDIR/usr/share/icons/hicolor/256x256/apps/magda.png"
+
+        # Create desktop entry
+        printf '%s\n' \
+          "[Desktop Entry]" \
+          "Type=Application" \
+          "Name=MAGDA" \
+          "Exec=MAGDA" \
+          "Icon=magda" \
+          "Categories=AudioVideo;Audio;" \
+          "Comment=MAGDA Digital Audio Workstation" \
+          > "$APPDIR/usr/share/applications/magda.desktop"
+
+        # Symlinks required by linuxdeploy
+        ln -sf usr/share/applications/magda.desktop "$APPDIR/magda.desktop"
+        ln -sf usr/share/icons/hicolor/256x256/apps/magda.png "$APPDIR/magda.png"
+
+    - name: Create AppImage
+      env:
+        VERSION: ${{ steps.version.outputs.version }}
+      run: |
+        export ARCH=x86_64
+        ./linuxdeploy-x86_64.AppImage \
+          --appdir MAGDA.AppDir \
+          --output appimage
+
+        # Find the generated AppImage (name depends on linuxdeploy version)
+        APPIMAGE_FILE=$(ls -1 *.AppImage | grep -v linuxdeploy | head -1)
+        echo "linuxdeploy produced: $APPIMAGE_FILE"
+        mv "$APPIMAGE_FILE" "MAGDA-${VERSION}-Linux-x86_64.AppImage"
+        chmod +x "MAGDA-${VERSION}-Linux-x86_64.AppImage"
+        echo "AppImage created:"
+        ls -lh "MAGDA-${VERSION}-Linux-x86_64.AppImage"
+
+    - name: Generate checksum
+      env:
+        VERSION: ${{ steps.version.outputs.version }}
+      run: |
+        APPIMAGE="MAGDA-${VERSION}-Linux-x86_64.AppImage"
+        sha256sum "$APPIMAGE" > "${APPIMAGE}.sha256"
+        cat "${APPIMAGE}.sha256"
+
+    - name: Upload artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: linux-release
+        path: |
+          MAGDA-*-Linux-x86_64.AppImage
+          MAGDA-*-Linux-x86_64.AppImage.sha256
+
+  create-release:
+    needs: [build-macos, build-windows, build-linux]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+    - name: Download all artifacts
+      uses: actions/download-artifact@v4
+
+    - name: List artifacts
+      run: find . -type f | sort
+
+    - name: Create GitHub Release
+      uses: softprops/action-gh-release@v2
+      with:
+        tag_name: v${{ needs.build-macos.outputs.version }}
+        name: MAGDA v${{ needs.build-macos.outputs.version }}
+        draft: true
+        prerelease: ${{ contains(needs.build-macos.outputs.version, '-') }}
+        generate_release_notes: true
+        files: |
+          macos-release/*
+          windows-release/*
+          linux-release/*
