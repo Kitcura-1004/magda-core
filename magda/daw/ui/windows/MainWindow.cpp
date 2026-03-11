@@ -184,12 +184,17 @@ MainWindow::MainWindow(AudioEngine* audioEngine)
     centreWithSize(getWidth(), getHeight());
     setVisible(true);
 
+    // Listen for project changes to update window title
+    ProjectManager::getInstance().addListener(this);
+    updateWindowTitle();
+
     // Start modulation engine at 60 FPS (updates LFO values in background)
     magda::ModulatorEngine::getInstance().startTimer(16);
 }
 
 MainWindow::~MainWindow() {
     DBG("  [5a] MainWindow::~MainWindow start");
+    ProjectManager::getInstance().removeListener(this);
 
 #if JUCE_DEBUG
     // Print profiling report if enabled, then shutdown to clear JUCE objects
@@ -230,6 +235,35 @@ void MainWindow::applyLayoutFromConfig() {
     MenuManager::getInstance().menuItemsChanged();
     if (mainComponent->mainView)
         mainComponent->mainView->resized();
+}
+
+void MainWindow::updateWindowTitle() {
+    auto& pm = ProjectManager::getInstance();
+    juce::String title = "MAGDA";
+    if (pm.hasOpenProject()) {
+        auto name = pm.getProjectName();
+        if (name.isNotEmpty())
+            title += " - " + name;
+        if (pm.isDirty())
+            title += " *";
+    }
+    setName(title);
+}
+
+void MainWindow::projectOpened(const ProjectInfo&) {
+    updateWindowTitle();
+}
+
+void MainWindow::projectSaved(const ProjectInfo&) {
+    updateWindowTitle();
+}
+
+void MainWindow::projectClosed() {
+    updateWindowTitle();
+}
+
+void MainWindow::projectDirtyStateChanged(bool) {
+    updateWindowTitle();
 }
 
 // MainComponent implementation
@@ -1011,15 +1045,9 @@ void MainWindow::MainComponent::selectionTypeChanged(SelectionType newType) {
 }
 
 void MainWindow::MainComponent::trackPropertyChanged(int /*trackId*/) {
-    bool anySession = false;
-    for (const auto& track : TrackManager::getInstance().getTracks()) {
-        if (track.playbackMode == TrackPlaybackMode::Session) {
-            anySession = true;
-            break;
-        }
-    }
     if (transportPanel)
-        transportPanel->setAnyTrackInSessionMode(anySession);
+        transportPanel->setAnyTrackInSessionMode(
+            TrackManager::getInstance().isAnyTrackInSessionMode());
 }
 
 void MainWindow::MainComponent::switchToView(ViewMode mode) {

@@ -73,6 +73,8 @@ class DrumGridClipContent : public MidiEditorContent, private juce::Timer {
     void setGridEditCursorPosition(double positionSeconds, bool visible) override;
     void onScrollPositionChanged(int scrollX, int scrollY) override;
     void onGridResolutionChanged() override;
+    void updateGridLoopRegion() override;
+    void setGridPhasePreview(double beats, bool active) override;
 
     // Override velocity lane methods
     void updateVelocityLane() override;
@@ -100,7 +102,6 @@ class DrumGridClipContent : public MidiEditorContent, private juce::Timer {
     void findDrumGrid();
     void centerOnNotes();
     void drawSidebar(juce::Graphics& g, juce::Rectangle<int> area);
-    void drawVelocityHeader(juce::Graphics& g, juce::Rectangle<int> area);
     juce::String resolvePadName(int padIndex) const;
     void timerCallback() override;
 

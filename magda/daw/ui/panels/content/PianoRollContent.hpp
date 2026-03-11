@@ -67,12 +67,6 @@ class PianoRollContent : public MidiEditorContent, public magda::SelectionManage
         return showChordRow_;
     }
 
-    // MIDI drawer visibility (velocity + CC + pitchbend tabs)
-    void setVelocityDrawerVisible(bool visible);
-    bool isVelocityDrawerVisible() const {
-        return velocityDrawerOpen_;
-    }
-
   private:
     // MidiEditorContent virtual implementations
     int getLeftPanelWidth() const override {
@@ -84,6 +78,8 @@ class PianoRollContent : public MidiEditorContent, public magda::SelectionManage
     void setGridEditCursorPosition(double positionSeconds, bool visible) override;
     void onScrollPositionChanged(int scrollX, int scrollY) override;
     void onGridResolutionChanged() override;
+    void updateGridLoopRegion() override;
+    void setGridPhasePreview(double beats, bool active) override;
 
     // Override velocity lane methods
     void updateVelocityLane() override;

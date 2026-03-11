@@ -134,12 +134,22 @@ class MidiEditorContent : public PanelContent,
     std::unique_ptr<magda::VelocityLaneComponent> velocityLane_;
     std::unique_ptr<magda::MidiDrawerComponent> midiDrawer_;
 
-    // --- Velocity lane state ---
-    bool velocityDrawerOpen_ = false;
+    // --- Velocity lane state (static so it persists across editor switches) ---
+    static bool velocityDrawerOpen_;
+    void setVelocityDrawerVisible(bool visible);
+    bool isVelocityDrawerVisible() const {
+        return velocityDrawerOpen_;
+    }
+
+    // --- Loop drag state (visual preview during drag, commit on mouseUp) ---
+    bool draggingLoopRegion_ = false;
+    double previewLoopStartBeats_ = 0.0;
+    double previewLoopLengthBeats_ = 0.0;
 
     // --- Shared zoom methods ---
     void performAnchorPointZoom(double newZoom, double anchorTime, int anchorScreenX);
     void performWheelZoom(double zoomFactor, int mouseXInViewport);
+    void zoomToTimeRange(double startTime, double endTime);
 
     // --- Shared TimeRuler method (virtual for subclass extension) ---
     virtual void updateTimeRuler();
@@ -156,6 +166,8 @@ class MidiEditorContent : public PanelContent,
     // --- Optional virtual hooks ---
     virtual void onScrollPositionChanged(int /*scrollX*/, int /*scrollY*/) {}
     virtual void onGridResolutionChanged() {}
+    virtual void updateGridLoopRegion() {}
+    virtual void setGridPhasePreview(double /*beats*/, bool /*active*/) {}
 
     // --- Velocity lane methods (legacy, used by velocity-only path) ---
     void setupVelocityLane();

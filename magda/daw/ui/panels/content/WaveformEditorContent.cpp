@@ -262,8 +262,19 @@ WaveformEditorContent::WaveformEditorContent() {
         setVirtualScrollX(virtualScrollX_ + deltaX);
     };
 
-    // Wire up ruler loop region drag callback
-    timeRuler_->onLoopRegionChanged = [this](double displayStart, double displayEnd) {
+    // Double-click on loop strip → zoom to loop region
+    timeRuler_->onZoomToLoopRequested = [this](double startTime, double endTime) {
+        zoomToTimeRange(startTime, endTime);
+    };
+
+    // Wire up ruler loop region drag callback — visual preview only during drag
+    timeRuler_->onLoopRegionChanged = [](double /*displayStart*/, double /*displayEnd*/) {
+        // Visual feedback is handled by LoopMarkerInteraction/TimeRuler repaint.
+        // No ClipManager commit during drag to avoid flickering rebuilds.
+    };
+
+    // Commit loop region change on drag end
+    timeRuler_->onLoopDragEnded = [this](double displayStart, double displayEnd) {
         if (editingClipId_ == magda::INVALID_CLIP_ID)
             return;
         const auto* clip = magda::ClipManager::getInstance().getClip(editingClipId_);
@@ -286,8 +297,8 @@ WaveformEditorContent::WaveformEditorContent() {
         double newLoopStart = timelineToSrc(displayStart);
         double newLoopLength = timelineToSrc(displayEnd - displayStart);
 
-        magda::ClipManager::getInstance().setLoopStart(editingClipId_, newLoopStart, bpm);
-        magda::ClipManager::getInstance().setLoopLength(editingClipId_, newLoopLength, bpm);
+        magda::ClipManager::getInstance().setLoopStartAndLength(editingClipId_, newLoopStart,
+                                                                newLoopLength, bpm);
     };
 
     addAndMakeVisible(timeRuler_.get());
@@ -1172,6 +1183,40 @@ void WaveformEditorContent::performAnchorPointZoom(double zoomFactor, int anchor
             static_cast<int>(anchorTime * horizontalZoom_) + GRID_LEFT_PADDING - anchorX;
         setVirtualScrollX(newScrollX);
     }
+}
+
+// ============================================================================
+// Zoom to time range
+// ============================================================================
+
+void WaveformEditorContent::zoomToTimeRange(double startTime, double endTime) {
+    if (endTime <= startTime)
+        return;
+
+    double duration = endTime - startTime;
+    double padding = duration * 0.05;
+
+    int viewWidth = viewport_ ? viewport_->getWidth() : getWidth();
+    double newZoom = static_cast<double>(viewWidth) / (duration + padding * 2.0);
+    newZoom = juce::jlimit(MIN_ZOOM, MAX_ZOOM, newZoom);
+
+    horizontalZoom_ = newZoom;
+    gridComponent_->setHorizontalZoom(horizontalZoom_);
+
+    // Update time ruler (uses ppb)
+    if (timeRuler_) {
+        double bpm = 120.0;
+        if (auto* controller = magda::TimelineController::getCurrent()) {
+            bpm = controller->getState().tempo.bpm;
+        }
+        timeRuler_->setZoom(horizontalZoom_ * 60.0 / bpm);
+        timeRuler_->setTempo(bpm);
+    }
+
+    updateGridSize();
+
+    int scrollX = static_cast<int>((startTime - padding) * horizontalZoom_) + GRID_LEFT_PADDING;
+    setVirtualScrollX(juce::jmax(0, scrollX));
 }
 
 // ============================================================================

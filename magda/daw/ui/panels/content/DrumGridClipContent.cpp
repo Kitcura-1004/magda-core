@@ -16,9 +16,9 @@
 #include "core/TrackManager.hpp"
 #include "core/UndoManager.hpp"
 #include "ui/components/common/SvgButton.hpp"
+#include "ui/components/pianoroll/MidiDrawerComponent.hpp"
 #include "ui/components/pianoroll/NoteComponent.hpp"
 #include "ui/components/pianoroll/NoteGridHost.hpp"
-#include "ui/components/pianoroll/VelocityLaneComponent.hpp"
 #include "ui/components/timeline/TimeRuler.hpp"
 #include "ui/state/TimelineController.hpp"
 #include "ui/state/TimelineEvents.hpp"
@@ -126,6 +126,11 @@ class DrumGridClipGrid : public juce::Component,
         loopOffsetBeats_ = offsetBeats;
         loopLengthBeats_ = lengthBeats;
         loopEnabled_ = enabled;
+        repaint();
+    }
+    void setPhasePreview(double beats, bool active) {
+        phasePreviewBeats_ = beats;
+        phasePreviewActive_ = active;
         repaint();
     }
     void setEditCursorPosition(double positionSeconds, bool blinkVisible) {
@@ -473,11 +478,11 @@ class DrumGridClipGrid : public juce::Component,
         if (clipId_ != magda::INVALID_CLIP_ID) {
             const auto* offsetClip = magda::ClipManager::getInstance().getClip(clipId_);
             if (offsetClip && offsetClip->loopEnabled) {
-                int offsetX =
-                    static_cast<int>(offsetClip->midiOffset * pixelsPerBeat_) + GRID_LEFT_PADDING;
+                double offset = phasePreviewActive_ ? phasePreviewBeats_ : offsetClip->midiOffset;
+                int offsetX = static_cast<int>(offset * pixelsPerBeat_) + GRID_LEFT_PADDING;
                 if (offsetX >= 0 && offsetX <= bounds.getWidth()) {
                     magda::paintPhaseMarker(g, offsetClip, offsetX, numRows * rowHeight_,
-                                            nearPhaseMarker_);
+                                            nearPhaseMarker_, phasePreviewActive_);
                 }
             }
         }
@@ -860,6 +865,10 @@ class DrumGridClipGrid : public juce::Component,
     double loopLengthBeats_ = 0.0;
     bool loopEnabled_ = false;
     bool nearPhaseMarker_ = false;
+
+    // Phase preview during drag
+    double phasePreviewBeats_ = 0.0;
+    bool phasePreviewActive_ = false;
 
     // Note components
     std::vector<std::unique_ptr<magda::NoteComponent>> noteComponents_;
@@ -1258,11 +1267,8 @@ DrumGridClipContent::DrumGridClipContent() {
     controlsToggle_->setOriginalColor(juce::Colour(0xFFB3B3B3));
     controlsToggle_->setActive(velocityDrawerOpen_);
     controlsToggle_->onClick = [this]() {
-        velocityDrawerOpen_ = !velocityDrawerOpen_;
+        setVelocityDrawerVisible(!velocityDrawerOpen_);
         controlsToggle_->setActive(velocityDrawerOpen_);
-        updateVelocityLane();
-        resized();
-        repaint();
     };
     addAndMakeVisible(controlsToggle_.get());
 
@@ -1445,8 +1451,8 @@ DrumGridClipContent::DrumGridClipContent() {
 
     viewport_->setViewedComponent(gridComponent_.get(), false);
 
-    // Setup velocity lane (call after grid component is created)
-    setupVelocityLane();
+    // Setup MIDI drawer (tabbed: velocity + CC + pitchbend)
+    setupMidiDrawer();
 
     // If base found a selected clip, set it up
     if (editingClipId_ != magda::INVALID_CLIP_ID) {
@@ -1477,8 +1483,8 @@ void DrumGridClipContent::setGridEditCursorPosition(double pos, bool visible) {
 
 void DrumGridClipContent::onScrollPositionChanged(int scrollX, int scrollY) {
     rowLabels_->setScrollOffset(scrollY);
-    if (velocityLane_) {
-        velocityLane_->setScrollOffset(scrollX);
+    if (midiDrawer_) {
+        midiDrawer_->setScrollOffset(scrollX);
     }
 }
 
@@ -1510,15 +1516,7 @@ void DrumGridClipContent::paint(juce::Graphics& g) {
     auto sidebarArea = getLocalBounds().removeFromLeft(SIDEBAR_WIDTH);
     drawSidebar(g, sidebarArea);
 
-    // Draw velocity drawer header (if open)
-    if (velocityDrawerOpen_) {
-        auto drawerHeaderArea = getLocalBounds();
-        drawerHeaderArea.removeFromLeft(SIDEBAR_WIDTH);
-        drawerHeaderArea =
-            drawerHeaderArea.removeFromBottom(VELOCITY_LANE_HEIGHT + VELOCITY_HEADER_HEIGHT);
-        drawerHeaderArea = drawerHeaderArea.removeFromTop(VELOCITY_HEADER_HEIGHT);
-        drawVelocityHeader(g, drawerHeaderArea);
-    }
+    // MidiDrawerComponent has its own tab bar — no legacy velocity header needed
 }
 
 void DrumGridClipContent::resized() {
@@ -1533,15 +1531,17 @@ void DrumGridClipContent::resized() {
     controlsToggle_->setBounds(iconPadding, getHeight() - iconSize - iconPadding, iconSize,
                                iconSize);
 
-    // Velocity drawer at bottom (if open)
+    // MIDI drawer at bottom (if open)
     if (velocityDrawerOpen_) {
-        auto drawerArea = bounds.removeFromBottom(VELOCITY_LANE_HEIGHT + VELOCITY_HEADER_HEIGHT);
-        drawerArea.removeFromTop(VELOCITY_HEADER_HEIGHT);
-        drawerArea.removeFromLeft(LABEL_WIDTH);
-        velocityLane_->setBounds(drawerArea);
-        velocityLane_->setVisible(true);
+        auto drawerArea = bounds.removeFromBottom(drawerHeight_);
+        if (midiDrawer_) {
+            midiDrawer_->setLeftMargin(LABEL_WIDTH);
+            midiDrawer_->setBounds(drawerArea);
+            midiDrawer_->setVisible(true);
+        }
     } else {
-        velocityLane_->setVisible(false);
+        if (midiDrawer_)
+            midiDrawer_->setVisible(false);
     }
 
     // Time ruler at top
@@ -1624,7 +1624,8 @@ void DrumGridClipContent::clipsChanged() {
         const auto* clip = magda::ClipManager::getInstance().getClip(editingClipId_);
         if (!clip) {
             gridComponent_->setClipId(magda::INVALID_CLIP_ID);
-            velocityLane_->setClip(magda::INVALID_CLIP_ID);
+            if (midiDrawer_)
+                midiDrawer_->setClip(magda::INVALID_CLIP_ID);
         }
     }
     MidiEditorContent::clipsChanged();
@@ -1754,11 +1755,22 @@ void DrumGridClipContent::updateGridSize() {
     // Pass loop region data to grid
     if (clip) {
         double beatsPerSecond = tempo / 60.0;
+        double loopOffsetBeats = clip->loopStart * beatsPerSecond;
         double sourceLengthBeats = clip->loopLength * beatsPerSecond;
-        gridComponent_->setLoopRegion(0.0, sourceLengthBeats, clip->loopEnabled);
+        gridComponent_->setLoopRegion(loopOffsetBeats, sourceLengthBeats, clip->loopEnabled);
     } else {
         gridComponent_->setLoopRegion(0.0, 0.0, false);
     }
+}
+
+void DrumGridClipContent::updateGridLoopRegion() {
+    if (draggingLoopRegion_) {
+        gridComponent_->setLoopRegion(previewLoopStartBeats_, previewLoopLengthBeats_, true);
+    }
+}
+
+void DrumGridClipContent::setGridPhasePreview(double beats, bool active) {
+    gridComponent_->setPhasePreview(beats, active);
 }
 
 // ============================================================================
@@ -1774,29 +1786,15 @@ void DrumGridClipContent::drawSidebar(juce::Graphics& g, juce::Rectangle<int> ar
                        static_cast<float>(area.getBottom()));
 }
 
-void DrumGridClipContent::drawVelocityHeader(juce::Graphics& g, juce::Rectangle<int> area) {
-    g.setColour(DarkTheme::getColour(DarkTheme::BACKGROUND_ALT));
-    g.fillRect(area);
-
-    g.setColour(DarkTheme::getColour(DarkTheme::BORDER));
-    g.drawHorizontalLine(area.getY(), static_cast<float>(area.getX()),
-                         static_cast<float>(area.getRight()));
-
-    auto labelArea = area.removeFromLeft(LABEL_WIDTH);
-    g.setColour(DarkTheme::getColour(DarkTheme::TEXT_SECONDARY));
-    g.setFont(magda::FontManager::getInstance().getUIFont(11.0f));
-    g.drawText("Velocity", labelArea.reduced(4, 0), juce::Justification::centredLeft, true);
-}
-
 void DrumGridClipContent::updateVelocityLane() {
-    if (!velocityLane_)
+    if (!midiDrawer_)
         return;
 
     // Call base implementation for common setup
-    MidiEditorContent::updateVelocityLane();
+    MidiEditorContent::updateMidiDrawer();
 
     // DrumGrid always uses relative mode (override base class setting)
-    velocityLane_->setRelativeMode(true);
+    midiDrawer_->setRelativeMode(true);
 
     // Set clip length (DrumGrid-specific)
     const auto* clip = editingClipId_ != magda::INVALID_CLIP_ID
@@ -1809,10 +1807,10 @@ void DrumGridClipContent::updateVelocityLane() {
         }
         double secondsPerBeat = 60.0 / tempo;
         double clipLengthBeats = clip->length / secondsPerBeat;
-        velocityLane_->setClipLengthBeats(clipLengthBeats);
+        midiDrawer_->setClipLengthBeats(clipLengthBeats);
     }
 
-    velocityLane_->refreshNotes();
+    midiDrawer_->refreshAll();
 }
 
 // ============================================================================

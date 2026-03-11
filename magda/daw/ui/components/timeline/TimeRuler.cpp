@@ -22,14 +22,16 @@ void TimeRuler::paint(juce::Graphics& g) {
     // Background
     g.fillAll(DarkTheme::getColour(DarkTheme::BACKGROUND_ALT));
 
+    int height = getHeight();
+    int tickAreaTop = height - TICK_HEIGHT_MAJOR;
+
     g.setColour(DarkTheme::getColour(DarkTheme::BORDER));
 
-    // Border line above ticks (separates labels from ticks)
-    int tickAreaTop = getHeight() - TICK_HEIGHT_MAJOR;
+    // Border line above ticks
     g.fillRect(0, tickAreaTop, getWidth(), 1);
 
     // Bottom border line
-    g.fillRect(0, getHeight() - 1, getWidth(), 1);
+    g.fillRect(0, height - 1, getWidth(), 1);
 
     // Draw based on mode
     if (displayMode == DisplayMode::Seconds) {
@@ -40,7 +42,7 @@ void TimeRuler::paint(juce::Graphics& g) {
 }
 
 void TimeRuler::resized() {
-    // Nothing specific needed
+    initLoopInteraction();
 }
 
 void TimeRuler::setZoom(double pixelsPerBeat) {
@@ -275,14 +277,26 @@ void TimeRuler::mouseDrag(const juce::MouseEvent& event) {
 
 void TimeRuler::mouseUp(const juce::MouseEvent& event) {
     if (dragMode == DragMode::PhaseDrag) {
+        if (onPhaseDragEnded) {
+            double finalPhaseTime = pixelToTime(event.x);
+            if (!relativeMode)
+                finalPhaseTime -= timeOffset;
+            finalPhaseTime = juce::jmax(0.0, finalPhaseTime);
+            if (loopLength > 0.0)
+                finalPhaseTime = juce::jmin(finalPhaseTime, loopOffset + loopLength);
+            onPhaseDragEnded(finalPhaseTime);
+        }
         dragMode = DragMode::None;
         setMouseCursor(CursorManager::getInstance().getZoomCursor());
         return;
     }
 
     // Complete loop marker interaction
-    if (loopInteraction_.mouseUp(event.x, event.y))
+    if (loopInteraction_.mouseUp(event.x, event.y)) {
+        if (onLoopDragEnded)
+            onLoopDragEnded(loopInteraction_.getStartTime(), loopInteraction_.getEndTime());
         return;
+    }
 
     // If it was a click (not a drag), handle playhead positioning
     if (dragMode == DragMode::None) {
@@ -301,6 +315,36 @@ void TimeRuler::mouseUp(const juce::MouseEvent& event) {
 
     dragMode = DragMode::None;
     setMouseCursor(CursorManager::getInstance().getZoomCursor());
+}
+
+void TimeRuler::mouseDoubleClick(const juce::MouseEvent& event) {
+    // Double-click on loop strip → zoom to loop region
+    if (loopEnabled && loopLength > 0.0 && onZoomToLoopRequested) {
+        double loopStartTime = relativeMode ? loopOffset : (timeOffset + loopOffset);
+        double loopEndTime = loopStartTime + loopLength;
+
+        int loopStartX = timeToPixel(loopStartTime);
+        int loopEndX = timeToPixel(loopEndTime);
+
+        // Hit-test: click is within the loop strip area only (both X and Y)
+        const int height = getHeight();
+        const int loopStripTop = height - TICK_HEIGHT_MAJOR - LOOP_STRIP_HEIGHT;
+        const int loopStripBottom = height - TICK_HEIGHT_MAJOR;
+
+        if (event.x >= loopStartX && event.x <= loopEndX && event.y >= loopStripTop &&
+            event.y <= loopStripBottom) {
+            onZoomToLoopRequested(loopStartTime, loopEndTime);
+            return;
+        }
+    }
+
+    // Fall through: treat as click for playhead positioning
+    if (onPositionClicked) {
+        double time = pixelToTime(event.x);
+        if (time >= 0.0 && time <= timelineLength) {
+            onPositionClicked(time);
+        }
+    }
 }
 
 void TimeRuler::mouseMove(const juce::MouseEvent& event) {
@@ -362,6 +406,7 @@ void TimeRuler::mouseWheelMove(const juce::MouseEvent& /*event*/,
 void TimeRuler::drawSecondsMode(juce::Graphics& g) {
     const int height = getHeight();
     const int width = getWidth();
+    int tickBottom = height;
 
     // Calculate marker interval based on zoom
     double interval = calculateMarkerInterval();
@@ -391,15 +436,17 @@ void TimeRuler::drawSecondsMode(juce::Graphics& g) {
         // Draw tick
         g.setColour(
             DarkTheme::getColour(isMajor ? DarkTheme::TEXT_SECONDARY : DarkTheme::TEXT_DIM));
-        g.drawVerticalLine(x, static_cast<float>(height - tickHeight), static_cast<float>(height));
+        g.drawVerticalLine(x, static_cast<float>(tickBottom - tickHeight),
+                           static_cast<float>(tickBottom));
 
         // Draw label for major ticks
         if (isMajor) {
+            bool hasLoop = loopEnabled && loopLength > 0.0;
+            int loopSpace = hasLoop ? LOOP_STRIP_HEIGHT : 0;
+            int lblBottom = tickBottom - TICK_HEIGHT_MAJOR - loopSpace;
             g.setColour(DarkTheme::getColour(DarkTheme::TEXT_SECONDARY));
             juce::String label = formatTimeLabel(time, interval);
-            g.drawText(label, x - 30, LABEL_MARGIN, 60,
-                       height - TICK_HEIGHT_MAJOR - LABEL_MARGIN * 2, juce::Justification::centred,
-                       false);
+            g.drawText(label, x - 30, 1, 60, lblBottom - 1, juce::Justification::centredTop, false);
         }
     }
 }
@@ -449,8 +496,12 @@ void TimeRuler::drawBarsBeatsMode(juce::Graphics& g) {
     bool alignsWithBeats = GridConstants::gridAlignsWithBeats(intervalBeats);
     bool gridAligned = alignsWithBars && alignsWithBeats;
 
-    int labelY = LABEL_MARGIN;
-    int labelHeight = height - TICK_HEIGHT_MAJOR - LABEL_MARGIN * 2;
+    int tickBottom = height;
+    bool hasLoopStrip = loopEnabled && loopLength > 0.0;
+    int loopStripSpace = hasLoopStrip ? LOOP_STRIP_HEIGHT : 0;
+    int labelY = 1;
+    int labelBottom = tickBottom - TICK_HEIGHT_MAJOR - loopStripSpace;
+    int labelHeight = labelBottom - labelY;
     int mediumTickHeight = TICK_HEIGHT_MAJOR * 2 / 3;
 
     // Determine bar label interval (show every Nth bar when zoomed out)
@@ -507,16 +558,16 @@ void TimeRuler::drawBarsBeatsMode(juce::Graphics& g) {
             // Tick drawing
             if (isBarStart) {
                 g.setColour(DarkTheme::getColour(DarkTheme::TEXT_SECONDARY));
-                g.drawVerticalLine(x, static_cast<float>(height - TICK_HEIGHT_MAJOR),
-                                   static_cast<float>(height));
+                g.drawVerticalLine(x, static_cast<float>(tickBottom - TICK_HEIGHT_MAJOR),
+                                   static_cast<float>(tickBottom));
             } else if (isBeatStart) {
                 g.setColour(DarkTheme::getColour(DarkTheme::TEXT_SECONDARY).withAlpha(0.7f));
-                g.drawVerticalLine(x, static_cast<float>(height - mediumTickHeight),
-                                   static_cast<float>(height));
+                g.drawVerticalLine(x, static_cast<float>(tickBottom - mediumTickHeight),
+                                   static_cast<float>(tickBottom));
             } else {
                 g.setColour(DarkTheme::getColour(DarkTheme::TEXT_DIM));
-                g.drawVerticalLine(x, static_cast<float>(height - TICK_HEIGHT_MINOR),
-                                   static_cast<float>(height));
+                g.drawVerticalLine(x, static_cast<float>(tickBottom - TICK_HEIGHT_MINOR),
+                                   static_cast<float>(tickBottom));
             }
 
             // Label drawing
@@ -541,13 +592,13 @@ void TimeRuler::drawBarsBeatsMode(juce::Graphics& g) {
                 g.setFont(FontManager::getInstance().getUIFont(8.0f));
                 g.drawText(juce::String(bar) + "." + juce::String(beatInBar) + "." +
                                juce::String(subdivIndex),
-                           x - 30, labelY + 2, 60, labelHeight, juce::Justification::centred);
+                           x - 30, labelY, 60, labelHeight, juce::Justification::centred);
             }
         } else {
             // Grid doesn't align — draw minor ticks only
             g.setColour(DarkTheme::getColour(DarkTheme::TEXT_DIM));
-            g.drawVerticalLine(x, static_cast<float>(height - TICK_HEIGHT_MINOR),
-                               static_cast<float>(height));
+            g.drawVerticalLine(x, static_cast<float>(tickBottom - TICK_HEIGHT_MINOR),
+                               static_cast<float>(tickBottom));
         }
     }
 
@@ -578,8 +629,8 @@ void TimeRuler::drawBarsBeatsMode(juce::Graphics& g) {
 
             if (isBarStart) {
                 g.setColour(DarkTheme::getColour(DarkTheme::TEXT_SECONDARY));
-                g.drawVerticalLine(x, static_cast<float>(height - TICK_HEIGHT_MAJOR),
-                                   static_cast<float>(height));
+                g.drawVerticalLine(x, static_cast<float>(tickBottom - TICK_HEIGHT_MAJOR),
+                                   static_cast<float>(tickBottom));
                 if ((bar - 1) % barLabelInterval == 0) {
                     g.setColour(DarkTheme::getColour(DarkTheme::TEXT_PRIMARY));
                     g.setFont(FontManager::getInstance().getUIFont(12.0f).boldened());
@@ -588,8 +639,8 @@ void TimeRuler::drawBarsBeatsMode(juce::Graphics& g) {
                 }
             } else {
                 g.setColour(DarkTheme::getColour(DarkTheme::TEXT_SECONDARY).withAlpha(0.7f));
-                g.drawVerticalLine(x, static_cast<float>(height - mediumTickHeight),
-                                   static_cast<float>(height));
+                g.drawVerticalLine(x, static_cast<float>(tickBottom - mediumTickHeight),
+                                   static_cast<float>(tickBottom));
                 if (pixelsPerBeat >= 30) {
                     g.setColour(DarkTheme::getColour(DarkTheme::TEXT_SECONDARY));
                     g.setFont(FontManager::getInstance().getUIFont(10.0f));
@@ -632,7 +683,7 @@ void TimeRuler::drawBarsBeatsMode(juce::Graphics& g) {
         }
     }
 
-    // Draw loop region markers (green when active, grey when disabled)
+    // Draw loop region strip between labels and ticks
     if (loopEnabled && loopLength > 0.0) {
         double loopStartTime = relativeMode ? loopOffset : (timeOffset + loopOffset);
         double loopEndTime = loopStartTime + loopLength;
@@ -645,15 +696,31 @@ void TimeRuler::drawBarsBeatsMode(juce::Graphics& g) {
 
         if (loopEndX >= 0 && loopStartX <= width) {
             int tickAreaTop = height - TICK_HEIGHT_MAJOR;
+            int stripTop = tickAreaTop - LOOP_STRIP_HEIGHT;
 
-            // Nearly transparent region fill in tick area only (matches arrangement view)
-            auto regionColour = loopActive ? DarkTheme::getColour(DarkTheme::LOOP_REGION)
-                                           : juce::Colour(0x08808080);
-            g.setColour(regionColour);
-            g.fillRect(loopStartX, tickAreaTop, loopEndX - loopStartX, TICK_HEIGHT_MAJOR);
+            // Fill the loop strip region with vertical gradient (above tick area)
+            auto flagFill = loopActive ? DarkTheme::getColour(DarkTheme::LOOP_MARKER)
+                                       : juce::Colour(0xFF808080);
+            g.setGradientFill(
+                juce::ColourGradient(flagFill.withAlpha(0.45f), 0.0f, static_cast<float>(stripTop),
+                                     flagFill.withAlpha(0.1f), 0.0f,
+                                     static_cast<float>(stripTop + LOOP_STRIP_HEIGHT), false));
+            g.fillRect(loopStartX, stripTop, loopEndX - loopStartX, LOOP_STRIP_HEIGHT);
 
-            // 2px vertical lines in tick area only (not covering labels)
+            // Connecting lines at top and bottom of strip
             g.setColour(markerColour.withAlpha(loopActive ? 1.0f : 0.5f));
+            g.fillRect(loopStartX, stripTop, loopEndX - loopStartX, 2);
+            g.fillRect(loopStartX, stripTop + LOOP_STRIP_HEIGHT - 1, loopEndX - loopStartX, 1);
+
+            // 2px vertical marker lines spanning the strip
+            if (loopStartX >= 0 && loopStartX <= width) {
+                g.fillRect(loopStartX - 1, stripTop, 2, LOOP_STRIP_HEIGHT);
+            }
+            if (loopEndX >= 0 && loopEndX <= width) {
+                g.fillRect(loopEndX - 1, stripTop, 2, LOOP_STRIP_HEIGHT);
+            }
+
+            // Border ticks extending into the tick area
             if (loopStartX >= 0 && loopStartX <= width) {
                 g.fillRect(loopStartX - 1, tickAreaTop, 2, TICK_HEIGHT_MAJOR);
             }
@@ -661,25 +728,12 @@ void TimeRuler::drawBarsBeatsMode(juce::Graphics& g) {
                 g.fillRect(loopEndX - 1, tickAreaTop, 2, TICK_HEIGHT_MAJOR);
             }
 
-            // Small triangular flags at top — size adapts to zoom so they
-            // don't overlap when the loop region is very short.
-            int flagTop = 2;
+            // Triangular flags — size adapts to zoom
+            int flagTop = stripTop + 1;
             int loopPixelWidth = loopEndX - loopStartX;
-            int maxFlagW = juce::jmax(2, loopPixelWidth / 2);  // each flag gets at most half
-            int flagH = juce::jlimit(3, 8, maxFlagW);
-            int flagW = juce::jlimit(2, 4, maxFlagW);
-
-            g.setColour(markerColour.withAlpha(loopActive ? 1.0f : 0.5f));
-
-            // Connecting line between flags
-            g.drawLine(static_cast<float>(loopStartX), static_cast<float>(0),
-                       static_cast<float>(loopEndX), static_cast<float>(0), 2.0f);
-
-            // Fill the flag strip area
-            auto flagFill = loopActive ? DarkTheme::getColour(DarkTheme::LOOP_MARKER)
-                                       : juce::Colour(0xFF808080);
-            g.setColour(flagFill.withAlpha(0.3f));
-            g.fillRect(loopStartX, 0, loopEndX - loopStartX, flagTop + flagH);
+            int maxFlagW = juce::jmax(4, loopPixelWidth / 2);
+            int flagH = juce::jlimit(6, LOOP_STRIP_HEIGHT - 2, maxFlagW);
+            int flagW = juce::jlimit(4, 8, maxFlagW);
 
             g.setColour(markerColour.withAlpha(loopActive ? 1.0f : 0.5f));
             if (loopStartX >= 0 && loopStartX <= width) {
@@ -709,12 +763,14 @@ void TimeRuler::drawBarsBeatsMode(juce::Graphics& g) {
         if (phaseX >= 0 && phaseX <= width) {
             auto col = juce::Colour(0xFFCCAA44);  // OFFSET_MARKER yellow
             float alpha = loopPhaseVisible ? 1.0f : 0.4f;
+            int tickAreaTop = height - TICK_HEIGHT_MAJOR;
             g.setColour(col.withAlpha(alpha));
-            g.fillRect(phaseX - 1, 0, 2, height);
-            // Downward triangle at top
+            g.fillRect(phaseX - 1, tickAreaTop, 2, TICK_HEIGHT_MAJOR);
+            // Downward triangle at top of tick area
             juce::Path flag;
             float fx = static_cast<float>(phaseX);
-            flag.addTriangle(fx - 5.0f, 2.0f, fx + 5.0f, 2.0f, fx, 10.0f);
+            float triTop = static_cast<float>(tickAreaTop);
+            flag.addTriangle(fx - 5.0f, triTop, fx + 5.0f, triTop, fx, triTop + 8.0f);
             g.fillPath(flag);
         }
     }
@@ -750,8 +806,9 @@ void TimeRuler::drawBarsBeatsMode(juce::Graphics& g) {
 
             int playheadX = timeToPixel(displayTime);
             if (playheadX >= 0 && playheadX <= width) {
+                int tickAreaTop = height - TICK_HEIGHT_MAJOR;
                 g.setColour(juce::Colour(0xFFFF4444));
-                g.fillRect(playheadX - 1, 0, 2, height);
+                g.fillRect(playheadX - 1, tickAreaTop, 2, TICK_HEIGHT_MAJOR);
             }
         }
     }
@@ -847,8 +904,8 @@ void TimeRuler::initLoopInteraction() {
     };
     host.onRepaint = [this]() { repaint(); };
     host.maxTime = timelineLength;
-    host.topBorderY = 0;           // Flags are at the top of the ruler
-    host.topBorderThreshold = 12;  // Match the flag strip height
+    host.topBorderY = getHeight() - TICK_HEIGHT_MAJOR - LOOP_STRIP_HEIGHT;
+    host.topBorderThreshold = LOOP_STRIP_HEIGHT;
     loopInteraction_.setHost(std::move(host));
 }
 

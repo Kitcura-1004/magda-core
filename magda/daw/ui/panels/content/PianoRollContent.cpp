@@ -718,14 +718,25 @@ void PianoRollContent::updateGridSize() {
             tempo = controller->getState().tempo.bpm;
         }
         double beatsPerSecond = tempo / 60.0;
+        double loopOffsetBeats = clip->loopStart * beatsPerSecond;
         double sourceLengthBeats = clip->loopLength * beatsPerSecond;
-        gridComponent_->setLoopRegion(0.0, sourceLengthBeats, clip->loopEnabled);
+        gridComponent_->setLoopRegion(loopOffsetBeats, sourceLengthBeats, clip->loopEnabled);
     } else {
         gridComponent_->setLoopRegion(0.0, 0.0, false);
     }
 }
 
 // Loop region is now handled by MidiEditorContent::updateTimeRuler()
+
+void PianoRollContent::updateGridLoopRegion() {
+    if (draggingLoopRegion_) {
+        gridComponent_->setLoopRegion(previewLoopStartBeats_, previewLoopLengthBeats_, true);
+    }
+}
+
+void PianoRollContent::setGridPhasePreview(double beats, bool active) {
+    gridComponent_->setPhasePreview(beats, active);
+}
 
 // ============================================================================
 // Relative time mode (PianoRoll-specific multi-clip handling)
@@ -800,14 +811,7 @@ void PianoRollContent::setChordRowVisible(bool visible) {
     }
 }
 
-void PianoRollContent::setVelocityDrawerVisible(bool visible) {
-    if (velocityDrawerOpen_ != visible) {
-        velocityDrawerOpen_ = visible;
-        updateVelocityLane();
-        resized();
-        repaint();
-    }
-}
+// setVelocityDrawerVisible is now in the base class MidiEditorContent
 
 // ============================================================================
 // Activation

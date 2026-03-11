@@ -11,6 +11,9 @@
 
 namespace magda::daw::ui {
 
+// Static member — persists drawer open/closed state across editor switches
+bool MidiEditorContent::velocityDrawerOpen_ = false;
+
 MidiEditorContent::MidiEditorContent() {
     // Create time ruler
     timeRuler_ = std::make_unique<magda::TimeRuler>();
@@ -47,8 +50,41 @@ MidiEditorContent::MidiEditorContent() {
     // TimeRuler click callback — set local edit cursor (independent from arrangement)
     timeRuler_->onPositionClicked = [this](double time) { setLocalEditCursor(time); };
 
-    // TimeRuler loop region drag callback
+    // TimeRuler double-click on loop strip → zoom to loop region
+    timeRuler_->onZoomToLoopRequested = [this](double startTime, double endTime) {
+        zoomToTimeRange(startTime, endTime);
+    };
+
+    // TimeRuler loop region drag callback — visual preview only (no ClipManager commit)
     timeRuler_->onLoopRegionChanged = [this](double displayStart, double displayEnd) {
+        if (editingClipId_ == magda::INVALID_CLIP_ID)
+            return;
+        const auto* clip = magda::ClipManager::getInstance().getClip(editingClipId_);
+        if (!clip || !clip->loopEnabled)
+            return;
+
+        double newLoopStart = relativeTimeMode_ ? displayStart : (displayStart - clip->startTime);
+        double newLoopLength = displayEnd - displayStart;
+
+        // Update TimeRuler's loop state so the background tint follows the drag
+        timeRuler_->setLoopRegion(newLoopStart, newLoopLength, true);
+
+        // Update grid loop region visually (lightweight — no note rebuild)
+        auto* controller = magda::TimelineController::getCurrent();
+        double bpm = controller ? controller->getState().tempo.bpm : 120.0;
+        double beatsPerSecond = bpm / 60.0;
+
+        previewLoopStartBeats_ = newLoopStart * beatsPerSecond;
+        previewLoopLengthBeats_ = newLoopLength * beatsPerSecond;
+        draggingLoopRegion_ = true;
+
+        updateGridLoopRegion();
+    };
+
+    // TimeRuler loop drag ended — commit to ClipManager
+    timeRuler_->onLoopDragEnded = [this](double displayStart, double displayEnd) {
+        draggingLoopRegion_ = false;
+
         if (editingClipId_ == magda::INVALID_CLIP_ID)
             return;
         const auto* clip = magda::ClipManager::getInstance().getClip(editingClipId_);
@@ -61,12 +97,25 @@ MidiEditorContent::MidiEditorContent() {
         auto* controller = magda::TimelineController::getCurrent();
         double bpm = controller ? controller->getState().tempo.bpm : 120.0;
 
-        magda::ClipManager::getInstance().setLoopStart(editingClipId_, newLoopStart, bpm);
-        magda::ClipManager::getInstance().setLoopLength(editingClipId_, newLoopLength, bpm);
+        magda::ClipManager::getInstance().setLoopStartAndLength(editingClipId_, newLoopStart,
+                                                                newLoopLength, bpm);
     };
 
-    // TimeRuler phase marker drag callback
+    // TimeRuler phase marker drag callback — visual preview only
     timeRuler_->onPhaseMarkerChanged = [this](double phaseSeconds) {
+        // Update ruler phase marker visually during drag
+        timeRuler_->setLoopPhaseMarker(phaseSeconds, true);
+
+        // Update grid phase marker preview
+        auto* controller = magda::TimelineController::getCurrent();
+        double bpm = controller ? controller->getState().tempo.bpm : 120.0;
+        setGridPhasePreview(phaseSeconds * bpm / 60.0, true);
+    };
+
+    // Phase marker drag ended — commit to ClipManager
+    timeRuler_->onPhaseDragEnded = [this](double phaseSeconds) {
+        setGridPhasePreview(0.0, false);
+
         if (editingClipId_ == magda::INVALID_CLIP_ID)
             return;
         const auto* clip = magda::ClipManager::getInstance().getClip(editingClipId_);
@@ -152,6 +201,8 @@ void MidiEditorContent::performAnchorPointZoom(double newZoom, double anchorTime
         updateGridResolution();
         updateGridSize();
         updateTimeRuler();
+        updateMidiDrawer();
+        updateVelocityLane();
 
         // Adjust scroll to keep anchor position under mouse
         int newAnchorX = static_cast<int>(anchorBeat * horizontalZoom_) + GRID_LEFT_PADDING;
@@ -176,6 +227,8 @@ void MidiEditorContent::performWheelZoom(double zoomFactor, int mouseXInViewport
         updateGridResolution();
         updateGridSize();
         updateTimeRuler();
+        updateMidiDrawer();
+        updateVelocityLane();
 
         // Adjust scroll position to keep anchor point under mouse
         int newAnchorX = static_cast<int>(anchorBeat * horizontalZoom_) + GRID_LEFT_PADDING;
@@ -183,6 +236,42 @@ void MidiEditorContent::performWheelZoom(double zoomFactor, int mouseXInViewport
         newScrollX = juce::jmax(0, newScrollX);
         viewport_->setViewPosition(newScrollX, savedScrollY);
     }
+}
+
+// ============================================================================
+// Zoom to time range
+// ============================================================================
+
+void MidiEditorContent::zoomToTimeRange(double startTime, double endTime) {
+    if (endTime <= startTime || !viewport_)
+        return;
+
+    double tempo = 120.0;
+    if (auto* controller = magda::TimelineController::getCurrent()) {
+        tempo = controller->getState().tempo.bpm;
+    }
+    double secondsPerBeat = 60.0 / tempo;
+
+    double startBeats = startTime / secondsPerBeat;
+    double endBeats = endTime / secondsPerBeat;
+    double durationBeats = endBeats - startBeats;
+    double padding = durationBeats * 0.05;
+
+    int viewWidth = viewport_->getWidth();
+    double newZoom = static_cast<double>(viewWidth) / (durationBeats + padding * 2.0);
+    newZoom = juce::jlimit(MIN_HORIZONTAL_ZOOM, MAX_HORIZONTAL_ZOOM, newZoom);
+
+    horizontalZoom_ = newZoom;
+    setGridPixelsPerBeat(horizontalZoom_);
+    updateGridResolution();
+    updateGridSize();
+    updateTimeRuler();
+    updateMidiDrawer();
+    updateVelocityLane();
+
+    int scrollX = static_cast<int>((startBeats - padding) * horizontalZoom_) + GRID_LEFT_PADDING;
+    scrollX = juce::jmax(0, scrollX);
+    viewport_->setViewPosition(scrollX, viewport_->getViewPositionY());
 }
 
 // ============================================================================
@@ -583,6 +672,15 @@ void MidiEditorContent::setupMidiDrawer() {
     };
 
     addChildComponent(midiDrawer_.get());
+}
+
+void MidiEditorContent::setVelocityDrawerVisible(bool visible) {
+    if (velocityDrawerOpen_ != visible) {
+        velocityDrawerOpen_ = visible;
+        updateVelocityLane();
+        resized();
+        repaint();
+    }
 }
 
 void MidiEditorContent::updateMidiDrawer() {
