@@ -247,7 +247,7 @@ jobs:
         rm -rf build
 
   build-windows:
-    runs-on: windows-large
+    runs-on: windows-latest
     steps:
     - uses: actions/checkout@v4
       with:
