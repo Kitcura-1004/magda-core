@@ -247,7 +247,7 @@ jobs:
         rm -rf build
 
   build-windows:
-    runs-on: windows-latest
+    runs-on: windows-large
     steps:
     - uses: actions/checkout@v4
       with:
@@ -287,6 +287,14 @@ jobs:
         }
         echo "$sccacheDir" >> $env:GITHUB_PATH
         & "$sccacheDir\sccache.exe" --version
+
+    - name: Cache sccache
+      uses: actions/cache@v4
+      with:
+        path: ~\AppData\Local\Mozilla\sccache
+        key: sccache-windows-release-${{ hashFiles('CMakeLists.txt', 'magda/daw/CMakeLists.txt') }}
+        restore-keys: |
+          sccache-windows-release-
 
     - name: Configure CMake
       shell: powershell
