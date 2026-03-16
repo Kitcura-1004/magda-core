@@ -1056,6 +1056,13 @@ void WaveformEditorContent::updateGridSize() {
                 double bpm = cachedBpm_ > 0.0 ? cachedBpm_ : 120.0;
                 auto info = magda::ClipDisplayInfo::from(*clip, bpm, fileDuration);
                 totalTime = info.fullSourceExtentSeconds;
+                // When bar origin is negative (shifted to match arrangement position),
+                // the ruler needs extra length so bar numbers extend to the file end.
+                // The ruler draws from barOrigin (seconds) for timelineLength (seconds),
+                // so we extend totalTime to cover from barOrigin to the file end.
+                double barOrigin = timeRuler_->getBarOrigin();
+                if (barOrigin < 0.0)
+                    totalTime -= barOrigin;
             } else {
                 totalTime = clip->startTime + clip->length;
             }

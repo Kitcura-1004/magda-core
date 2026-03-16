@@ -344,3 +344,194 @@ TEST_CASE("MIDI clip split - undo/redo", "[midi][clip][split][undo]") {
         REQUIRE(clipManager.getClip(rightClipId) == nullptr);
     }
 }
+
+// ============================================================================
+// Looped MIDI Clip Split
+// ============================================================================
+
+// Helper to create a looped MIDI clip
+static ClipId createLoopedMidiClip(TrackId trackId, double startTime, double length,
+                                   double loopLengthBeats,
+                                   const std::vector<double>& noteBeatPositions,
+                                   double midiOffset = 0.0) {
+    auto& clipManager = ClipManager::getInstance();
+    ClipId clipId = clipManager.createMidiClip(trackId, startTime, length, ClipView::Arrangement);
+
+    auto* clip = clipManager.getClip(clipId);
+    if (clip) {
+        clip->loopEnabled = true;
+        clip->loopLengthBeats = loopLengthBeats;
+        clip->lengthBeats = length * 2.0;  // At 120 BPM
+        clip->midiOffset = midiOffset;
+        for (double beatPos : noteBeatPositions) {
+            MidiNote note;
+            note.noteNumber = 60;
+            note.startBeat = beatPos;
+            note.lengthBeats = 0.5;
+            note.velocity = 100;
+            clip->midiNotes.push_back(note);
+        }
+    }
+
+    return clipId;
+}
+
+TEST_CASE("Looped MIDI clip split - both halves keep notes", "[midi][clip][split][loop]") {
+    auto& clipManager = ClipManager::getInstance();
+    auto& trackManager = TrackManager::getInstance();
+
+    clipManager.clearAllClips();
+    trackManager.clearAllTracks();
+    TrackId trackId = trackManager.createTrack("Test Track", TrackType::MIDI);
+
+    SECTION("Split in middle preserves notes on both sides") {
+        // Looped clip: 8 seconds (16 beats at 120 BPM), loop = 4 beats
+        // Notes at beats 0, 1, 2, 3 within the loop region
+        ClipId clipId = createLoopedMidiClip(trackId, 0.0, 8.0, 4.0, {0.0, 1.0, 2.0, 3.0});
+
+        // Split at 4 seconds (middle)
+        SplitClipCommand splitCmd(clipId, 4.0);
+        REQUIRE(splitCmd.canExecute());
+        splitCmd.execute();
+
+        auto* leftClip = clipManager.getClip(clipId);
+        auto* rightClip = clipManager.getClip(splitCmd.getRightClipId());
+
+        REQUIRE(leftClip != nullptr);
+        REQUIRE(rightClip != nullptr);
+
+        // Both clips must have all 4 notes (same loop pattern)
+        REQUIRE(leftClip->midiNotes.size() == 4);
+        REQUIRE(rightClip->midiNotes.size() == 4);
+
+        // Notes unchanged in both clips
+        REQUIRE(leftClip->midiNotes[0].startBeat == Catch::Approx(0.0));
+        REQUIRE(leftClip->midiNotes[1].startBeat == Catch::Approx(1.0));
+        REQUIRE(leftClip->midiNotes[2].startBeat == Catch::Approx(2.0));
+        REQUIRE(leftClip->midiNotes[3].startBeat == Catch::Approx(3.0));
+
+        REQUIRE(rightClip->midiNotes[0].startBeat == Catch::Approx(0.0));
+        REQUIRE(rightClip->midiNotes[1].startBeat == Catch::Approx(1.0));
+        REQUIRE(rightClip->midiNotes[2].startBeat == Catch::Approx(2.0));
+        REQUIRE(rightClip->midiNotes[3].startBeat == Catch::Approx(3.0));
+    }
+
+    SECTION("Split at non-loop-boundary adjusts right clip midiOffset") {
+        // Looped clip: 8 seconds, loop = 4 beats, no initial offset
+        ClipId clipId = createLoopedMidiClip(trackId, 0.0, 8.0, 4.0, {0.0, 1.0, 2.0, 3.0});
+
+        // Split at 3 seconds (6 beats at 120 BPM). Phase = 6 % 4 = 2 beats.
+        // Right clip starts playing from beat 2 within the loop pattern.
+        SplitClipCommand splitCmd(clipId, 3.0);
+        splitCmd.execute();
+
+        auto* leftClip = clipManager.getClip(clipId);
+        auto* rightClip = clipManager.getClip(splitCmd.getRightClipId());
+
+        REQUIRE(leftClip->midiOffset == Catch::Approx(0.0));
+        REQUIRE(rightClip->midiOffset == Catch::Approx(2.0));
+
+        // Both keep all notes
+        REQUIRE(leftClip->midiNotes.size() == 4);
+        REQUIRE(rightClip->midiNotes.size() == 4);
+    }
+
+    SECTION("Split preserves existing midiOffset") {
+        // Looped clip with existing offset of 1 beat
+        ClipId clipId = createLoopedMidiClip(trackId, 0.0, 8.0, 4.0, {0.0, 1.0, 2.0, 3.0}, 1.0);
+
+        // Split at 2 seconds (4 beats). New phase = (1.0 + 4.0) % 4.0 = 1.0
+        SplitClipCommand splitCmd(clipId, 2.0);
+        splitCmd.execute();
+
+        auto* leftClip = clipManager.getClip(clipId);
+        auto* rightClip = clipManager.getClip(splitCmd.getRightClipId());
+
+        REQUIRE(leftClip->midiOffset == Catch::Approx(1.0));
+        REQUIRE(rightClip->midiOffset == Catch::Approx(1.0));
+
+        REQUIRE(leftClip->midiNotes.size() == 4);
+        REQUIRE(rightClip->midiNotes.size() == 4);
+    }
+
+    SECTION("Split at loop boundary keeps zero phase") {
+        // Looped clip: 8 seconds, loop = 4 beats
+        ClipId clipId = createLoopedMidiClip(trackId, 0.0, 8.0, 4.0, {0.0, 2.0});
+
+        // Split at 4 seconds (8 beats). Phase = (0 + 8) % 4 = 0
+        SplitClipCommand splitCmd(clipId, 4.0);
+        splitCmd.execute();
+
+        auto* rightClip = clipManager.getClip(splitCmd.getRightClipId());
+
+        REQUIRE(rightClip->midiOffset == Catch::Approx(0.0));
+        REQUIRE(rightClip->midiNotes.size() == 2);
+    }
+
+    SECTION("Split 2-bar loop mid-loop adjusts midiOffset correctly") {
+        // Loop from bar 1 to bar 3 (8 beats at 120 BPM = 4 seconds).
+        // Clip extended to 16 seconds (32 beats = 4 loop repetitions).
+        // Notes at beats 0, 2, 4, 6 within the 8-beat loop.
+        ClipId clipId = createLoopedMidiClip(trackId, 0.0, 16.0, 8.0, {0.0, 2.0, 4.0, 6.0});
+
+        // Split at bar 2 (= 2 seconds = 4 beats into the clip).
+        // Phase within loop = fmod(4, 8) = 4 beats (half way through loop).
+        SplitClipCommand splitCmd(clipId, 2.0);
+        splitCmd.execute();
+
+        auto* leftClip = clipManager.getClip(clipId);
+        auto* rightClip = clipManager.getClip(splitCmd.getRightClipId());
+
+        REQUIRE(leftClip != nullptr);
+        REQUIRE(rightClip != nullptr);
+
+        // Left clip keeps original midiOffset (0)
+        REQUIRE(leftClip->midiOffset == Catch::Approx(0.0));
+        // Right clip starts from beat 4 within the 8-beat loop
+        REQUIRE(rightClip->midiOffset == Catch::Approx(4.0));
+
+        // Both keep all 4 notes
+        REQUIRE(leftClip->midiNotes.size() == 4);
+        REQUIRE(rightClip->midiNotes.size() == 4);
+
+        // Notes unchanged (same pattern, different phase)
+        REQUIRE(rightClip->midiNotes[0].startBeat == Catch::Approx(0.0));
+        REQUIRE(rightClip->midiNotes[1].startBeat == Catch::Approx(2.0));
+        REQUIRE(rightClip->midiNotes[2].startBeat == Catch::Approx(4.0));
+        REQUIRE(rightClip->midiNotes[3].startBeat == Catch::Approx(6.0));
+
+        // Loop region: truncated to clip length when clip is shorter than one cycle
+        REQUIRE(leftClip->loopLengthBeats == Catch::Approx(4.0));   // 2s = 4 beats
+        REQUIRE(rightClip->loopLengthBeats == Catch::Approx(8.0));  // 14s = 28 beats > 8
+        REQUIRE(leftClip->loopEnabled == true);
+        REQUIRE(rightClip->loopEnabled == true);
+
+        // Container lengths are correct
+        REQUIRE(leftClip->length == Catch::Approx(2.0));
+        REQUIRE(rightClip->length == Catch::Approx(14.0));
+    }
+
+    SECTION("Sequential splits of looped clip all keep notes") {
+        // Looped clip: 8 seconds, loop = 2 beats
+        ClipId clipId = createLoopedMidiClip(trackId, 0.0, 8.0, 2.0, {0.0, 1.0});
+
+        // Split into 4 x 2-second clips
+        SplitClipCommand split1(clipId, 4.0);
+        split1.execute();
+        ClipId clip2 = split1.getRightClipId();
+
+        SplitClipCommand split2(clipId, 2.0);
+        split2.execute();
+        ClipId clip1b = split2.getRightClipId();
+
+        SplitClipCommand split3(clip2, 6.0);
+        split3.execute();
+        ClipId clip2b = split3.getRightClipId();
+
+        // All 4 clips should have 2 notes each
+        REQUIRE(clipManager.getClip(clipId)->midiNotes.size() == 2);
+        REQUIRE(clipManager.getClip(clip1b)->midiNotes.size() == 2);
+        REQUIRE(clipManager.getClip(clip2)->midiNotes.size() == 2);
+        REQUIRE(clipManager.getClip(clip2b)->midiNotes.size() == 2);
+    }
+}

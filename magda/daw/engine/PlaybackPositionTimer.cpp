@@ -56,7 +56,10 @@ void PlaybackPositionTimer::timerCallback() {
 
         // Session clip playhead callback (for per-clip progress bars)
         if (onSessionPlayheadUpdate) {
-            onSessionPlayheadUpdate(sessionPos);
+            auto clipPositions = engine_.getActiveClipPlayheadPositions();
+            if (!clipPositions.empty()) {
+                onSessionPlayheadUpdate(clipPositions);
+            }
         }
     }
 
