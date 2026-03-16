@@ -248,15 +248,6 @@ jobs:
 
   build-windows:
     runs-on: windows-latest
-    strategy:
-      matrix:
-        include:
-          - arch: x64
-            cmake_arch: x64
-            label: x86_64
-          - arch: amd64_arm64
-            cmake_arch: ARM64
-            label: arm64
     steps:
     - uses: actions/checkout@v4
       with:
@@ -277,7 +268,7 @@ jobs:
     - name: Setup MSVC
       uses: ilammy/msvc-dev-cmd@v1
       with:
-        arch: ${{ matrix.arch }}
+        arch: x64
 
     - name: Install Ninja
       shell: powershell
@@ -302,7 +293,7 @@ jobs:
       run: |
         cmake -B build -G Ninja `
           -DCMAKE_BUILD_TYPE=Release `
-          -DCMAKE_SYSTEM_PROCESSOR=${{ matrix.cmake_arch }} `
+          -DCMAKE_SYSTEM_PROCESSOR=x64 `
           -DMAGDA_BUILD_TESTS=OFF `
           -DCMAKE_C_COMPILER_LAUNCHER=sccache `
           -DCMAKE_CXX_COMPILER_LAUNCHER=sccache
@@ -341,7 +332,7 @@ jobs:
 
         makensis /DVERSION=$env:VERSION "$stagingDir\magda-installer.nsi"
 
-        $installerName = "MAGDA-$env:VERSION-Windows-${{ matrix.label }}-Setup.exe"
+        $installerName = "MAGDA-$env:VERSION-Windows-x86_64-Setup.exe"
         Move-Item "$stagingDir\MAGDA-$env:VERSION-Windows-Setup.exe" $installerName
 
         Write-Output "Installer created: $installerName"
@@ -352,7 +343,7 @@ jobs:
       env:
         VERSION: ${{ steps.version.outputs.version }}
       run: |
-        $installer = "MAGDA-$env:VERSION-Windows-${{ matrix.label }}-Setup.exe"
+        $installer = "MAGDA-$env:VERSION-Windows-x86_64-Setup.exe"
         $hash = Get-FileHash -Algorithm SHA256 $installer
         "$($hash.Hash)  $installer" | Out-File -Encoding utf8 "$installer.sha256"
         Get-Content "$installer.sha256"
@@ -360,10 +351,10 @@ jobs:
     - name: Upload artifact
       uses: actions/upload-artifact@v7
       with:
-        name: windows-${{ matrix.label }}-release
+        name: windows-x86_64-release
         path: |
-          MAGDA-*-Windows-${{ matrix.label }}-Setup.exe
-          MAGDA-*-Windows-${{ matrix.label }}-Setup.exe.sha256
+          MAGDA-*-Windows-x86_64-Setup.exe
+          MAGDA-*-Windows-x86_64-Setup.exe.sha256
 
     - name: Clean up
       if: always()
@@ -540,5 +531,4 @@ jobs:
         files: |
           macos-release/*
           windows-x86_64-release/*
-          windows-arm64-release/*
           linux-release/*
