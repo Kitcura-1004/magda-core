@@ -270,9 +270,9 @@ jobs:
       with:
         arch: x64
 
-    - name: Install Ninja
+    - name: Install Ninja and NSIS
       shell: powershell
-      run: choco install ninja -y
+      run: choco install ninja nsis -y
 
     - name: Install sccache
       shell: powershell
