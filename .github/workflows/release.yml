@@ -272,7 +272,9 @@ jobs:
 
     - name: Install Ninja and NSIS
       shell: powershell
-      run: choco install ninja nsis -y
+      run: |
+        choco install ninja nsis -y
+        echo "C:\Program Files (x86)\NSIS" >> $env:GITHUB_PATH
 
     - name: Install sccache
       shell: powershell
