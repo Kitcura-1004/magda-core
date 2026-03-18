@@ -189,7 +189,7 @@ PluginSettingsDialog::PluginSettingsDialog(TracktionEngineWrapper* engine)
         // Apply settings first so custom paths are used during scan
         applySettings();
 
-        scanButton_.setEnabled(false);
+        setScanningUIEnabled(false);
         scanProgress_ = 0.0;
         scanStatusLabel_.setText("Starting scan...", juce::dontSendNotification);
         scanProgressBar_.setVisible(true);
@@ -213,7 +213,7 @@ PluginSettingsDialog::PluginSettingsDialog(TracktionEngineWrapper* engine)
             juce::MessageManager::callAsync([safeThis, numPlugins, failedPlugins]() {
                 if (safeThis == nullptr)
                     return;
-                safeThis->scanButton_.setEnabled(true);
+                safeThis->setScanningUIEnabled(true);
                 safeThis->scanProgress_ = -1.0;
                 safeThis->scanProgressBar_.setVisible(false);
                 safeThis->scanStatusLabel_.setText(
@@ -306,16 +306,20 @@ PluginSettingsDialog::PluginSettingsDialog(TracktionEngineWrapper* engine)
     // OK / Cancel
     okButton_.setButtonText("OK");
     okButton_.onClick = [this]() {
+        if (isScanRunning())
+            return;
         applySettings();
         if (auto* dw = findParentComponentOfClass<juce::DialogWindow>())
-            dw->exitModalState(1);
+            dw->setVisible(false);
     };
     addAndMakeVisible(okButton_);
 
     cancelButton_.setButtonText("Cancel");
     cancelButton_.onClick = [this]() {
+        if (isScanRunning())
+            return;
         if (auto* dw = findParentComponentOfClass<juce::DialogWindow>())
-            dw->exitModalState(0);
+            dw->setVisible(false);
     };
     addAndMakeVisible(cancelButton_);
 
@@ -407,6 +411,17 @@ void PluginSettingsDialog::resized() {
     }
 }
 
+void PluginSettingsDialog::setScanningUIEnabled(bool enabled) {
+    addDirButton_.setEnabled(enabled);
+    removeDirButton_.setEnabled(enabled);
+    scanButton_.setEnabled(enabled);
+    viewReportButton_.setEnabled(enabled);
+    removeSelectedButton_.setEnabled(enabled);
+    resetAllButton_.setEnabled(enabled);
+    okButton_.setEnabled(enabled);
+    cancelButton_.setEnabled(enabled);
+}
+
 void PluginSettingsDialog::applySettings() {
     Config::getInstance().setCustomPluginPaths(customPaths_);
     Config::getInstance().save();
@@ -421,18 +436,40 @@ void PluginSettingsDialog::applySettings() {
     }
 }
 
+bool PluginSettingsDialog::isScanRunning() const {
+    if (!engine_)
+        return false;
+    auto* coordinator = engine_->getPluginScanCoordinator();
+    return coordinator && coordinator->isScanning();
+}
+
+// DialogWindow subclass that prevents closing while a scan is in progress
+class PluginSettingsDialogWindow : public juce::DialogWindow {
+  public:
+    PluginSettingsDialogWindow(const juce::String& title, juce::Colour bg, bool escapeCloses,
+                               PluginSettingsDialog* content)
+        : juce::DialogWindow(title, bg, escapeCloses, true), content_(content) {}
+
+    void closeButtonPressed() override {
+        if (content_ && content_->isScanRunning())
+            return;  // Block close while scanning
+        setVisible(false);
+    }
+
+  private:
+    PluginSettingsDialog* content_;
+};
+
 void PluginSettingsDialog::showDialog(TracktionEngineWrapper* engine, juce::Component* /*parent*/) {
     auto* dialog = new PluginSettingsDialog(engine);
+    auto bg = DarkTheme::getColour(DarkTheme::PANEL_BACKGROUND);
 
-    juce::DialogWindow::LaunchOptions options;
-    options.dialogTitle = "Plugin Settings";
-    options.dialogBackgroundColour = DarkTheme::getColour(DarkTheme::PANEL_BACKGROUND);
-    options.content.setOwned(dialog);
-    options.escapeKeyTriggersCloseButton = true;
-    options.useNativeTitleBar = true;
-    options.resizable = false;
-
-    options.launchAsync();
+    auto* window = new PluginSettingsDialogWindow("Plugin Settings", bg, false, dialog);
+    window->setContentOwned(dialog, true);
+    window->setUsingNativeTitleBar(true);
+    window->setResizable(false, false);
+    window->centreWithSize(dialog->getWidth(), dialog->getHeight());
+    window->setVisible(true);
 }
 
 void PluginSettingsDialog::setupSectionHeader(juce::Label& header, const juce::String& text) {

@@ -24,8 +24,12 @@ class PluginSettingsDialog : public juce::Component {
 
     static void showDialog(TracktionEngineWrapper* engine, juce::Component* parent);
 
+    /** Returns true if a plugin scan is currently in progress. */
+    bool isScanRunning() const;
+
   private:
     void applySettings();
+    void setScanningUIEnabled(bool enabled);
 
     // Inner model for custom directories ListBox
     class DirectoryListModel : public juce::ListBoxModel {

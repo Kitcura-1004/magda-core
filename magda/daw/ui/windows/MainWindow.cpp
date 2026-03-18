@@ -174,14 +174,25 @@ MainWindow::MainWindow(AudioEngine* audioEngine)
     setUsingNativeTitleBar(true);
     setResizable(true, true);
 
-    // Setup menu bar
-    setupMenuBar();
-
     mainComponent = new MainComponent(externalAudioEngine_);
     setContentOwned(mainComponent, true);  // Window takes ownership
 
-    setSize(1200, 800);
-    centreWithSize(getWidth(), getHeight());
+    // Setup menu bar
+    setupMenuBar();
+
+    // Size and position the window within the display's work area
+    auto display = juce::Desktop::getInstance().getDisplays().getPrimaryDisplay();
+    if (display != nullptr) {
+        auto workArea = display->userArea;  // Excludes taskbar
+        // Leave some margin so the title bar and window frame are fully visible
+        int margin = 10;
+        int w = juce::jmin(1200, workArea.getWidth() - margin * 2);
+        int h = juce::jmin(800, workArea.getHeight() - margin * 2);
+        setBoundsConstrained(workArea.withSizeKeepingCentre(w, h));
+    } else {
+        setSize(1200, 800);
+        centreWithSize(getWidth(), getHeight());
+    }
     setVisible(true);
 
     // Listen for project changes to update window title
@@ -208,8 +219,10 @@ MainWindow::~MainWindow() {
 
 #if JUCE_MAC
     DBG("  [5b] Clearing macOS menu bar...");
-    // Clear the macOS menu bar
     juce::MenuBarModel::setMacMainMenu(nullptr);
+#else
+    DBG("  [5b] Clearing menu bar...");
+    setMenuBar(nullptr);
 #endif
 
     DBG("  [5c] MainWindow::~MainWindow - about to destroy content");
@@ -1097,9 +1110,7 @@ void MainWindow::setupMenuBar() {
     juce::MenuBarModel::setMacMainMenu(MenuManager::getInstance().getMenuBarModel());
 #else
     // On other platforms, show menu bar in window
-    menuBar =
-        std::make_unique<juce::MenuBarComponent>(MenuManager::getInstance().getMenuBarModel());
-    addAndMakeVisible(menuBar.get());
+    setMenuBar(MenuManager::getInstance().getMenuBarModel());
 #endif
 }
 
