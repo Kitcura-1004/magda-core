@@ -464,19 +464,25 @@ void TrackHeadersPanel::timerCallback() {
         if (counter != header->lastMidiCounter) {
             header->lastMidiCounter = counter;
 
-            // Only show activity when monitoring is active
+            // Only show activity when monitoring is active AND the track
+            // is actually receiving MIDI (selected or record-armed)
             bool showActivity = false;
             if (auto* trackInfo = TrackManager::getInstance().getTrack(header->trackId)) {
-                switch (trackInfo->inputMonitor) {
-                    case InputMonitorMode::In:
-                        showActivity = true;
-                        break;
-                    case InputMonitorMode::Auto:
-                        showActivity = !bridge->isTransportPlaying();
-                        break;
-                    case InputMonitorMode::Off:
-                        showActivity = false;
-                        break;
+                bool receivingMidi =
+                    trackInfo->recordArmed ||
+                    SelectionManager::getInstance().getSelectedTrack() == header->trackId;
+                if (receivingMidi) {
+                    switch (trackInfo->inputMonitor) {
+                        case InputMonitorMode::In:
+                            showActivity = true;
+                            break;
+                        case InputMonitorMode::Auto:
+                            showActivity = !bridge->isTransportPlaying();
+                            break;
+                        case InputMonitorMode::Off:
+                            showActivity = false;
+                            break;
+                    }
                 }
             }
             if (showActivity) {
@@ -1630,6 +1636,24 @@ void TrackHeadersPanel::layoutControlArea(TrackHeader& header, juce::Rectangle<i
     const int nameRowHeight = 18;
     const int spacing = 2;
 
+    // Master track: skip name row to give all space to volume + mute
+    if (header.isMaster) {
+        header.nameLabel->setVisible(false);
+        header.collapseButton->setVisible(false);
+        header.audioInputSelector->setVisible(false);
+        header.inputSelector->setVisible(false);
+        header.outputSelector->setVisible(false);
+        header.midiOutputSelector->setVisible(false);
+        header.audioColumnLabel->setVisible(false);
+        header.midiColumnLabel->setVisible(false);
+        header.inputIcon->setVisible(false);
+        header.outputIcon->setVisible(false);
+        for (auto& sendLabel : header.sendLabels)
+            sendLabel->setVisible(false);
+        layoutVolPanAndButtons(header, tcpArea, inner);
+        return;
+    }
+
     // Top row: collapse button (if group) + name label
     // Name fills remaining width so no anchoring needed — just place collapse from left
     auto topRow = tcpArea.removeFromTop(nameRowHeight);
@@ -1648,6 +1672,7 @@ void TrackHeadersPanel::layoutControlArea(TrackHeader& header, juce::Rectangle<i
     // Leave some breathing room so the label doesn't span the full header width
     auto nameArea = topRow.withTrimmedRight(topRow.getWidth() / 4);
     header.nameLabel->setBounds(nameArea);
+    header.nameLabel->setVisible(true);
     header.nameLabel->setJustificationType(headersOnRight_ ? juce::Justification::centredRight
                                                            : juce::Justification::centredLeft);
     tcpArea.removeFromTop(3);

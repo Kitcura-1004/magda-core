@@ -318,6 +318,7 @@ void AudioBridge::updateMidiRoutingForSelection() {
 }
 
 void AudioBridge::trackDevicesChanged(TrackId trackId) {
+    DBG("AudioBridge::trackDevicesChanged: trackId=" << trackId);
     // Devices on a track changed - resync that track's plugins
     syncTrackPlugins(trackId);
 }
@@ -876,6 +877,30 @@ void AudioBridge::timerCallback() {
 
     // Update per-device metering
     deviceMetering_.updateAllClients();
+
+    // Feed track-level meter data to inner rack devices and rack volume sliders.
+    // NOTE: We use the track's output levels for all racks/devices on that track.
+    // This means multiple racks on the same track will show identical meters.
+    // Per-rack metering would require intercepting audio inside each RackType,
+    // which TE doesn't expose without custom graph nodes.
+    {
+        auto meteringMap = pluginManager_.getRackSyncManager().getMeteringMap();
+        for (const auto& [trackId, info] : meteringMap) {
+            MeterData trackMeter;
+            if (!meteringBuffer_.peekLatest(trackId, trackMeter))
+                continue;
+
+            for (auto devId : info.deviceIds) {
+                deviceMetering_.ensureEntry(devId);
+                deviceMetering_.setDirectLevels(devId, trackMeter.peakL, trackMeter.peakR);
+            }
+
+            for (auto rackId : info.rackIds) {
+                deviceMetering_.ensureRackEntry(rackId);
+                deviceMetering_.setRackDirectLevels(rackId, trackMeter.peakL, trackMeter.peakR);
+            }
+        }
+    }
 
     // Register master meter client with playback context if not done yet
     if (!masterMeterRegistered_) {

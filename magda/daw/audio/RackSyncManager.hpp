@@ -95,6 +95,28 @@ class RackSyncManager {
     std::vector<RackId> getSyncedRackIds() const;
 
     /**
+     * @brief Get synced rack IDs for a specific track
+     */
+    std::vector<RackId> getSyncedRackIdsForTrack(TrackId trackId) const;
+
+    /**
+     * @brief Get all inner device IDs for racks on a given track
+     */
+    std::vector<DeviceId> getInnerDeviceIdsForTrack(TrackId trackId) const;
+
+    /**
+     * @brief Pre-grouped metering info: per-track rack IDs and inner device IDs
+     *
+     * Built in a single pass over syncedRacks_. Used by AudioBridge's timer
+     * to avoid O(tracks × racks) per tick.
+     */
+    struct TrackMeteringInfo {
+        std::vector<RackId> rackIds;
+        std::vector<DeviceId> deviceIds;
+    };
+    std::unordered_map<TrackId, TrackMeteringInfo> getMeteringMap() const;
+
+    /**
      * @brief Clear all synced rack state (for shutdown)
      */
     void clear();
@@ -214,6 +236,11 @@ class RackSyncManager {
      * @brief Apply rack bypass state via wet/dry gains
      */
     void applyBypassState(SyncedRack& synced, const RackInfo& rackInfo);
+
+    /**
+     * @brief Capture plugin states for a single rack back to TrackManager DeviceInfo
+     */
+    void capturePluginStates(SyncedRack& synced);
 
     te::Edit& edit_;
     PluginManager& pluginManager_;
