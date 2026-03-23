@@ -760,6 +760,21 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Clip Inspector">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#audio-properties" class="md-nav__link">
+    <span class="md-ellipsis">
+      Audio Properties
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -1289,6 +1304,21 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Clip Inspector">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#audio-properties" class="md-nav__link">
+    <span class="md-ellipsis">
+      Audio Properties
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -1335,7 +1365,7 @@
 <p>Displayed when a track is selected. Shows:</p>
 <ul>
 <li><strong>Track name</strong> — Click to rename</li>
-<li><strong>Track color</strong> — Automatically assigned</li>
+<li><strong>Track color</strong> — Click the color swatch to choose a custom color, or leave as auto-assigned</li>
 <li><strong>Volume and pan</strong> — Numeric readouts and controls</li>
 <li><strong>Input routing</strong> — Select audio/MIDI input source</li>
 <li><strong>Output routing</strong> — Select audio/MIDI output destination</li>
@@ -1344,12 +1374,21 @@
 <h2 id="clip-inspector">Clip Inspector<a class="headerlink" href="#clip-inspector" title="Permanent link">&para;</a></h2>
 <p>Displayed when a clip is selected. Shows:</p>
 <ul>
-<li><strong>Position</strong> — Start time and length on the timeline</li>
+<li><strong>Clip name</strong> — Click to rename</li>
+<li><strong>Clip color</strong> — Click the color swatch to choose a custom color</li>
+<li><strong>Position</strong> — Start time, end time, and phase offset on the timeline</li>
 <li><strong>Loop settings</strong> — Loop on/off, loop start, loop length</li>
-<li><strong>Warp</strong> — Time-stretch mode and settings (audio clips)</li>
-<li><strong>Pitch</strong> — Transpose and fine-tune (audio clips)</li>
-<li><strong>Fades</strong> — Fade-in and fade-out length and curve</li>
-<li><strong>Session launch properties</strong> — Trigger mode, quantize, follow action (Session View clips)</li>
+</ul>
+<h3 id="audio-properties">Audio Properties<a class="headerlink" href="#audio-properties" title="Permanent link">&para;</a></h3>
+<p>For audio clips, the inspector shows additional controls:</p>
+<ul>
+<li><strong>Warp / Beat</strong> — Toggle time-stretch mode; select algorithm (e.g. SoundTouch HQ)</li>
+<li><strong>Tempo</strong> — Source BPM and beat length detection</li>
+<li><strong>Transient Detection</strong> — Sensitivity slider for transient markers</li>
+<li><strong>Pitch</strong> — Transpose in semitones</li>
+<li><strong>Mix</strong> — Volume, pan, and gain controls</li>
+<li><strong>Reverse</strong> — Reverse the clip audio</li>
+<li><strong>Launch Quantize</strong> — Quantize setting for Session View clip launching</li>
 </ul>
 <h2 id="note-inspector">Note Inspector<a class="headerlink" href="#note-inspector" title="Permanent link">&para;</a></h2>
 <p>Displayed when one or more MIDI notes are selected in the Piano Roll. Shows:</p>
