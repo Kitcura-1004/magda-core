@@ -689,10 +689,12 @@ void MainWindow::MainComponent::setupAudioEngineCallbacks(AudioEngine* engine) {
             if (sessionView)
                 sessionView->setSessionPlayheadPositions(clipPositions);
         };
-    positionTimer_->onCpuUsageUpdate = [this](float cpu, int xruns) {
+    positionTimer_->onCpuUsageUpdate = [this](float cpu, int xruns, const juce::String& deviceName,
+                                              double sampleRate, int bufferSize) {
         if (transportPanel) {
             transportPanel->setCpuUsage(cpu);
             transportPanel->setXrunCount(xruns);
+            transportPanel->setAudioDeviceInfo(deviceName, sampleRate, bufferSize);
         }
     };
     positionTimer_->start();  // Start once and keep running
