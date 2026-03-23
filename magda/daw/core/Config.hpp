@@ -1,6 +1,7 @@
 #pragma once
 
-#include <memory>
+#include <array>
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -304,6 +305,50 @@ class Config {
         openaiModel = model;
     }
 
+    // Unified default colour palette (tracks + clips share the same palette)
+    struct ColourEntry {
+        uint32_t colour;
+        const char* name;
+    };
+
+    static constexpr std::array<ColourEntry, 8> defaultColourPalette = {{
+        {0xFF5588AA, "Blue"},
+        {0xFF55AA88, "Teal"},
+        {0xFF88AA55, "Green"},
+        {0xFFAAAA55, "Yellow"},
+        {0xFFAA8855, "Orange"},
+        {0xFFAA5555, "Red"},
+        {0xFFAA55AA, "Purple"},
+        {0xFF5555AA, "Indigo"},
+    }};
+
+    static uint32_t getDefaultColour(int index) {
+        return defaultColourPalette[static_cast<size_t>(index) % defaultColourPalette.size()]
+            .colour;
+    }
+
+    // Custom colour palette (user-defined via Preferences)
+    struct TrackColourEntry {
+        uint32_t colour;
+        std::string name;
+    };
+
+    std::vector<TrackColourEntry> getTrackColourPalette() const {
+        return trackColourPalette;
+    }
+    void setTrackColourPalette(const std::vector<TrackColourEntry>& palette) {
+        trackColourPalette = palette;
+    }
+
+    // Clip colour mode: how new clips get their colour
+    // 0 = inherit from parent track, 1 = cycle through default palette
+    int getClipColourMode() const {
+        return clipColourMode;
+    }
+    void setClipColourMode(int mode) {
+        clipColourMode = mode;
+    }
+
     // Track Deletion Configuration
     bool getConfirmTrackDelete() const {
         return confirmTrackDelete;
@@ -413,6 +458,12 @@ class Config {
 
     // Preview output channel (stereo pair offset: 0 = outputs 1-2, 2 = outputs 3-4, etc.)
     int previewOutputChannel = 0;
+
+    // Clip colour mode: 0 = inherit from parent track, 1 = cycle through default palette
+    int clipColourMode = 0;
+
+    // Custom colour palette (ARGB hex + display name, user-defined via Preferences)
+    std::vector<TrackColourEntry> trackColourPalette;
 
     // Layout settings
     bool scrollbarOnLeft = false;  // Scrollbar on right by default

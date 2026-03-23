@@ -151,10 +151,11 @@ class MixerView::ChannelStrip::DbScale : public juce::Component {
         const float dbValues[] = {6.0f,   3.0f,   0.0f,   -3.0f,  -6.0f,
                                   -12.0f, -18.0f, -24.0f, -36.0f, -48.0f};
 
-        // The component has extra padding at top/bottom for label overflow.
-        // The fader-aligned area starts at paddingTop and has faderHeight.
-        float paddingTop = metrics.labelTextHeight / 2.0f + 1.0f;
-        float paddingBottom = metrics.labelTextHeight / 2.0f;
+        // The component extends above/below the fader area by thumbRadius.
+        // JUCE's slider thumb travels within [bounds.Y + thumbRad, bounds.Bottom - thumbRad],
+        // so from this component's top, the travel area starts at 2*thumbRad.
+        float paddingTop = 2.0f * metrics.thumbRadius();
+        float paddingBottom = 2.0f * metrics.thumbRadius();
         float top = paddingTop;
         float height = static_cast<float>(bounds.getHeight()) - paddingTop - paddingBottom;
         float totalWidth = static_cast<float>(bounds.getWidth());
@@ -221,9 +222,10 @@ MixerView::ChannelStrip::~ChannelStrip() = default;
 void MixerView::ChannelStrip::updateFromTrack(const TrackInfo& track) {
     bool wasChild = isChildTrack_;
     isChildTrack_ = track.hasParent();
+    bool colourChanged = trackColour_ != track.colour;
     trackColour_ = track.colour;
     trackName_ = track.name;
-    if (isChildTrack_ != wasChild)
+    if (isChildTrack_ != wasChild || colourChanged)
         repaint();
 
     if (trackLabel) {
@@ -309,9 +311,9 @@ void MixerView::ChannelStrip::setupControls() {
     trackLabel->setText(isMaster_ ? "Master" : trackName_, juce::dontSendNotification);
     trackLabel->setJustificationType(juce::Justification::centred);
     trackLabel->setColour(juce::Label::textColourId, DarkTheme::getColour(DarkTheme::TEXT_PRIMARY));
-    trackLabel->setColour(juce::Label::backgroundColourId,
-                          DarkTheme::getColour(DarkTheme::PANEL_BACKGROUND));
+    trackLabel->setColour(juce::Label::backgroundColourId, juce::Colours::transparentBlack);
     trackLabel->setFont(FontManager::getInstance().getUIFont(10.0f));
+    trackLabel->setInterceptsMouseClicks(false, false);
     addAndMakeVisible(*trackLabel);
 
     // Pan slider (horizontal TextSlider)
@@ -354,6 +356,8 @@ void MixerView::ChannelStrip::setupControls() {
         float db = meterPosToDb(static_cast<float>(pos));
         if (db <= MIN_DB)
             return "-inf";
+        if (std::abs(db) < 0.05f)
+            db = 0.0f;
         return juce::String(db, 1);
     });
     // Parse typed dB input
@@ -479,9 +483,24 @@ void MixerView::ChannelStrip::setupControls() {
         sendResizeHandle_ = std::make_unique<SendResizeHandle>();
         sendResizeHandle_->onResize = [this](int deltaY) {
             auto& metrics = MixerMetrics::getInstance();
-            int newHeight =
-                juce::jlimit(MixerMetrics::minSendAreaHeight, MixerMetrics::maxSendAreaHeight,
-                             metrics.sendAreaHeight + deltaY);
+            // Min height = actual content height (can't shrink below sends)
+            int contentHeight = 0;
+            for (size_t i = 0; i < sendSlots_.size(); ++i)
+                contentHeight += 18 + 1;  // sendSlotHeight + gap
+            int minHeight = juce::jmax(MixerMetrics::minSendAreaHeight, contentHeight);
+            // Max height: total height minus fixed UI elements
+            int fixedHeight = 38                        // colour bar + label
+                              + metrics.controlSpacing  // spacing after label
+                              + 2                       // gap before sends
+                              + 6                       // resize handle
+                              + 120                     // minimum fader region
+                              + 24                      // pan + gaps
+                              + metrics.buttonSize      // M/S row
+                              + (metrics.showMonitor ? metrics.buttonSize + 2 : 0)  // R/Mon row
+                              + (metrics.showRouting ? 40 : 0)                      // routing rows
+                              + metrics.channelPadding * 2;  // top+bottom padding
+            int maxHeight = juce::jmax(minHeight, getHeight() - fixedHeight);
+            int newHeight = juce::jlimit(minHeight, maxHeight, metrics.sendAreaHeight + deltaY);
             if (metrics.sendAreaHeight != newHeight) {
                 metrics.sendAreaHeight = newHeight;
                 if (onSendAreaResized)
@@ -742,16 +761,28 @@ void MixerView::ChannelStrip::paint(juce::Graphics& g) {
     g.fillRect(ownBounds.getRight() - 1, 0, 1, ownBounds.getHeight());
 
     // Channel color indicator at top — skip for children nested in group (envelope provides this)
-    // When selected, use accent blue as top border instead of track colour
-    if (!isNestedInGroup) {
+    // Also skip for group parents with children (group header provides colouring)
+    if (!isNestedInGroup && !hasGroupChildren) {
+        int tintHeight = 34;
         if (selected) {
-            g.setColour(DarkTheme::getColour(DarkTheme::ACCENT_BLUE));
-        } else if (!isMaster_) {
-            g.setColour(trackColour_);
+            // Selected: black header with white text
+            g.setColour(juce::Colours::black);
+            g.fillRect(0, 0, ownBounds.getWidth() - 1, 4 + tintHeight);
+            g.setColour(DarkTheme::getColour(DarkTheme::BORDER));
+            g.fillRect(0, 4 + tintHeight, ownBounds.getWidth() - 1, 1);
         } else {
-            g.setColour(DarkTheme::getColour(DarkTheme::ACCENT_BLUE));
+            // Colour bar
+            g.setColour(trackColour_);
+            g.fillRect(0, 0, ownBounds.getWidth() - 1, 4);
+
+            // Tinted name area
+            {
+                g.setColour(trackColour_.withAlpha(0.5f));
+                g.fillRect(0, 4, ownBounds.getWidth() - 1, tintHeight);
+                g.setColour(DarkTheme::getColour(DarkTheme::BORDER));
+                g.fillRect(0, 4 + tintHeight, ownBounds.getWidth() - 1, 1);
+            }
         }
-        g.fillRect(0, 0, ownBounds.getWidth() - 1, 4);
     }
 
     // Draw fader region border (top and bottom lines)
@@ -767,16 +798,16 @@ void MixerView::ChannelStrip::paint(juce::Graphics& g) {
     if (hasGroupChildren) {
         const int groupHeaderHeight = 4 + 4 + 24 + MixerMetrics::getInstance().controlSpacing;
 
-        // Fill the header banner area across full width
-        g.setColour(DarkTheme::getColour(DarkTheme::PANEL_BACKGROUND));
+        // Fill the header banner with track colour (darkened to keep hue consistent)
+        g.setColour(trackColour_.darker(0.4f));
         g.fillRect(0, 0, fullBounds.getWidth(), groupHeaderHeight);
 
         // Colour bar across entire top
         g.setColour(trackColour_);
         g.fillRect(2, 2, fullBounds.getWidth() - 4, 4);
 
-        // Horizontal separator below header (drawn in paint, before children)
-        g.setColour(trackColour_.withAlpha(0.4f));
+        // Horizontal separator below header
+        g.setColour(trackColour_.withAlpha(0.5f));
         g.fillRect(0, groupHeaderHeight, fullBounds.getWidth(), 1);
     }
 }
@@ -819,10 +850,10 @@ void MixerView::ChannelStrip::resized() {
     // across the full width, then position children below it
     if (hasGroupChildren) {
         int channelWidth = metrics.channelWidth;
-        int childTop = groupHeaderHeight;
-        int childHeight = getHeight() - childTop;
-
         const int borderWidth = 2;
+        int childTop = groupHeaderHeight + 1;                    // below separator line
+        int childHeight = getHeight() - childTop - borderWidth;  // above bottom border
+
         for (size_t i = 0; i < groupChildren_.size(); ++i) {
             bool isLast = (i == groupChildren_.size() - 1);
             int w = isLast ? channelWidth - borderWidth : channelWidth;
@@ -841,17 +872,19 @@ void MixerView::ChannelStrip::resized() {
         juce::Rectangle<int>(0, ownTop, ownWidth, ownHeight).reduced(metrics.channelPadding);
 
     if (hasGroupChildren) {
-        // Group: label is part of the shared header banner (already positioned above)
-        // Position label in the header area spanning full width
-        auto headerBounds = juce::Rectangle<int>(0, 0, getWidth(), groupHeaderHeight)
+        // Group: label in the header, left-aligned next to expand toggle
+        auto headerBounds = juce::Rectangle<int>(0, 0, metrics.channelWidth, groupHeaderHeight)
                                 .reduced(metrics.channelPadding);
         headerBounds.removeFromTop(6);  // colour bar space
         auto titleRow = headerBounds.removeFromTop(24);
         if (expandToggle_) {
             expandToggle_->setBounds(titleRow.removeFromLeft(20).withSizeKeepingCentre(18, 18));
             titleRow.removeFromLeft(2);
+            expandToggle_->toFront(false);
         }
+        trackLabel->setJustificationType(juce::Justification::centredLeft);
         trackLabel->setBounds(titleRow);
+        trackLabel->toFront(false);
     } else {
         // Non-group: colour bar space + label at top of own bounds
         bounds.removeFromTop(6);
@@ -864,11 +897,11 @@ void MixerView::ChannelStrip::resized() {
     }
     bounds.removeFromTop(metrics.controlSpacing);
 
-    // Sends area (scrollable viewport) — between track label and fader
+    bool isMultiOut = trackType_ == TrackType::MultiOut;
+
+    // Sends area (scrollable viewport)
     if (!isMaster_ && sendViewport_) {
         const int sendSlotHeight = 18;
-        const int sendAreaHeight = metrics.sendAreaHeight;
-
         // Layout send slots inside the container
         int containerWidth = bounds.getWidth();
         int totalContentHeight = 0;
@@ -883,62 +916,27 @@ void MixerView::ChannelStrip::resized() {
 
         sendContainer_->setBounds(0, 0, containerWidth, totalContentHeight);
         bounds.removeFromTop(2);  // Gap between track header and sends/handle
-        sendViewport_->setBounds(bounds.removeFromTop(sendAreaHeight));
-        sendViewport_->setVisible(sendAreaHeight > 0);
 
-        // Resize handle overlapping the bottom of the sends viewport
+        // Clamp send area height: never smaller than actual content
+        int sendAreaHeight = juce::jmax(metrics.sendAreaHeight, totalContentHeight);
+        sendViewport_->setBounds(bounds.removeFromTop(sendAreaHeight));
+        sendViewport_->setVisible(totalContentHeight > 0);
+
+        // Send resize handle — always visible
         if (sendResizeHandle_) {
-            int handleH = 8;
-            int handleOverlap = 6;
-            sendResizeHandle_->setBounds(bounds.getX(), bounds.getY() - handleH - handleOverlap,
-                                         bounds.getWidth(), handleH);
+            sendResizeHandle_->setVisible(true);
+            sendResizeHandle_->setBounds(bounds.removeFromTop(6));
             sendResizeHandle_->setAlwaysOnTop(true);
         }
     }
 
-    // M/S/R/Mon buttons at bottom — multi-out children only show M/S
-    bool isMultiOut = trackType_ == TrackType::MultiOut;
-    auto buttonArea = bounds.removeFromBottom(metrics.buttonSize);
+    // Bottom section (removeFromBottom, so bottommost first):
+    // Omidi | Oaudio
+    // Imidi | Iaudio
+    // R     | M
+    // M     | S
 
-    if (isMaster_) {
-        // Master: M only
-        muteButton->setBounds(buttonArea);
-        soloButton->setVisible(false);
-        if (recordButton)
-            recordButton->setVisible(false);
-        if (monitorButton)
-            monitorButton->setVisible(false);
-    } else if (isMultiOut || !recordButton) {
-        // M/S only
-        int buttonWidth = (buttonArea.getWidth() - 2) / 2;
-        muteButton->setBounds(buttonArea.removeFromLeft(buttonWidth));
-        buttonArea.removeFromLeft(2);
-        soloButton->setBounds(buttonArea);
-        soloButton->setVisible(true);
-        if (recordButton)
-            recordButton->setVisible(false);
-        if (monitorButton)
-            monitorButton->setVisible(false);
-    } else {
-        int numButtons = monitorButton ? 4 : 3;
-        int buttonWidth = (buttonArea.getWidth() - (numButtons - 1) * 2) / numButtons;
-        muteButton->setBounds(buttonArea.removeFromLeft(buttonWidth));
-        buttonArea.removeFromLeft(2);
-        soloButton->setBounds(buttonArea.removeFromLeft(buttonWidth));
-        buttonArea.removeFromLeft(2);
-        recordButton->setVisible(true);
-        if (!monitorButton) {
-            recordButton->setBounds(buttonArea);
-        } else {
-            monitorButton->setVisible(true);
-            recordButton->setBounds(buttonArea.removeFromLeft(buttonWidth));
-            buttonArea.removeFromLeft(2);
-            monitorButton->setBounds(buttonArea);
-        }
-    }
-
-    // Routing selectors above M/S/R
-    // Multi-out children: show audio out only (no input, no MIDI)
+    // Routing selectors (bottommost)
     if (audioInSelector && audioOutSelector && midiInSelector && midiOutSelector) {
         if (metrics.showRouting) {
             bool showInputs = !isMultiOut;
@@ -949,28 +947,32 @@ void MixerView::ChannelStrip::resized() {
             midiInSelector->setVisible(showMidi);
             midiOutSelector->setVisible(showMidi);
 
-            bounds.removeFromBottom(2);  // Small gap
+            bounds.removeFromBottom(2);
 
+            // Output row: Omidi | Oaudio
+            auto outRow = bounds.removeFromBottom(16);
             if (showMidi) {
-                // MIDI row (Mi/Mo)
-                auto midiRow = bounds.removeFromBottom(16);
-                int halfWidth = (midiRow.getWidth() - 2) / 2;
-                midiInSelector->setBounds(midiRow.removeFromLeft(halfWidth));
-                midiRow.removeFromLeft(2);
-                midiOutSelector->setBounds(midiRow);
-
-                bounds.removeFromBottom(2);  // Small gap
+                int halfWidth = (outRow.getWidth() - 2) / 2;
+                midiOutSelector->setBounds(outRow.removeFromLeft(halfWidth));
+                outRow.removeFromLeft(2);
+                audioOutSelector->setBounds(outRow);
+            } else {
+                audioOutSelector->setBounds(outRow);
             }
 
-            // Audio row (Ai/Ao or just Ao for multi-out)
-            auto audioRow = bounds.removeFromBottom(16);
-            if (showInputs) {
-                int halfWidth = (audioRow.getWidth() - 2) / 2;
-                audioInSelector->setBounds(audioRow.removeFromLeft(halfWidth));
-                audioRow.removeFromLeft(2);
-                audioOutSelector->setBounds(audioRow);
+            bounds.removeFromBottom(2);
+
+            // Input row: Imidi | Iaudio
+            auto inRow = bounds.removeFromBottom(16);
+            if (showInputs && showMidi) {
+                int halfWidth = (inRow.getWidth() - 2) / 2;
+                midiInSelector->setBounds(inRow.removeFromLeft(halfWidth));
+                inRow.removeFromLeft(2);
+                audioInSelector->setBounds(inRow);
+            } else if (showInputs) {
+                audioInSelector->setBounds(inRow);
             } else {
-                audioOutSelector->setBounds(audioRow);
+                // Multi-out: no inputs
             }
         } else {
             audioInSelector->setVisible(false);
@@ -980,7 +982,69 @@ void MixerView::ChannelStrip::resized() {
         }
     }
 
-    // Pan slider — now below fader region, above routing (hidden for master)
+    // M/S/R/M buttons — two rows of two above routing
+    {
+        bounds.removeFromBottom(2);
+
+        if (isMaster_) {
+            auto row = bounds.removeFromBottom(metrics.buttonSize);
+            muteButton->setBounds(row);
+            soloButton->setVisible(false);
+            if (recordButton)
+                recordButton->setVisible(false);
+            if (monitorButton)
+                monitorButton->setVisible(false);
+        } else if (isMultiOut || !recordButton) {
+            // M/S only — single row
+            auto row = bounds.removeFromBottom(metrics.buttonSize);
+            int halfWidth = (row.getWidth() - 2) / 2;
+            muteButton->setBounds(row.removeFromLeft(halfWidth));
+            row.removeFromLeft(2);
+            soloButton->setBounds(row);
+            soloButton->setVisible(true);
+            if (recordButton)
+                recordButton->setVisible(false);
+            if (monitorButton)
+                monitorButton->setVisible(false);
+        } else {
+            if (metrics.showMonitor) {
+                // Bottom row: R | M(onitor)
+                auto row2 = bounds.removeFromBottom(metrics.buttonSize);
+                int halfWidth = (row2.getWidth() - 2) / 2;
+                recordButton->setBounds(row2.removeFromLeft(halfWidth));
+                recordButton->setVisible(true);
+                row2.removeFromLeft(2);
+                if (monitorButton) {
+                    monitorButton->setBounds(row2);
+                    monitorButton->setVisible(true);
+                }
+
+                bounds.removeFromBottom(2);
+
+                // Top row: M | S
+                auto row1 = bounds.removeFromBottom(metrics.buttonSize);
+                halfWidth = (row1.getWidth() - 2) / 2;
+                muteButton->setBounds(row1.removeFromLeft(halfWidth));
+                row1.removeFromLeft(2);
+                soloButton->setBounds(row1);
+                soloButton->setVisible(true);
+            } else {
+                // Single row: M | S (R and monitor hidden)
+                auto row = bounds.removeFromBottom(metrics.buttonSize);
+                int halfWidth = (row.getWidth() - 2) / 2;
+                muteButton->setBounds(row.removeFromLeft(halfWidth));
+                row.removeFromLeft(2);
+                soloButton->setBounds(row);
+                soloButton->setVisible(true);
+                if (recordButton)
+                    recordButton->setVisible(false);
+                if (monitorButton)
+                    monitorButton->setVisible(false);
+            }
+        }
+    }
+
+    // Pan slider — above M/S/R/M (hidden for master)
     if (isMaster_) {
         panSlider->setVisible(false);
     } else {
@@ -989,6 +1053,11 @@ void MixerView::ChannelStrip::resized() {
         panSlider->setBounds(bounds.removeFromBottom(20));
         bounds.removeFromBottom(2);
     }
+
+    // Peak value label above fader region
+    const int labelHeight = 12;
+    bounds.removeFromTop(2);
+    peakLabel->setBounds(bounds.removeFromTop(labelHeight));
 
     // Small gap before fader region
     bounds.removeFromTop(2);
@@ -1002,13 +1071,6 @@ void MixerView::ChannelStrip::resized() {
 
     // Store the entire fader region for border drawing
     faderRegion_ = bounds;
-
-    // Position peak label right above the fader region top border
-    const int labelHeight = 12;
-    auto valueLabelArea =
-        juce::Rectangle<int>(faderRegion_.getX(), faderRegion_.getY() - labelHeight,
-                             faderRegion_.getWidth(), labelHeight);
-    peakLabel->setBounds(valueLabelArea);
 
     // Add vertical padding inside the border
     bounds.removeFromTop(6);
@@ -1026,11 +1088,11 @@ void MixerView::ChannelStrip::resized() {
 
     // dB scale component — extends above/below fader area for label overflow
     if (dbScale_) {
-        int labelPad = static_cast<int>(metrics.labelTextHeight / 2.0f + 1.0f);
+        int thumbRad = static_cast<int>(metrics.thumbRadius());
         int scaleLeft = faderArea_.getRight() + gap;
         int scaleRight = meterArea_.getX() - metrics.tickToMeterGap;
-        dbScale_->setBounds(scaleLeft, layoutArea.getY() - labelPad, scaleRight - scaleLeft,
-                            layoutArea.getHeight() + labelPad * 2);
+        dbScale_->setBounds(scaleLeft, layoutArea.getY() - thumbRad, scaleRight - scaleLeft,
+                            layoutArea.getHeight() + thumbRad * 2);
     }
 }
 
@@ -1050,6 +1112,8 @@ void MixerView::ChannelStrip::setMeterLevels(float leftLevel, float rightLevel) 
         peakValue_ = maxLevel;
         if (peakLabel) {
             float db = gainToDb(peakValue_);
+            if (std::abs(db) < 0.05f)
+                db = 0.0f;
             juce::String peakText;
             if (db <= MIN_DB) {
                 peakText = "-inf";
@@ -1064,6 +1128,9 @@ void MixerView::ChannelStrip::setMeterLevels(float leftLevel, float rightLevel) 
 void MixerView::ChannelStrip::setSelected(bool shouldBeSelected) {
     if (selected != shouldBeSelected) {
         selected = shouldBeSelected;
+        trackLabel->setColour(juce::Label::textColourId,
+                              selected ? juce::Colours::white
+                                       : DarkTheme::getColour(DarkTheme::TEXT_PRIMARY));
         repaint();
     }
 }
@@ -1098,7 +1165,9 @@ void MixerView::ChannelStrip::mouseDown(const juce::MouseEvent& event) {
         auto& metrics = MixerMetrics::getInstance();
         const int toggleRoutingId = -100;
         const int deleteTrackId = -101;
+        const int toggleMonitorId = -102;
         menu.addItem(toggleRoutingId, "Show I/O Routing", true, metrics.showRouting);
+        menu.addItem(toggleMonitorId, "Show Monitor", true, metrics.showMonitor);
 
         if (!isMaster_) {
             menu.addSeparator();
@@ -1110,7 +1179,12 @@ void MixerView::ChannelStrip::mouseDown(const juce::MouseEvent& event) {
                 auto& m = MixerMetrics::getInstance();
                 m.showRouting = !m.showRouting;
                 if (onSendAreaResized)
-                    onSendAreaResized();  // Triggers relayout of all strips
+                    onSendAreaResized();
+            } else if (result == -102) {
+                auto& m = MixerMetrics::getInstance();
+                m.showMonitor = !m.showMonitor;
+                if (onSendAreaResized)
+                    onSendAreaResized();
             } else if (result == -101) {
                 UndoManager::getInstance().executeCommand(
                     std::make_unique<DeleteTrackCommand>(trackId_));
@@ -1191,6 +1265,8 @@ void MixerView::DrumSubChannelStrip::setupControls() {
         float db = meterPosToDb(static_cast<float>(pos));
         if (db <= MIN_DB)
             return "-inf";
+        if (std::abs(db) < 0.05f)
+            db = 0.0f;
         return juce::String(db, 1);
     });
     volumeSlider->setValueParser([](const juce::String& text) -> double {
@@ -1276,6 +1352,8 @@ void MixerView::DrumSubChannelStrip::setMeterLevels(float l, float r) {
         peakValue_ = maxLevel;
         if (peakLabel) {
             float db = gainToDb(peakValue_);
+            if (std::abs(db) < 0.05f)
+                db = 0.0f;
             juce::String peakText;
             if (db <= MIN_DB)
                 peakText = "-inf";
@@ -1293,13 +1371,11 @@ void MixerView::DrumSubChannelStrip::paint(juce::Graphics& g) {
     g.setColour(DarkTheme::getColour(DarkTheme::PANEL_BACKGROUND).darker(0.15f));
     g.fillRect(bounds);
 
-    // Border on right side (separator)
+    // Border on right side (separator) — start below the name area
     g.setColour(DarkTheme::getColour(DarkTheme::SEPARATOR));
-    g.fillRect(bounds.getRight() - 1, 0, 1, bounds.getHeight());
-
-    // Indented color bar at top matching parent track colour
-    g.setColour(parentColour_.withAlpha(0.6f));
-    g.fillRect(4, 0, getWidth() - 5, 3);
+    int separatorTop =
+        5 + 24 + MixerMetrics::getInstance().channelPadding;  // below color bar + label
+    g.fillRect(bounds.getRight() - 1, separatorTop, 1, bounds.getHeight() - separatorTop);
 
     // Draw fader region border
     if (!faderRegion_.isEmpty()) {
@@ -1490,6 +1566,9 @@ MixerView::~MixerView() {
     // mixerLookAndFeel_ is destroyed (member destruction happens in reverse order)
     for (auto& strip : channelStrips)
         strip->groupChildren_.clear();
+    for (auto* dg : listenedDrumGrids_)
+        dg->removeListener(this);
+    listenedDrumGrids_.clear();
     drumSubStrips_.clear();
     orderedStrips_.clear();
     channelStrips.clear();
@@ -1503,6 +1582,11 @@ MixerView::~MixerView() {
 }
 
 void MixerView::rebuildChannelStrips() {
+    // Unregister from previously listened DrumGridPlugins
+    for (auto* dg : listenedDrumGrids_)
+        dg->removeListener(this);
+    listenedDrumGrids_.clear();
+
     // Clear group children references before destroying strips
     for (auto& strip : channelStrips)
         strip->groupChildren_.clear();
@@ -1531,26 +1615,6 @@ void MixerView::rebuildChannelStrips() {
             }
         }
 
-        // Skip collapsed multi-out children
-        if (track.type == TrackType::MultiOut && track.multiOutLink) {
-            if (auto* parent =
-                    TrackManager::getInstance().getTrack(track.multiOutLink->sourceTrackId)) {
-                bool skipTrack = false;
-                for (const auto& elem : parent->chainElements) {
-                    if (isDevice(elem)) {
-                        const auto& dev = getDevice(elem);
-                        if (dev.id == track.multiOutLink->sourceDeviceId &&
-                            dev.multiOut.isMultiOut && dev.multiOut.mixerChildrenCollapsed) {
-                            skipTrack = true;
-                            break;
-                        }
-                    }
-                }
-                if (skipTrack)
-                    continue;
-            }
-        }
-
         auto strip = std::make_unique<ChannelStrip>(track, audioEngine_, false);
         strip->onClicked = [this](int trackId, bool isMaster) {
             // Find the index of this track in the visible strips
@@ -1569,6 +1633,12 @@ void MixerView::rebuildChannelStrips() {
         auto* drumGrid = findDrumGridForTrack(track, audioEngine_);
         if (drumGrid) {
             strip->drumGrid_ = drumGrid;
+            // Register for chain add/remove notifications
+            if (std::find(listenedDrumGrids_.begin(), listenedDrumGrids_.end(), drumGrid) ==
+                listenedDrumGrids_.end()) {
+                drumGrid->addListener(this);
+                listenedDrumGrids_.push_back(drumGrid);
+            }
 
             // Create expand toggle button
             strip->expandToggle_ = std::make_unique<juce::TextButton>(
@@ -1611,54 +1681,6 @@ void MixerView::rebuildChannelStrips() {
                 rebuildChannelStrips();
             };
             strip->addAndMakeVisible(*strip->expandToggle_);
-        }
-
-        // Check if this track has active multi-out children (and no DrumGrid toggle already)
-        if (!drumGrid && !track.isGroup()) {
-            bool hasActiveMultiOut = false;
-            bool isCollapsed = false;
-            TrackId trackId = track.id;
-            DeviceId multiOutDeviceId = INVALID_DEVICE_ID;
-            for (const auto& elem : track.chainElements) {
-                if (isDevice(elem)) {
-                    const auto& dev = getDevice(elem);
-                    if (dev.multiOut.isMultiOut) {
-                        for (const auto& pair : dev.multiOut.outputPairs) {
-                            if (pair.active) {
-                                hasActiveMultiOut = true;
-                                break;
-                            }
-                        }
-                        if (hasActiveMultiOut) {
-                            multiOutDeviceId = dev.id;
-                            isCollapsed = dev.multiOut.mixerChildrenCollapsed;
-                            break;
-                        }
-                    }
-                }
-            }
-
-            if (hasActiveMultiOut) {
-                strip->expandToggle_ = std::make_unique<juce::TextButton>(
-                    isCollapsed ? juce::String::charToString(0x25B6)    // ▶
-                                : juce::String::charToString(0x25BC));  // ▼
-                strip->expandToggle_->setConnectedEdges(
-                    juce::Button::ConnectedOnLeft | juce::Button::ConnectedOnRight |
-                    juce::Button::ConnectedOnTop | juce::Button::ConnectedOnBottom);
-                strip->expandToggle_->setColour(juce::TextButton::buttonColourId,
-                                                DarkTheme::getColour(DarkTheme::BUTTON_NORMAL));
-                strip->expandToggle_->setColour(juce::TextButton::textColourOffId,
-                                                DarkTheme::getColour(DarkTheme::TEXT_SECONDARY));
-                strip->expandToggle_->onClick = [this, trackId, multiOutDeviceId]() {
-                    auto* dev = TrackManager::getInstance().getDevice(trackId, multiOutDeviceId);
-                    if (dev && dev->multiOut.isMultiOut) {
-                        dev->multiOut.mixerChildrenCollapsed =
-                            !dev->multiOut.mixerChildrenCollapsed;
-                    }
-                    rebuildChannelStrips();
-                };
-                strip->addAndMakeVisible(*strip->expandToggle_);
-            }
         }
 
         channelStrips.push_back(std::move(strip));
@@ -1718,16 +1740,6 @@ void MixerView::rebuildChannelStrips() {
                         continue;
                     }
                 }
-            }
-        }
-
-        // --- Nest multi-out children inside their source parent ---
-        if (trackInfo->type == TrackType::MultiOut && trackInfo->multiOutLink) {
-            auto it = stripByTrackId.find(trackInfo->multiOutLink->sourceTrackId);
-            if (it != stripByTrackId.end()) {
-                it->second->addChildComponent(*strip);
-                it->second->groupChildren_.push_back(strip.get());
-                continue;
             }
         }
 
@@ -1829,6 +1841,15 @@ void MixerView::trackDevicesChanged(TrackId trackId) {
 void MixerView::viewModeChanged(ViewMode mode, const AudioEngineProfile& /*profile*/) {
     currentViewMode_ = mode;
     rebuildChannelStrips();
+}
+
+void MixerView::drumGridChainsChanged(magda::daw::audio::DrumGridPlugin* /*plugin*/) {
+    // Rebuild asynchronously — this callback fires during addChain/removeChain
+    // and we must not re-enter the strip rebuild from within that call
+    juce::MessageManager::callAsync([safeThis = juce::Component::SafePointer(this)]() {
+        if (safeThis)
+            safeThis->rebuildChannelStrips();
+    });
 }
 
 void MixerView::masterChannelChanged() {
@@ -2200,6 +2221,8 @@ void MixerView::trackSelectionChanged(TrackId trackId) {
     for (auto& strip : auxChannelStrips) {
         strip->setSelected(false);
     }
+    if (masterStrip)
+        masterStrip->setSelected(false);
     selectedIsMaster = false;
     selectedChannelIndex = -1;
 
@@ -2211,6 +2234,8 @@ void MixerView::trackSelectionChanged(TrackId trackId) {
     if (trackId == MASTER_TRACK_ID) {
         selectedIsMaster = true;
         selectedChannelIndex = -1;
+        if (masterStrip)
+            masterStrip->setSelected(true);
         if (onChannelSelected) {
             onChannelSelected(selectedChannelIndex, selectedIsMaster);
         }

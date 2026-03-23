@@ -1,6 +1,7 @@
 #include <cmath>
 
 #include "../../../../../audio/AudioThumbnailManager.hpp"
+#include "../../../../components/common/ColourSwatch.hpp"
 #include "../../../../state/TimelineController.hpp"
 #include "../../../../themes/DarkTheme.hpp"
 #include "../../../../themes/FontManager.hpp"
@@ -12,6 +13,7 @@
 #include "audio/AudioBridge.hpp"
 #include "core/ClipOperations.hpp"
 #include "core/ClipPropertyCommands.hpp"
+#include "core/Config.hpp"
 #include "core/MidiNoteCommands.hpp"
 #include "core/TrackManager.hpp"
 #include "core/UndoManager.hpp"
@@ -40,6 +42,95 @@ void ClipInspector::initClipPropertiesSection() {
         }
     };
     addChildComponent(clipNameValue_);
+
+    // Colour swatch
+    colourSwatch_ = std::make_unique<magda::ColourSwatch>();
+    auto* swatch = static_cast<magda::ColourSwatch*>(colourSwatch_.get());
+    swatch->onColourClicked = [this, swatch]() {
+        auto pid = primaryClipId();
+        if (pid == magda::INVALID_CLIP_ID)
+            return;
+
+        auto menu = juce::PopupMenu();
+        menu.addItem(1, "None");
+        menu.addSeparator();
+
+        auto makeChip = [](juce::Colour colour) {
+            juce::Image chip(juce::Image::ARGB, 14, 14, true);
+            juce::Graphics cg(chip);
+            cg.setColour(colour);
+            cg.fillRoundedRectangle(0.0f, 0.0f, 14.0f, 14.0f, 2.0f);
+            auto drawable = std::make_unique<juce::DrawableImage>();
+            drawable->setImage(chip);
+            return drawable;
+        };
+
+        // Inherit from track option
+        menu.addItem(2, "Inherit from Track");
+        menu.addSeparator();
+
+        // Default colours
+        for (size_t i = 0; i < magda::Config::defaultColourPalette.size(); ++i) {
+            auto colour = juce::Colour(magda::Config::defaultColourPalette[i].colour);
+            menu.addItem(static_cast<int>(i + 3), magda::Config::defaultColourPalette[i].name, true,
+                         false, makeChip(colour));
+        }
+
+        // Custom colours from Config
+        const auto customPalette = magda::Config::getInstance().getTrackColourPalette();
+        const int customOffset = static_cast<int>(magda::Config::defaultColourPalette.size()) + 3;
+        if (!customPalette.empty()) {
+            menu.addSeparator();
+            for (size_t i = 0; i < customPalette.size(); ++i) {
+                auto colour = juce::Colour(customPalette[i].colour);
+                menu.addItem(customOffset + static_cast<int>(i),
+                             juce::String(customPalette[i].name), true, false, makeChip(colour));
+            }
+        }
+
+        menu.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(swatch), [this, swatch,
+                                                                                    customPalette](
+                                                                                       int result) {
+            if (result == 0)
+                return;
+            auto pid = primaryClipId();
+            if (pid == magda::INVALID_CLIP_ID)
+                return;
+            const int customOff = static_cast<int>(magda::Config::defaultColourPalette.size()) + 3;
+
+            if (result == 1) {
+                // "None"
+                swatch->clearColour();
+                magda::UndoManager::getInstance().executeCommand(
+                    std::make_unique<magda::SetClipColourCommand>(pid, juce::Colour(0xFF444444)));
+            } else if (result == 2) {
+                // Inherit from track
+                const auto* clip = magda::ClipManager::getInstance().getClip(pid);
+                if (clip) {
+                    const auto* track = magda::TrackManager::getInstance().getTrack(clip->trackId);
+                    if (track) {
+                        swatch->setColour(track->colour);
+                        magda::UndoManager::getInstance().executeCommand(
+                            std::make_unique<magda::SetClipColourCommand>(pid, track->colour));
+                    }
+                }
+            } else if (result >= 3 && result < customOff) {
+                auto colour = juce::Colour(magda::Config::getDefaultColour(result - 3));
+                swatch->setColour(colour);
+                magda::UndoManager::getInstance().executeCommand(
+                    std::make_unique<magda::SetClipColourCommand>(pid, colour));
+            } else {
+                auto idx = static_cast<size_t>(result - customOff);
+                if (idx < customPalette.size()) {
+                    auto colour = juce::Colour(customPalette[idx].colour);
+                    swatch->setColour(colour);
+                    magda::UndoManager::getInstance().executeCommand(
+                        std::make_unique<magda::SetClipColourCommand>(pid, colour));
+                }
+            }
+        });
+    };
+    addChildComponent(*colourSwatch_);
 
     // Clip file path (read-only, inside viewport)
     clipFilePathLabel_.setFont(FontManager::getInstance().getUIFont(10.0f));
@@ -274,6 +365,34 @@ void ClipInspector::initClipPropertiesSection() {
         }
     };
     clipPropsContainer_.addChildComponent(*clipLoopToggle_);
+
+    // Audio clip properties collapse toggle
+    audioPropsCollapseToggle_.setButtonText(juce::String::charToString(
+        audioPropsCollapsed_ ? (juce::juce_wchar)0x25B6 : (juce::juce_wchar)0x25BC));
+    audioPropsCollapseToggle_.setColour(juce::TextButton::buttonColourId,
+                                        juce::Colours::transparentBlack);
+    audioPropsCollapseToggle_.setColour(juce::TextButton::buttonOnColourId,
+                                        juce::Colours::transparentBlack);
+    audioPropsCollapseToggle_.setColour(juce::TextButton::textColourOffId,
+                                        DarkTheme::getSecondaryTextColour());
+    audioPropsCollapseToggle_.setColour(juce::TextButton::textColourOnId,
+                                        DarkTheme::getSecondaryTextColour());
+    audioPropsCollapseToggle_.setConnectedEdges(
+        juce::Button::ConnectedOnLeft | juce::Button::ConnectedOnRight |
+        juce::Button::ConnectedOnTop | juce::Button::ConnectedOnBottom);
+    audioPropsCollapseToggle_.onClick = [this]() {
+        audioPropsCollapsed_ = !audioPropsCollapsed_;
+        audioPropsCollapseToggle_.setButtonText(juce::String::charToString(
+            audioPropsCollapsed_ ? (juce::juce_wchar)0x25B6 : (juce::juce_wchar)0x25BC));
+        updateFromSelectedClip();
+    };
+    clipPropsContainer_.addChildComponent(audioPropsCollapseToggle_);
+
+    audioPropsLabel_.setText("Audio Properties", juce::dontSendNotification);
+    audioPropsLabel_.setFont(FontManager::getInstance().getUIFont(11.0f));
+    audioPropsLabel_.setColour(juce::Label::textColourId, DarkTheme::getSecondaryTextColour());
+    audioPropsLabel_.setJustificationType(juce::Justification::centredLeft);
+    clipPropsContainer_.addChildComponent(audioPropsLabel_);
 
     // Warp toggle (pin icon)
     clipWarpToggle_.setButtonText("WARP");
@@ -1141,27 +1260,6 @@ void ClipInspector::initFadesSection() {
         }
     };
     clipPropsContainer_.addChildComponent(autoCrossfadeToggle_);
-
-    // Fades collapse toggle (triangle button)
-    fadesCollapseToggle_.setButtonText(juce::String::charToString(0x25BC));  // ▼ expanded
-    fadesCollapseToggle_.setColour(juce::TextButton::buttonColourId,
-                                   juce::Colours::transparentBlack);
-    fadesCollapseToggle_.setColour(juce::TextButton::buttonOnColourId,
-                                   juce::Colours::transparentBlack);
-    fadesCollapseToggle_.setColour(juce::TextButton::textColourOffId,
-                                   DarkTheme::getSecondaryTextColour());
-    fadesCollapseToggle_.setColour(juce::TextButton::textColourOnId,
-                                   DarkTheme::getSecondaryTextColour());
-    fadesCollapseToggle_.setConnectedEdges(
-        juce::Button::ConnectedOnLeft | juce::Button::ConnectedOnRight |
-        juce::Button::ConnectedOnTop | juce::Button::ConnectedOnBottom);
-    fadesCollapseToggle_.onClick = [this]() {
-        fadesCollapsed_ = !fadesCollapsed_;
-        fadesCollapseToggle_.setButtonText(
-            juce::String::charToString(fadesCollapsed_ ? 0x25B6 : 0x25BC));  // ▶ or ▼
-        resized();
-    };
-    clipPropsContainer_.addChildComponent(fadesCollapseToggle_);
 }
 
 // ========================================================================

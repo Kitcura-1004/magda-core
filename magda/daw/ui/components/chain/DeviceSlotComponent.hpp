@@ -23,6 +23,7 @@
 #include "ui/components/common/LinkableTextSlider.hpp"
 #include "ui/components/common/SvgButton.hpp"
 #include "ui/components/common/TextSlider.hpp"
+#include "ui/components/mixer/LevelMeter.hpp"
 
 namespace magda::daw::ui {
 
@@ -52,7 +53,7 @@ class DeviceSlotComponent : public NodeComponent,
     static constexpr int NUM_PARAMS_PER_PAGE = 32;
     static constexpr int PARAMS_PER_ROW = 8;  // Maximum columns
     static constexpr int PARAM_CELL_WIDTH = 48;
-    static constexpr int PARAM_CELL_HEIGHT = 28;
+    static constexpr int PARAM_CELL_HEIGHT = 24;
     static constexpr int PAGINATION_HEIGHT = 18;
     static constexpr int CONTENT_HEADER_HEIGHT = 18;
     DeviceSlotComponent(const magda::DeviceInfo& device);
@@ -73,6 +74,10 @@ class DeviceSlotComponent : public NodeComponent,
     int getCustomUITabIndex() const;
     void setCustomUITabIndex(int index);
 
+    // DrumGrid pad chain collapsed plugins (for saving/restoring across rebuilds)
+    std::vector<tracktion::engine::Plugin*> getDrumPadCollapsedPlugins() const;
+    void setDrumPadCollapsedPlugins(const std::vector<tracktion::engine::Plugin*>& plugins);
+
     // Callbacks for owner-specific behavior
     std::function<void()> onDeviceDeleted;
     std::function<void()> onDeviceLayoutChanged;
@@ -84,6 +89,7 @@ class DeviceSlotComponent : public NodeComponent,
     void resizedContent(juce::Rectangle<int> contentArea) override;
     void resizedHeaderExtra(juce::Rectangle<int>& headerArea) override;
     void resizedCollapsed(juce::Rectangle<int>& area) override;
+    juce::String getCollapsedName() const override;
 
     // Side panel widths
     int getModPanelWidth() const override;
@@ -93,7 +99,10 @@ class DeviceSlotComponent : public NodeComponent,
     }
 
     int getMeterWidth() const override {
-        return 0;
+        return 0;  // Meter is positioned in content area only, not the full height
+    }
+    int getCollapsedMeterWidth() const override {
+        return METER_STRIP_WIDTH;
     }
 
     // Mod/macro data providers
@@ -198,6 +207,9 @@ class DeviceSlotComponent : public NodeComponent,
     std::unique_ptr<PitchShiftUI> pitchShiftUI_;
     std::unique_ptr<ImpulseResponseUI> impulseResponseUI_;
     std::unique_ptr<UtilityUI> utilityUI_;
+
+    static constexpr int METER_STRIP_WIDTH = 10;
+    magda::LevelMeter levelMeter_;
 
     void updatePageControls();
     void updateParamModulation();  // Update mod/macro pointers for params

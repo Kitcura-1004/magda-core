@@ -132,6 +132,7 @@ class TrackHeadersPanel : public juce::Component,
         bool muted = false;
         bool solo = false;
         bool frozen = false;
+        juce::Colour trackColour{0xFF5588AA};
         float volume = 0.8f;
         float pan = 0.0f;
         int height = DEFAULT_TRACK_HEIGHT;
@@ -166,6 +167,9 @@ class TrackHeadersPanel : public juce::Component,
         std::unique_ptr<juce::Component> meterComponent;               // Peak meter display
         std::unique_ptr<juce::Component> midiIndicator;                // MIDI activity indicator
         std::unique_ptr<juce::Component> sessionModeButton;  // Back-to-arrangement indicator
+
+        // Layout cache
+        int nameRowBottomY = 0;  // Absolute Y of name row bottom (for meter separator line)
 
         // Meter levels
         float meterLevelL = 0.0f;

@@ -48,6 +48,12 @@ class PadChainPanel : public juce::Component, public juce::DragAndDropTarget {
     void refresh();
     int getContentWidth() const;
 
+    /** Get list of currently collapsed plugins (for state preservation). */
+    std::vector<tracktion::engine::Plugin*> getCollapsedPlugins() const;
+
+    /** Collapse slots matching the given plugins (call after rebuildSlots). */
+    void setCollapsedPlugins(const std::vector<tracktion::engine::Plugin*>& plugins);
+
     // Callbacks (wired by DrumGridUI / DeviceSlotComponent)
     std::function<std::vector<PluginSlotInfo>(int padIndex)> getPluginSlots;
     std::function<void(int padIndex, const juce::DynamicObject&, int insertIndex)> onPluginDropped;
@@ -58,6 +64,14 @@ class PadChainPanel : public juce::Component, public juce::DragAndDropTarget {
     // Forward from PadDeviceSlot for sample operations
     std::function<void(int padIndex, const juce::File&)> onSampleDropped;
     std::function<void(int padIndex)> onLoadSampleRequested;
+
+    // Called when a device slot is clicked (for inspector selection)
+    // Passes plugin name and format string for display in the inspector
+    std::function<void(const juce::String& pluginName, const juce::String& pluginType)>
+        onDeviceClicked;
+
+    // Called when the "+" button is clicked to add a plugin to the chain
+    std::function<void(int padIndex)> onAddDeviceClicked;
 
     // DragAndDropTarget
     bool isInterestedInDragSource(const SourceDetails& details) override;
@@ -72,6 +86,7 @@ class PadChainPanel : public juce::Component, public juce::DragAndDropTarget {
   private:
     static constexpr int SLOT_GAP = 6;
     static constexpr int ADD_BUTTON_WIDTH = 28;
+    static constexpr int DROP_ZONE_WIDTH = 8;
     static constexpr int ARROW_WIDTH = 16;
 
     int currentPadIndex_ = -1;

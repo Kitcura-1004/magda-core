@@ -4,7 +4,12 @@
 namespace magda::daw::ui {
 
 void ClipInspector::resized() {
+    if (getWidth() < 1 || getHeight() < 1)
+        return;
+
     auto bounds = getLocalBounds().reduced(10);
+    if (bounds.getWidth() < 1 || bounds.getHeight() < 1)
+        return;
 
     // Multi-clip count label (above header when multiple clips selected)
     if (clipCountLabel_.isVisible()) {
@@ -25,6 +30,8 @@ void ClipInspector::resized() {
         clipTypeIcon_->setBounds(
             headerRow.removeFromLeft(iconSize).withSizeKeepingCentre(iconSize, iconSize));
         headerRow.removeFromLeft(gap);
+        colourSwatch_->setBounds(headerRow.removeFromRight(24));
+        headerRow.removeFromRight(4);
         clipNameValue_.setBounds(headerRow);
     }
     bounds.removeFromTop(8);
@@ -33,11 +40,11 @@ void ClipInspector::resized() {
     clipPropsViewport_.setBounds(bounds);
 
     // Layout all clip properties inside the container
-    const int containerWidth = bounds.getWidth() - 12;  // Account for scrollbar
+    const int containerWidth = juce::jmax(1, bounds.getWidth() - 12);  // Account for scrollbar
     auto cb = juce::Rectangle<int>(0, 0, containerWidth, 0);
     auto addRow = [&](int height) -> juce::Rectangle<int> {
-        auto row = juce::Rectangle<int>(0, cb.getHeight(), containerWidth, height);
-        cb.setHeight(cb.getHeight() + height);
+        auto row = juce::Rectangle<int>(0, cb.getHeight(), containerWidth, juce::jmax(1, height));
+        cb.setHeight(cb.getHeight() + row.getHeight());
         return row;
     };
     auto addSpace = [&](int height) { cb.setHeight(cb.getHeight() + height); };
@@ -54,7 +61,7 @@ void ClipInspector::resized() {
     const int gap = 3;
     const int labelHeight = 14;
     const int valueHeight = 22;
-    int fieldWidth = (containerWidth - iconSize - gap * 3) / 3;
+    int fieldWidth = juce::jmax(1, (containerWidth - iconSize - gap * 3) / 3);
 
     // Position row: position icon — start, end, offset (arrangement clips only)
     if (clipPositionIcon_->isVisible()) {
@@ -116,6 +123,14 @@ void ClipInspector::resized() {
         }
     }
     addSeparator();
+
+    // Audio properties collapse toggle header
+    if (audioPropsCollapseToggle_.isVisible()) {
+        auto headerRow = addRow(16);
+        audioPropsCollapseToggle_.setBounds(headerRow.removeFromLeft(16));
+        audioPropsLabel_.setBounds(headerRow);
+        addSpace(4);
+    }
 
     // 2-column grid: warp toggles | combo  /  BPM | speed/beats
     {
@@ -257,80 +272,74 @@ void ClipInspector::resized() {
     if (fadesSectionLabel_.isVisible())
         addSeparator();
 
-    // Fades section (arrangement clips only, collapsible)
+    // Fades section (arrangement audio clips only)
     if (fadesSectionLabel_.isVisible()) {
+        fadesSectionLabel_.setBounds(addRow(16));
+        addSpace(4);
+        const int colGap = 8;
+        int halfWidth = (containerWidth - colGap) / 2;
+
+        // Row 1: [fade in] | [fade out]
         {
-            auto headerRow = addRow(16);
-            fadesCollapseToggle_.setBounds(headerRow.removeFromLeft(16));
-            fadesSectionLabel_.setBounds(headerRow);
+            auto row = addRow(22);
+            fadeInValue_->setBounds(row.removeFromLeft(halfWidth));
+            row.removeFromLeft(colGap);
+            fadeOutValue_->setBounds(row.removeFromLeft(halfWidth));
         }
-        if (!fadesCollapsed_) {
-            addSpace(4);
-            const int colGap = 8;
-            int halfWidth = (containerWidth - colGap) / 2;
+        addSpace(4);
 
-            // Row 1: [fade in] | [fade out]
-            {
-                auto row = addRow(22);
-                fadeInValue_->setBounds(row.removeFromLeft(halfWidth));
-                row.removeFromLeft(colGap);
-                fadeOutValue_->setBounds(row.removeFromLeft(halfWidth));
-            }
-            addSpace(4);
+        // Row 2: fade type buttons (4 icons each side)
+        {
+            auto row = addRow(24);
+            auto left = row.removeFromLeft(halfWidth);
+            row.removeFromLeft(colGap);
+            auto right = row;
 
-            // Row 2: fade type buttons (4 icons each side)
-            {
-                auto row = addRow(24);
-                auto left = row.removeFromLeft(halfWidth);
-                row.removeFromLeft(colGap);
-                auto right = row;
-
-                const int btnSize = 24;
-                const int btnGap = 2;
-                for (int i = 0; i < 4; ++i) {
-                    if (fadeInTypeButtons_[i]) {
-                        fadeInTypeButtons_[i]->setBounds(left.removeFromLeft(btnSize));
-                        if (i < 3)
-                            left.removeFromLeft(btnGap);
-                    }
-                    if (fadeOutTypeButtons_[i]) {
-                        fadeOutTypeButtons_[i]->setBounds(right.removeFromLeft(btnSize));
-                        if (i < 3)
-                            right.removeFromLeft(btnGap);
-                    }
+            const int btnSize = 24;
+            const int btnGap = 2;
+            for (int i = 0; i < 4; ++i) {
+                if (fadeInTypeButtons_[i]) {
+                    fadeInTypeButtons_[i]->setBounds(left.removeFromLeft(btnSize));
+                    if (i < 3)
+                        left.removeFromLeft(btnGap);
+                }
+                if (fadeOutTypeButtons_[i]) {
+                    fadeOutTypeButtons_[i]->setBounds(right.removeFromLeft(btnSize));
+                    if (i < 3)
+                        right.removeFromLeft(btnGap);
                 }
             }
-            addSpace(4);
+        }
+        addSpace(4);
 
-            // Row 3: fade behavior buttons (2 icons each side)
-            {
-                auto row = addRow(24);
-                auto left = row.removeFromLeft(halfWidth);
-                row.removeFromLeft(colGap);
-                auto right = row;
+        // Row 3: fade behavior buttons (2 icons each side)
+        {
+            auto row = addRow(24);
+            auto left = row.removeFromLeft(halfWidth);
+            row.removeFromLeft(colGap);
+            auto right = row;
 
-                const int btnSize = 24;
-                const int btnGap = 2;
-                for (int i = 0; i < 2; ++i) {
-                    if (fadeInBehaviourButtons_[i]) {
-                        fadeInBehaviourButtons_[i]->setBounds(left.removeFromLeft(btnSize));
-                        if (i < 1)
-                            left.removeFromLeft(btnGap);
-                    }
-                    if (fadeOutBehaviourButtons_[i]) {
-                        fadeOutBehaviourButtons_[i]->setBounds(right.removeFromLeft(btnSize));
-                        if (i < 1)
-                            right.removeFromLeft(btnGap);
-                    }
+            const int btnSize = 24;
+            const int btnGap = 2;
+            for (int i = 0; i < 2; ++i) {
+                if (fadeInBehaviourButtons_[i]) {
+                    fadeInBehaviourButtons_[i]->setBounds(left.removeFromLeft(btnSize));
+                    if (i < 1)
+                        left.removeFromLeft(btnGap);
+                }
+                if (fadeOutBehaviourButtons_[i]) {
+                    fadeOutBehaviourButtons_[i]->setBounds(right.removeFromLeft(btnSize));
+                    if (i < 1)
+                        right.removeFromLeft(btnGap);
                 }
             }
-            addSpace(4);
+        }
+        addSpace(4);
 
-            // Row 4: auto-crossfade toggle
-            {
-                auto row = addRow(22);
-                autoCrossfadeToggle_.setBounds(row.reduced(0, 1));
-            }
+        // Row 4: auto-crossfade toggle
+        {
+            auto row = addRow(22);
+            autoCrossfadeToggle_.setBounds(row.reduced(0, 1));
         }
     }
 

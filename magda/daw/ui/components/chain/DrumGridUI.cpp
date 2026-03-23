@@ -207,7 +207,12 @@ DrumGridUI::DrumGridUI() {
     // Setup pad buttons
     for (int i = 0; i < kPadsPerPage; ++i) {
         padButtons_[static_cast<size_t>(i)].onClicked = [this](int padIndex) {
-            setSelectedPad(padIndex);
+            if (padIndex == selectedPad_) {
+                setDetailCollapsed(!detailCollapsed_);
+            } else {
+                setDetailCollapsed(false);
+                setSelectedPad(padIndex);
+            }
         };
         padButtons_[static_cast<size_t>(i)].onNotePreview = [this](int padIndex, bool isNoteOn) {
             if (onNotePreview)
@@ -316,6 +321,12 @@ DrumGridUI::DrumGridUI() {
 
     // Per-pad FX chain panel
     addAndMakeVisible(padChainPanel_);
+    padChainPanel_.onLayoutChanged = [this]() {
+        resized();
+        repaint();
+        if (onLayoutChanged)
+            onLayoutChanged();
+    };
 
     // Chains panel
     chainsLabel_.setText("Chains:", juce::dontSendNotification);
@@ -386,8 +397,11 @@ DrumGridUI::~DrumGridUI() {
 
 void DrumGridUI::setDrumGridPlugin(daw::audio::DrumGridPlugin* plugin) {
     drumGridPlugin_ = plugin;
-    if (drumGridPlugin_)
+    if (drumGridPlugin_) {
         startTimer(50);  // 20fps polling
+        // Restore detail collapsed state
+        detailCollapsed_ = drumGridPlugin_->state.getProperty("uiDetailCollapsed", false);
+    }
 }
 
 void DrumGridUI::timerCallback() {
@@ -467,7 +481,7 @@ void DrumGridUI::timerCallback() {
 }
 
 void DrumGridUI::updatePadInfo(int padIndex, const juce::String& sampleName, bool mute, bool solo,
-                               float levelDb, float pan, int chainIndex) {
+                               float levelDb, float pan, int chainIndex, bool bypassed) {
     if (padIndex < 0 || padIndex >= kTotalPads)
         return;
 
@@ -475,6 +489,7 @@ void DrumGridUI::updatePadInfo(int padIndex, const juce::String& sampleName, boo
     info.sampleName = sampleName;
     info.mute = mute;
     info.solo = solo;
+    info.bypassed = bypassed;
     info.level = levelDb;
     info.pan = pan;
     info.chainIndex = chainIndex;
@@ -645,7 +660,7 @@ void DrumGridUI::resized() {
 
     bool selectedPadHasContent =
         padInfos_[static_cast<size_t>(selectedPad_)].sampleName.isNotEmpty();
-    bool showDetailPanel = selectedPadHasContent;
+    bool showDetailPanel = selectedPadHasContent && !detailCollapsed_;
 
     // --- Layout (right-to-left): [Pads] | [Chains] | [Detail] ---
     // Allocate from the right: detail → chains → toggle+pads get remainder
@@ -736,8 +751,9 @@ void DrumGridUI::resized() {
     constexpr int padGap = 3;
     constexpr int minPadSize = 40;
     constexpr int maxPadSize = 65;
-    int padSize = juce::jmin((gridArea.getWidth() - padGap * (kGridCols - 1)) / kGridCols,
-                             (gridArea.getHeight() - padGap * (kGridRows - 1)) / kGridRows);
+    // Use only width to determine pad size — the grid width is fixed (kPadGridWidth),
+    // so pad size should not fluctuate with container height changes (e.g., scrollbar toggling).
+    int padSize = (gridArea.getWidth() - padGap * (kGridCols - 1)) / kGridCols;
     padSize = juce::jlimit(minPadSize, maxPadSize, padSize);
 
     for (int i = 0; i < kPadsPerPage; ++i) {
@@ -770,6 +786,9 @@ void DrumGridUI::resized() {
     if (showDetailPanel) {
         padChainPanel_.setBounds(detailArea);
         padChainPanel_.setVisible(true);
+        // Dim pad chain panel when the selected pad is bypassed
+        bool selectedBypassed = padInfos_[static_cast<size_t>(selectedPad_)].bypassed;
+        padChainPanel_.setAlpha(selectedBypassed ? 0.35f : 1.0f);
     } else {
         padChainPanel_.setVisible(false);
     }
@@ -869,9 +888,20 @@ void DrumGridUI::rebuildChainRows() {
         // --- Mix row ---
         auto row = std::make_unique<PadChainRowComponent>(i);
         juce::String displayName = getNoteName(i) + " " + info.sampleName;
-        row->updateFromPad(displayName, info.level, info.pan, info.mute, info.solo);
+        row->updateFromPad(displayName, info.level, info.pan, info.mute, info.solo, info.bypassed);
 
-        row->onClicked = [this](int padIndex) { setSelectedPad(padIndex); };
+        row->onClicked = [this](int padIndex) {
+            bool wasSelected = (padIndex == selectedPad_) ||
+                               (padInfos_[static_cast<size_t>(padIndex)].chainIndex >= 0 &&
+                                padInfos_[static_cast<size_t>(padIndex)].chainIndex ==
+                                    padInfos_[static_cast<size_t>(selectedPad_)].chainIndex);
+            if (wasSelected) {
+                setDetailCollapsed(!detailCollapsed_);
+            } else {
+                setDetailCollapsed(false);
+                setSelectedPad(padIndex);
+            }
+        };
         row->onLevelChanged = [this](int padIndex, float val) {
             if (onPadLevelChanged)
                 onPadLevelChanged(padIndex, val);
@@ -891,6 +921,14 @@ void DrumGridUI::rebuildChainRows() {
             if (onPadSoloChanged)
                 onPadSoloChanged(padIndex, val);
             refreshPadButtons();
+        };
+        row->onBypassChanged = [this](int padIndex, bool val) {
+            padInfos_[static_cast<size_t>(padIndex)].bypassed = val;
+            if (onPadBypassChanged)
+                onPadBypassChanged(padIndex, val);
+            // Update detail panel dimming if this is the selected pad
+            if (padIndex == selectedPad_)
+                padChainPanel_.setAlpha(val ? 0.35f : 1.0f);
         };
         row->onDeleteClicked = [this](int padIndex) {
             if (onPadDeleteRequested)
@@ -970,17 +1008,24 @@ void DrumGridUI::showChainContextMenu(int padIndex, juce::Point<int> screenPos) 
 int DrumGridUI::getPreferredContentWidth() const {
     bool selectedPadHasContent =
         padInfos_[static_cast<size_t>(selectedPad_)].sampleName.isNotEmpty();
-    bool showDetailPanel = selectedPadHasContent;
+    bool showDetailPanel = selectedPadHasContent && !detailCollapsed_;
 
-    int width = kToggleColWidth + kPadGridWidth;
+    // Account for layout overhead from parent components:
+    //   NodeComponent::resized() reduced(2,1) = 4px
+    //   DeviceSlotComponent contentArea.reduced(4,2) = 8px
+    //   DrumGridUI::resized() reduced(4) = 8px
+    // Total: 20px horizontal consumed before content layout
+    int width = 20 + kToggleColWidth + kPadGridWidth;
     if (chainsPanelVisible_)
         width += kGap + kChainsPanelWidth;
-    if (showDetailPanel)
-        width += kGap + padChainPanel_.getContentWidth();
-
-    // Cap at screen width so PadChainPanel's viewport scrolls instead of expanding forever
-    if (auto* display = juce::Desktop::getInstance().getDisplays().getPrimaryDisplay())
-        width = juce::jmin(width, display->userArea.getWidth());
+    if (showDetailPanel) {
+        // Cap chain panel width so it doesn't expand indefinitely
+        static constexpr int kMaxChainPanelWidth = 800;
+        static constexpr int kMinChainPanelWidth = 80;
+        int chainWidth = juce::jlimit(kMinChainPanelWidth, kMaxChainPanelWidth,
+                                      padChainPanel_.getContentWidth());
+        width += kGap + chainWidth;
+    }
 
     return width;
 }
@@ -998,6 +1043,18 @@ void DrumGridUI::setChainsPanelVisible(bool visible) {
 // =============================================================================
 // Internal helpers
 // =============================================================================
+
+void DrumGridUI::setDetailCollapsed(bool collapsed) {
+    if (detailCollapsed_ == collapsed)
+        return;
+    detailCollapsed_ = collapsed;
+    if (drumGridPlugin_)
+        drumGridPlugin_->state.setProperty("uiDetailCollapsed", collapsed, nullptr);
+    resized();
+    repaint();
+    if (onLayoutChanged)
+        onLayoutChanged();
+}
 
 void DrumGridUI::refreshPadButtons() {
     int pageStart = currentPage_ * kPadsPerPage;

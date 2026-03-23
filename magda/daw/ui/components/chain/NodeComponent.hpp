@@ -140,6 +140,11 @@ class NodeComponent : public juce::Component, public magda::SelectionManagerList
     // Override to add extra header buttons (between name and delete)
     virtual void resizedHeaderExtra(juce::Rectangle<int>& headerArea);
 
+    // Override to provide a name for the collapsed rotated label
+    virtual juce::String getCollapsedName() const {
+        return nameLabel_.getText();
+    }
+
     // Override to customize side panel content (mods/params are to the left of node)
     virtual void paintModPanel(juce::Graphics& g, juce::Rectangle<int> panelArea);
     virtual void paintExtraLeftPanel(juce::Graphics& g,
@@ -180,8 +185,14 @@ class NodeComponent : public juce::Component, public magda::SelectionManagerList
         return HEADER_HEIGHT;
     }
 
-    // Override to reserve space for a meter strip on the right edge
+    // Override to reserve space for a meter strip on the right edge (expanded mode)
     virtual int getMeterWidth() const {
+        return 0;
+    }
+
+    // Override to reserve space for a meter strip when collapsed (right side of strip)
+    // Base class removes this from the right of the collapsed strip before placing buttons
+    virtual int getCollapsedMeterWidth() const {
         return 0;
     }
 
@@ -201,6 +212,8 @@ class NodeComponent : public juce::Component, public magda::SelectionManagerList
 
     // Collapsed state (show header only)
     bool collapsed_ = false;
+    juce::Rectangle<int> collapsedTextArea_;   // Area for rotated name when collapsed
+    juce::Rectangle<int> collapsedMeterArea_;  // Area for meter strip when collapsed
 
     // Drag-to-reorder state
     bool draggable_ = true;
@@ -213,8 +226,8 @@ class NodeComponent : public juce::Component, public magda::SelectionManagerList
     magda::ChainNodePath nodePath_;
 
     // Layout constants
-    static constexpr int HEADER_HEIGHT = 20;
-    static constexpr int BUTTON_SIZE = 16;
+    static constexpr int HEADER_HEIGHT = 24;
+    static constexpr int BUTTON_SIZE = 18;
     static constexpr int DEFAULT_PANEL_WIDTH = 150;  // Width for 2-column panels (params, macros)
     static constexpr int SINGLE_COLUMN_PANEL_WIDTH = 70;  // Width for 1-column panels (mods)
     static constexpr int GAIN_PANEL_WIDTH = 32;           // Width for gain panel (right side)

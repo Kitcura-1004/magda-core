@@ -56,6 +56,7 @@ class DrumGridPlugin : public te::Plugin {
         juce::CachedValue<float> pan;
         juce::CachedValue<bool> mute;
         juce::CachedValue<bool> solo;
+        juce::CachedValue<bool> bypassed;
     };
 
     //==============================================================================
@@ -107,6 +108,8 @@ class DrumGridPlugin : public te::Plugin {
     // FX chain management on chains
     void addPluginToChain(int chainIndex, const juce::PluginDescription& desc,
                           int insertIndex = -1);
+    void addInternalPluginToChain(int chainIndex, const juce::String& pluginId,
+                                  int insertIndex = -1);
     void removePluginFromChain(int chainIndex, int pluginIndex);
     void movePluginInChain(int chainIndex, int fromIndex, int toIndex);
     int getChainPluginCount(int chainIndex) const;
@@ -133,6 +136,18 @@ class DrumGridPlugin : public te::Plugin {
 
     // Trigger graph rebuild when chain configuration changes
     void notifyGraphRebuildNeeded();
+
+    // Listener for chain add/remove events (used by MixerView)
+    struct Listener {
+        virtual ~Listener() = default;
+        virtual void drumGridChainsChanged(DrumGridPlugin* plugin) = 0;
+    };
+    void addListener(Listener* l) {
+        listeners_.add(l);
+    }
+    void removeListener(Listener* l) {
+        listeners_.remove(l);
+    }
 
     // Legacy pad-level FX API (delegates to chain-based methods)
     void addPluginToPad(int padIndex, const juce::PluginDescription& desc, int insertIndex = -1);
@@ -163,12 +178,16 @@ class DrumGridPlugin : public te::Plugin {
     static const juce::Identifier padPanId;
     static const juce::Identifier padMuteId;
     static const juce::Identifier padSoloId;
+    static const juce::Identifier padBypassedId;
     static const juce::Identifier mixerExpandedId;
 
     Chain* findChainForNote(int midiNote);
     Chain* findOrCreateChainForPad(int padIndex);
     void removeChainFromState(int chainIndex);
     juce::ValueTree findChainTree(int chainIndex) const;
+    void notifyChainsChanged();
+
+    juce::ListenerList<Listener> listeners_;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(DrumGridPlugin)
 };

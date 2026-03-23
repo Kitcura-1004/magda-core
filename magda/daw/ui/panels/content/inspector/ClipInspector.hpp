@@ -73,9 +73,10 @@ class ClipInspector : public BaseInspector, public magda::ClipManagerListener {
     // Multi-selection count label
     juce::Label clipCountLabel_;
 
-    // Clip name and file info
+    // Clip name, colour swatch, and file info
     juce::Label clipNameLabel_;
     juce::Label clipNameValue_;
+    std::unique_ptr<juce::Component> colourSwatch_;
     juce::Label clipFilePathLabel_;
     std::unique_ptr<magda::SvgButton> clipTypeIcon_;
     std::unique_ptr<magda::SvgButton> clipViewIcon_;
@@ -99,6 +100,11 @@ class ClipInspector : public BaseInspector, public magda::ClipManagerListener {
     std::unique_ptr<magda::BarsBeatsTicksLabel> clipLoopEndValue_;
     juce::Label clipLoopPhaseLabel_;
     std::unique_ptr<magda::BarsBeatsTicksLabel> clipLoopPhaseValue_;
+
+    // Audio clip properties toggle (collapsible)
+    bool audioPropsCollapsed_ = false;
+    juce::TextButton audioPropsCollapseToggle_;
+    juce::Label audioPropsLabel_;
 
     // Warp/tempo section
     juce::TextButton clipWarpToggle_;
@@ -137,9 +143,7 @@ class ClipInspector : public BaseInspector, public magda::ClipManagerListener {
     std::unique_ptr<magda::DraggableValueLabel> clipPanValue_;
     std::unique_ptr<magda::DraggableValueLabel> clipGainValue_;
 
-    // Fades section (collapsible)
-    bool fadesCollapsed_ = false;
-    juce::TextButton fadesCollapseToggle_;
+    // Fades section
     juce::Label fadesSectionLabel_;
     std::unique_ptr<magda::DraggableValueLabel> fadeInValue_;
     std::unique_ptr<magda::DraggableValueLabel> fadeOutValue_;

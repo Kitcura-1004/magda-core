@@ -18,6 +18,8 @@ juce_add_binary_data(MagdaAssets
     ../../assets/icons/enter.svg
     ../../assets/icons/track.svg
     ../../assets/icons/clip.svg
+    ../../assets/icons/copycontent.svg
+    ../../assets/icons/delete.svg
     # Transport icons (off/on states)
     ../../assets/icons/play_off.svg
     ../../assets/icons/play_on.svg
@@ -127,6 +129,8 @@ juce_add_binary_data(MagdaAssets
     ../../assets/icons/panels/right_close.svg
     ../../assets/icons/panels/bottom_open.svg
     ../../assets/icons/panels/bottom_close.svg
+    # Utility icons
+    ../../assets/icons/phase_invert.svg
     # Fontaudio waveform icons
     ../../assets/icons/fontaudio/fad-modsine.svg
     ../../assets/icons/fontaudio/fad-modtri.svg
@@ -141,6 +145,7 @@ juce_add_binary_data(MagdaAssets
     ../../assets/icons/fontaudio/fad-filter-notch.svg
     # Fontaudio logo icons
     ../../assets/icons/fontaudio/fad-logo-tracktion.svg
+    ../../assets/icons/fontaudio/fad-logo-juce.svg
     # App logo
     ../../assets/magda-lisa.svg
 )
@@ -286,6 +291,7 @@ set(DAW_UI_SOURCES
     ui/panels/content/PianoRollContent.cpp
     ui/panels/content/DrumGridClipContent.cpp
     ui/panels/content/WaveformEditorContent.cpp
+    ui/panels/content/AudioClipPropertiesContent.cpp
     # Audio
     audio/AudioEngineOptimizer.cpp
     # Views

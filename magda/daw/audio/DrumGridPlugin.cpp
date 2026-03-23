@@ -18,6 +18,7 @@ const juce::Identifier DrumGridPlugin::padLevelId("padLevel");
 const juce::Identifier DrumGridPlugin::padPanId("padPan");
 const juce::Identifier DrumGridPlugin::padMuteId("padMute");
 const juce::Identifier DrumGridPlugin::padSoloId("padSolo");
+const juce::Identifier DrumGridPlugin::padBypassedId("padBypassed");
 const juce::Identifier DrumGridPlugin::mixerExpandedId("mixerExpanded");
 
 //==============================================================================
@@ -42,6 +43,7 @@ DrumGridPlugin::DrumGridPlugin(const te::PluginCreationInfo& info) : Plugin(info
         chain->pan.referTo(childTree, padPanId, um, 0.0f);
         chain->mute.referTo(childTree, padMuteId, um, false);
         chain->solo.referTo(childTree, padSoloId, um, false);
+        chain->bypassed.referTo(childTree, padBypassedId, um, false);
 
         if (chain->index >= nextChainIndex_)
             nextChainIndex_ = chain->index + 1;
@@ -113,7 +115,7 @@ void DrumGridPlugin::applyToBuffer(const te::PluginRenderContext& rc) {
         if (chain->plugins.empty())
             continue;
 
-        if (chain->mute.get())
+        if (chain->mute.get() || chain->bypassed.get())
             continue;
         if (anySoloed && !chain->solo.get())
             continue;
@@ -213,6 +215,7 @@ int DrumGridPlugin::addChain(int lowNote, int highNote, int rootNote, const juce
     chainTree.setProperty(padPanId, 0.0f, nullptr);
     chainTree.setProperty(padMuteId, false, nullptr);
     chainTree.setProperty(padSoloId, false, nullptr);
+    chainTree.setProperty(padBypassedId, false, nullptr);
     state.addChild(chainTree, -1, nullptr);
 
     auto chain = std::make_unique<Chain>();
@@ -227,10 +230,12 @@ int DrumGridPlugin::addChain(int lowNote, int highNote, int rootNote, const juce
     chain->pan.referTo(chainTree, padPanId, um, 0.0f);
     chain->mute.referTo(chainTree, padMuteId, um, false);
     chain->solo.referTo(chainTree, padSoloId, um, false);
+    chain->bypassed.referTo(chainTree, padBypassedId, um, false);
 
     chains_.push_back(std::move(chain));
 
     notifyGraphRebuildNeeded();
+    notifyChainsChanged();
     return idx;
 }
 
@@ -248,6 +253,7 @@ void DrumGridPlugin::removeChain(int chainIndex) {
     }
     removeChainFromState(chainIndex);
     notifyGraphRebuildNeeded();
+    notifyChainsChanged();
 }
 
 const std::vector<std::unique_ptr<DrumGridPlugin::Chain>>& DrumGridPlugin::getChains() const {
@@ -562,6 +568,36 @@ void DrumGridPlugin::addPluginToChain(int chainIndex, const juce::PluginDescript
     notifyGraphRebuildNeeded();
 }
 
+void DrumGridPlugin::addInternalPluginToChain(int chainIndex, const juce::String& pluginId,
+                                              int insertIndex) {
+    auto* chain = getChainByIndexMutable(chainIndex);
+    if (!chain)
+        return;
+
+    auto plugin = edit.getPluginCache().createNewPlugin(pluginId, {});
+    if (!plugin)
+        return;
+
+    if (insertIndex < 0 || insertIndex >= static_cast<int>(chain->plugins.size()))
+        chain->plugins.push_back(plugin);
+    else
+        chain->plugins.insert(chain->plugins.begin() + insertIndex, plugin);
+
+    if (sampleRate_ > 0.0) {
+        te::PluginInitialisationInfo initInfo;
+        initInfo.startTime = tracktion::TimePosition();
+        initInfo.sampleRate = sampleRate_;
+        initInfo.blockSizeSamples = blockSize_;
+        plugin->baseClassInitialise(initInfo);
+    }
+
+    auto chainTree = findChainTree(chainIndex);
+    if (chainTree.isValid())
+        chainTree.addChild(plugin->state, -1, nullptr);
+
+    notifyGraphRebuildNeeded();
+}
+
 void DrumGridPlugin::removePluginFromChain(int chainIndex, int pluginIndex) {
     auto* chain = getChainByIndexMutable(chainIndex);
     if (!chain)
@@ -709,6 +745,10 @@ void DrumGridPlugin::notifyGraphRebuildNeeded() {
     edit.restartPlayback();
 }
 
+void DrumGridPlugin::notifyChainsChanged() {
+    listeners_.call([this](Listener& l) { l.drumGridChainsChanged(this); });
+}
+
 //==============================================================================
 void DrumGridPlugin::restorePluginStateFromValueTree(const juce::ValueTree& v) {
     // Copy top-level properties
@@ -747,6 +787,7 @@ void DrumGridPlugin::restorePluginStateFromValueTree(const juce::ValueTree& v) {
         chain->pan.referTo(chainCopy, padPanId, um, 0.0f);
         chain->mute.referTo(chainCopy, padMuteId, um, false);
         chain->solo.referTo(chainCopy, padSoloId, um, false);
+        chain->bypassed.referTo(chainCopy, padBypassedId, um, false);
 
         if (chain->index >= nextChainIndex_)
             nextChainIndex_ = chain->index + 1;

@@ -56,6 +56,9 @@ ClipComponent::~ClipComponent() {
 }
 
 void ClipComponent::paint(juce::Graphics& g) {
+    if (getWidth() < 1 || getHeight() < 1)
+        return;
+
     const auto* clip = getClipInfo();
     if (!clip) {
         return;
@@ -423,7 +426,7 @@ void ClipComponent::paintMidiClip(juce::Graphics& g, const ClipInfo& clip,
     g.fillRoundedRectangle(bounds.toFloat(), CORNER_RADIUS);
 
     // MIDI note representation area
-    auto noteArea = bounds.reduced(2, HEADER_HEIGHT + 2);
+    auto noteArea = bounds.withTrimmedTop(HEADER_HEIGHT + 2).withTrimmedBottom(2);
 
     // Calculate clip length in beats using actual tempo
     // During resize drag, use preview length so notes stay fixed
@@ -435,9 +438,18 @@ void ClipComponent::paintMidiClip(juce::Graphics& g, const ClipInfo& clip,
     if (!clip.midiNotes.empty() && noteArea.getHeight() > 5) {
         g.setColour(clip.colour.brighter(0.3f));
 
-        // Use absolute MIDI range (0-127) for consistent vertical positioning across all clips
-        const int MIDI_MAX = 127;
-        const int MIDI_RANGE = 127;
+        // Calculate actual note range for proportional vertical scaling (like Ableton)
+        int minNote = 127, maxNote = 0;
+        for (const auto& note : clip.midiNotes) {
+            minNote = juce::jmin(minNote, note.noteNumber);
+            maxNote = juce::jmax(maxNote, note.noteNumber);
+        }
+        // Add padding so notes aren't flush against edges, minimum 12 semitones range
+        int rawRange = maxNote - minNote;
+        int padding = juce::jmax(6, rawRange / 4);
+        minNote = juce::jmax(0, minNote - padding);
+        maxNote = juce::jmin(127, maxNote + padding);
+        int noteRange = juce::jmax(12, maxNote - minNote);
         double beatRange = juce::jmax(1.0, clipLengthInBeats);
 
         // For MIDI clips, convert source region to beats
@@ -489,10 +501,10 @@ void ClipComponent::paintMidiClip(juce::Graphics& g, const ClipInfo& clip,
                     double visibleEnd = juce::jmin(clipLengthInBeats, displayEnd);
                     double visibleLength = visibleEnd - visibleStart;
 
-                    float noteY = noteArea.getY() + (MIDI_MAX - note.noteNumber) *
-                                                        noteArea.getHeight() / (MIDI_RANGE + 1);
-                    float noteHeight = juce::jmax(1.5f, static_cast<float>(noteArea.getHeight()) /
-                                                            (MIDI_RANGE + 1));
+                    float noteY = noteArea.getY() + static_cast<float>(maxNote - note.noteNumber) /
+                                                        (noteRange + 1) * noteArea.getHeight();
+                    float noteHeight = juce::jmax(2.0f, static_cast<float>(noteArea.getHeight()) /
+                                                            (noteRange + 1));
                     float noteX = noteArea.getX() + static_cast<float>(visibleStart / beatRange) *
                                                         noteArea.getWidth();
                     float noteWidth = juce::jmax(
@@ -514,10 +526,10 @@ void ClipComponent::paintMidiClip(juce::Graphics& g, const ClipInfo& clip,
                 double visibleEnd = juce::jmin(clipLengthInBeats, displayEnd);
                 double visibleLength = visibleEnd - visibleStart;
 
-                float noteY = noteArea.getY() + (MIDI_MAX - note.noteNumber) *
-                                                    noteArea.getHeight() / (MIDI_RANGE + 1);
+                float noteY = noteArea.getY() + static_cast<float>(maxNote - note.noteNumber) /
+                                                    (noteRange + 1) * noteArea.getHeight();
                 float noteHeight =
-                    juce::jmax(1.5f, static_cast<float>(noteArea.getHeight()) / (MIDI_RANGE + 1));
+                    juce::jmax(2.0f, static_cast<float>(noteArea.getHeight()) / (noteRange + 1));
                 float noteX = noteArea.getX() +
                               static_cast<float>(visibleStart / beatRange) * noteArea.getWidth();
                 float noteWidth = juce::jmax(2.0f, static_cast<float>(visibleLength / beatRange) *
@@ -550,7 +562,7 @@ void ClipComponent::paintClipHeader(juce::Graphics& g, const ClipInfo& clip,
     }
 
     // Musical mode indicator (auto-tempo)
-    if (clip.autoTempo && clip.type == ClipType::Audio) {
+    if (clip.autoTempo && clip.type == ClipType::Audio && headerArea.getWidth() > 16) {
         auto musicalArea = headerArea.removeFromRight(14).reduced(2);
         g.setColour(DarkTheme::getColour(DarkTheme::BACKGROUND));
         g.setFont(FontManager::getInstance().getUIFont(12.0f));
@@ -559,19 +571,22 @@ void ClipComponent::paintClipHeader(juce::Graphics& g, const ClipInfo& clip,
     }
 
     // Loop indicator (infinito/infinity icon)
-    if (clip.loopEnabled) {
+    if (clip.loopEnabled && headerArea.getWidth() > 16) {
         headerArea.removeFromRight(2);  // right padding
         auto loopArea = headerArea.removeFromRight(14).reduced(1);
-        static auto loopIcon = [] {
-            auto icon = juce::Drawable::createFromImageData(BinaryData::infinito_svg,
-                                                            BinaryData::infinito_svgSize);
-            if (icon)
-                icon->replaceColour(juce::Colour(0xFFB3B3B3),
-                                    DarkTheme::getColour(DarkTheme::BACKGROUND));
-            return icon;
-        }();
-        if (loopIcon)
-            loopIcon->drawWithin(g, loopArea.toFloat(), juce::RectanglePlacement::centred, 1.0f);
+        if (loopArea.getWidth() > 0 && loopArea.getHeight() > 0) {
+            static auto loopIcon = [] {
+                auto icon = juce::Drawable::createFromImageData(BinaryData::infinito_svg,
+                                                                BinaryData::infinito_svgSize);
+                if (icon)
+                    icon->replaceColour(juce::Colour(0xFFB3B3B3),
+                                        DarkTheme::getColour(DarkTheme::BACKGROUND));
+                return icon;
+            }();
+            if (loopIcon)
+                loopIcon->drawWithin(g, loopArea.toFloat(), juce::RectanglePlacement::centred,
+                                     1.0f);
+        }
     }
 }
 

@@ -73,6 +73,7 @@ class TrackInspector : public BaseInspector,
     // Track properties section
     juce::Label trackNameLabel_;
     juce::Label trackNameValue_;
+    std::unique_ptr<juce::Component> colourSwatch_;
     juce::TextButton muteButton_;
     std::unique_ptr<juce::DrawableButton> speakerButton_;  // Speaker icon for master mute
     juce::TextButton soloButton_;
@@ -105,6 +106,10 @@ class TrackInspector : public BaseInspector,
     // Clips section
     juce::Label clipsSectionLabel_;
     juce::Label clipCountLabel_;
+
+    // Latency display
+    juce::Label latencyLabel_;
+    juce::Label latencyValue_;
 
     // Section separator Y positions (computed in resized, drawn in paint)
     std::vector<int> sectionSeparatorYs_;

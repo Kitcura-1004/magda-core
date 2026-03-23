@@ -51,6 +51,9 @@ DeviceSlotComponent::DeviceSlotComponent(const magda::DeviceInfo& device) : devi
     // Hide built-in bypass button - we'll add our own in the header
     setBypassButtonVisible(false);
 
+    // Add level meter as child (positioned in resized via getMeterWidth)
+    addAndMakeVisible(levelMeter_);
+
     // Set up NodeComponent callbacks
     onDeleteClicked = [this]() {
         // IMPORTANT: Defer deletion to avoid crash - removeDeviceFromChainByPath will
@@ -466,10 +469,10 @@ void DeviceSlotComponent::timerCallback() {
         }
     }
 
-    // Poll device peak levels and feed to gain slider meter
+    // Poll device peak levels for right-side meter strip
     magda::DeviceMeteringManager::DeviceMeterData data;
     if (bridge->getDeviceMetering().getLatestLevels(device_.id, data)) {
-        gainSlider_.setMeterLevels(data.peakL, data.peakR);
+        levelMeter_.setLevels(data.peakL, data.peakR);
     }
 }
 
@@ -531,50 +534,67 @@ void DeviceSlotComponent::setCustomUITabIndex(int index) {
     }
 }
 
+std::vector<tracktion::engine::Plugin*> DeviceSlotComponent::getDrumPadCollapsedPlugins() const {
+    if (drumGridUI_)
+        return drumGridUI_->getPadChainPanel().getCollapsedPlugins();
+    return {};
+}
+
+void DeviceSlotComponent::setDrumPadCollapsedPlugins(
+    const std::vector<tracktion::engine::Plugin*>& plugins) {
+    if (drumGridUI_)
+        drumGridUI_->getPadChainPanel().setCollapsedPlugins(plugins);
+}
+
 int DeviceSlotComponent::getPreferredWidth() const {
+    // Meter strip + padding is added to content width (not via getMeterWidth since meter is
+    // content-area only)
+    constexpr int meterExtra = METER_STRIP_WIDTH + 4;
+
     if (collapsed_) {
-        return getLeftPanelsWidth() + COLLAPSED_WIDTH + getRightPanelsWidth();
+        return getLeftPanelsWidth() + COLLAPSED_WIDTH + METER_STRIP_WIDTH + 2 +
+               getRightPanelsWidth();
     }
     if (fourOscUI_) {
-        return getTotalWidth(500);
+        return getTotalWidth(500) + meterExtra;
     }
     if (eqUI_) {
-        return getTotalWidth(400);
+        return getTotalWidth(400) + meterExtra;
     }
     if (compressorUI_) {
-        return getTotalWidth(350);
+        return getTotalWidth(350) + meterExtra;
     }
     if (reverbUI_) {
-        return getTotalWidth(350);
+        return getTotalWidth(350) + meterExtra;
     }
     if (delayUI_) {
-        return getTotalWidth(300);
+        return getTotalWidth(300) + meterExtra;
     }
     if (chorusUI_) {
-        return getTotalWidth(350);
+        return getTotalWidth(350) + meterExtra;
     }
     if (phaserUI_) {
-        return getTotalWidth(300);
+        return getTotalWidth(300) + meterExtra;
     }
     if (filterUI_) {
-        return getTotalWidth(250);
+        return getTotalWidth(250) + meterExtra;
     }
     if (pitchShiftUI_) {
-        return getTotalWidth(200);
+        return getTotalWidth(200) + meterExtra;
     }
     if (impulseResponseUI_) {
-        return getTotalWidth(350);
+        return getTotalWidth(350) + meterExtra;
     }
     if (utilityUI_) {
-        return getTotalWidth(300);
+        return getTotalWidth(300) + meterExtra;
     }
     if (samplerUI_) {
-        return getTotalWidth(BASE_SLOT_WIDTH * 2);
+        return getTotalWidth(BASE_SLOT_WIDTH * 2) + meterExtra;
     }
     if (drumGridUI_) {
-        return getTotalWidth(drumGridUI_->getPreferredContentWidth());
+        return getTotalWidth(drumGridUI_->getPreferredContentWidth()) + meterExtra;
     }
-    return getTotalWidth(getDynamicSlotWidth());
+    return getTotalWidth(getDynamicSlotWidth()) + meterExtra;
 }
 
 void DeviceSlotComponent::updateFromDevice(const magda::DeviceInfo& device) {
@@ -745,6 +765,28 @@ void DeviceSlotComponent::paint(juce::Graphics& g) {
 }
 
 void DeviceSlotComponent::paintContent(juce::Graphics& g, juce::Rectangle<int> contentArea) {
+    // Draw separator line to the left of the meter strip
+    if (!collapsed_) {
+        int lineX = contentArea.getRight() - METER_STRIP_WIDTH - 4;
+        g.setColour(DarkTheme::getColour(DarkTheme::BORDER));
+        g.drawVerticalLine(lineX, static_cast<float>(contentArea.getY() + 2),
+                           static_cast<float>(contentArea.getBottom() - 2));
+
+        // Horizontal lines above and below the pagination row (for external plugin param grid)
+        if (!isInternalDevice() ||
+            !(toneGeneratorUI_ || samplerUI_ || drumGridUI_ || fourOscUI_ || eqUI_ ||
+              compressorUI_ || reverbUI_ || delayUI_ || chorusUI_ || phaserUI_ || filterUI_ ||
+              pitchShiftUI_ || impulseResponseUI_ || utilityUI_)) {
+            float left = static_cast<float>(contentArea.getX() + 2);
+            float right = static_cast<float>(lineX);
+            int paginationTop = contentArea.getY() + CONTENT_HEADER_HEIGHT;
+            int paginationBottom = paginationTop + PAGINATION_HEIGHT + 4;
+            g.setColour(DarkTheme::getColour(DarkTheme::BORDER));
+            g.drawHorizontalLine(paginationTop, left, right);
+            g.drawHorizontalLine(paginationBottom, left, right);
+        }
+    }
+
     // Loading state overlay: show "Loading..." and skip normal content
     if (device_.loadState == magda::DeviceLoadState::Loading) {
         g.setColour(DarkTheme::getSecondaryTextColour().withAlpha(0.6f));
@@ -793,6 +835,18 @@ void DeviceSlotComponent::paintContent(juce::Graphics& g, juce::Rectangle<int> c
 }
 
 void DeviceSlotComponent::resizedContent(juce::Rectangle<int> contentArea) {
+    // Position the level meter on the right edge of the content area
+    // (when collapsed, meter is positioned by resizedCollapsed instead)
+    if (!collapsed_) {
+        auto meterBounds = contentArea.removeFromRight(METER_STRIP_WIDTH).reduced(1, 3);
+        contentArea.removeFromRight(4);  // Padding between content and meter
+        levelMeter_.setBounds(meterBounds);
+        levelMeter_.setVisible(true);
+    }
+
+    // Bottom padding
+    contentArea.removeFromBottom(2);
+
     // When collapsed or still loading, hide all content controls
     if (collapsed_ || device_.loadState != magda::DeviceLoadState::Loaded) {
         for (int i = 0; i < NUM_PARAMS_PER_PAGE; ++i) {
@@ -947,7 +1001,9 @@ void DeviceSlotComponent::resizedContent(juce::Rectangle<int> contentArea) {
             utilityUI_->setVisible(false);
 
         // Pagination area
+        contentArea.removeFromTop(2);
         auto paginationArea = contentArea.removeFromTop(PAGINATION_HEIGHT);
+        contentArea.removeFromTop(2);
         int buttonWidth = 18;
         prevPageButton_->setBounds(paginationArea.removeFromLeft(buttonWidth));
         nextPageButton_->setBounds(paginationArea.removeFromRight(buttonWidth));
@@ -977,11 +1033,11 @@ void DeviceSlotComponent::resizedContent(juce::Rectangle<int> contentArea) {
         for (int i = 0; i < NUM_PARAMS_PER_PAGE; ++i) {
             int row = i / paramsPerRow;
             int col = i % paramsPerRow;
-            int x = contentArea.getX() + col * cellWidth;
-            int y = contentArea.getY() + row * cellHeight;
+            int x = contentArea.getX() + col * cellWidth + 2;
+            int y = contentArea.getY() + row * cellHeight + 2;
 
             paramSlots_[i]->setFonts(labelFont, valueFont);
-            paramSlots_[i]->setBounds(x, y, cellWidth - 2, cellHeight);
+            paramSlots_[i]->setBounds(x, y, cellWidth - 4, cellHeight - 4);
             paramSlots_[i]->setVisible(true);
         }
     }
@@ -1002,25 +1058,24 @@ void DeviceSlotComponent::resizedHeaderExtra(juce::Rectangle<int>& headerArea) {
 
     // Sidechain button (only if plugin supports it)
     if ((device_.canSidechain || device_.canReceiveMidi) && scButton_) {
-        scButton_->setBounds(headerArea.removeFromRight(20));
+        scButton_->setBounds(headerArea.removeFromRight(BUTTON_SIZE));
         scButton_->setVisible(true);
-        headerArea.removeFromRight(2);
+        headerArea.removeFromRight(4);
     } else if (scButton_) {
         scButton_->setVisible(false);
     }
 
-    // Multi-output button (only if plugin is multi-out)
+    // Gain slider
+    gainSlider_.setBounds(headerArea.removeFromRight(70));
+    headerArea.removeFromRight(4);
+
+    // Multi-output button (to the left of gain slider)
     if (device_.multiOut.isMultiOut && multiOutButton_) {
         multiOutButton_->setBounds(headerArea.removeFromRight(BUTTON_SIZE));
         headerArea.removeFromRight(4);
     }
 
-    // Gain slider takes some space on the right
-    gainSlider_.setBounds(headerArea.removeFromRight(70));
-    headerArea.removeFromRight(4);
-
-    // Name label gets the remaining left portion (handled by NodeComponent)
-    // UI button sits just to the right of the name
+    // UI button (only for external plugins)
     if (uiButton_->isVisible()) {
         uiButton_->setBounds(headerArea.removeFromRight(BUTTON_SIZE));
         headerArea.removeFromRight(4);
@@ -1030,11 +1085,27 @@ void DeviceSlotComponent::resizedHeaderExtra(juce::Rectangle<int>& headerArea) {
 }
 
 void DeviceSlotComponent::resizedCollapsed(juce::Rectangle<int>& area) {
-    // Add device-specific buttons vertically when collapsed
-    // Order: X (from base), ON, UI, Macro, Mod - matches panel order
-    int buttonSize = juce::jmin(16, area.getWidth() - 4);
+    // Meter is positioned by base class via getCollapsedMeterWidth() -> collapsedMeterArea_
+    levelMeter_.setBounds(collapsedMeterArea_);
+    levelMeter_.setVisible(true);
 
-    // On/power button (right after X)
+    int buttonSize = juce::jmin(BUTTON_SIZE, area.getWidth() - 4);
+
+    if (drumGridUI_) {
+        // DrumGrid collapsed: only power button (delete/bypass from base)
+        macroButton_->setVisible(false);
+        modButton_->setVisible(false);
+        uiButton_->setVisible(false);
+        if (multiOutButton_)
+            multiOutButton_->setVisible(false);
+
+        onButton_->setBounds(
+            area.removeFromTop(buttonSize).withSizeKeepingCentre(buttonSize, buttonSize));
+        onButton_->setVisible(true);
+        return;
+    }
+
+    // On/power button
     onButton_->setBounds(
         area.removeFromTop(buttonSize).withSizeKeepingCentre(buttonSize, buttonSize));
     onButton_->setVisible(true);
@@ -1061,6 +1132,12 @@ void DeviceSlotComponent::resizedCollapsed(juce::Rectangle<int>& area) {
             area.removeFromTop(buttonSize).withSizeKeepingCentre(buttonSize, buttonSize));
         multiOutButton_->setVisible(true);
     }
+}
+
+juce::String DeviceSlotComponent::getCollapsedName() const {
+    if (isDrumGrid_)
+        return device_.name;
+    return NodeComponent::getCollapsedName();
 }
 
 int DeviceSlotComponent::getModPanelWidth() const {
@@ -1730,7 +1807,7 @@ void DeviceSlotComponent::createCustomUI() {
             if (auto* chain = dg->getChainForNote(midiNote)) {
                 drumGridUI_->updatePadInfo(padIndex, getChainDisplayName(*chain), chain->mute.get(),
                                            chain->solo.get(), chain->level.get(), chain->pan.get(),
-                                           chain->index);
+                                           chain->index, chain->bypassed.get());
             } else {
                 drumGridUI_->updatePadInfo(padIndex, "", false, false, 0.0f, 0.0f, -1);
             }
@@ -1804,6 +1881,14 @@ void DeviceSlotComponent::createCustomUI() {
                 int midiNote = daw::audio::DrumGridPlugin::baseNote + padIndex;
                 if (auto* chain = dg->getChainForNote(midiNote))
                     const_cast<daw::audio::DrumGridPlugin::Chain*>(chain)->solo = soloed;
+            }
+        };
+
+        drumGridUI_->onPadBypassChanged = [getDrumGrid](int padIndex, bool bypassed) {
+            if (auto* dg = getDrumGrid()) {
+                int midiNote = daw::audio::DrumGridPlugin::baseNote + padIndex;
+                if (auto* chain = dg->getChainForNote(midiNote))
+                    const_cast<daw::audio::DrumGridPlugin::Chain*>(chain)->bypassed = bypassed;
             }
         };
 
@@ -2030,6 +2115,103 @@ void DeviceSlotComponent::createCustomUI() {
         padChain.onLayoutChanged = [this]() {
             if (onDeviceLayoutChanged)
                 onDeviceLayoutChanged();
+        };
+
+        padChain.onDeviceClicked = [this](const juce::String& pluginName,
+                                          const juce::String& pluginType) {
+            DBG("DeviceSlotComponent: padChain.onDeviceClicked fired, plugin=" + pluginName +
+                " type=" + pluginType);
+            if (nodePath_.isValid()) {
+                magda::SelectionManager::getInstance().selectChainNode(nodePath_, pluginName,
+                                                                       pluginType);
+            }
+        };
+
+        // "+" button — show plugin picker popup (same as ChainPanel)
+        padChain.onAddDeviceClicked = [this, getDrumGrid](int padIndex) {
+            auto* dg = getDrumGrid();
+            if (!dg)
+                return;
+
+            juce::PopupMenu menu;
+
+            // Internal FX plugins (no instruments — pad already has a sampler)
+            juce::PopupMenu internalMenu;
+            struct InternalEntry {
+                juce::String name;
+                juce::String pluginId;
+            };
+            const InternalEntry internals[] = {
+                {"Equaliser", "eq"},
+                {"Compressor", "compressor"},
+                {"Reverb", "reverb"},
+                {"Delay", "delay"},
+                {"Chorus", "chorus"},
+                {"Phaser", "phaser"},
+                {"Filter", "lowpass"},
+                {"Pitch Shift", "pitchshift"},
+                {"IR Reverb", "impulseresponse"},
+                {"Utility", "utility"},
+            };
+            int itemId = 1;
+            for (const auto& entry : internals)
+                internalMenu.addItem(itemId++, entry.name);
+            menu.addSubMenu("Internal", internalMenu);
+
+            // External plugins from KnownPluginList
+            juce::Array<juce::PluginDescription> externalPlugins;
+            if (auto* engine = dynamic_cast<magda::TracktionEngineWrapper*>(
+                    magda::TrackManager::getInstance().getAudioEngine())) {
+                auto& knownPlugins = engine->getKnownPluginList();
+                externalPlugins = knownPlugins.getTypes();
+            }
+
+            if (!externalPlugins.isEmpty()) {
+                std::map<juce::String, juce::PopupMenu> byManufacturer;
+                for (int i = 0; i < externalPlugins.size(); ++i) {
+                    const auto& desc = externalPlugins[i];
+                    // Skip instruments — only show FX
+                    if (desc.isInstrument)
+                        continue;
+                    auto manufacturer =
+                        desc.manufacturerName.isEmpty() ? "Unknown" : desc.manufacturerName;
+                    byManufacturer[manufacturer].addItem(1000 + i, desc.name);
+                }
+                for (auto& [manufacturer, subMenu] : byManufacturer)
+                    menu.addSubMenu(manufacturer, subMenu);
+            }
+
+            auto safeThis = juce::Component::SafePointer<DeviceSlotComponent>(this);
+            auto capturedPlugins =
+                std::make_shared<juce::Array<juce::PluginDescription>>(std::move(externalPlugins));
+            auto capturedInternals = std::make_shared<std::vector<InternalEntry>>(
+                std::begin(internals), std::end(internals));
+
+            menu.showMenuAsync(
+                juce::PopupMenu::Options(),
+                [safeThis, padIndex, getDrumGrid, capturedPlugins, capturedInternals](int result) {
+                    if (result == 0 || !safeThis)
+                        return;
+
+                    auto* dg2 = getDrumGrid();
+                    if (!dg2)
+                        return;
+
+                    if (result >= 1 && result <= static_cast<int>(capturedInternals->size())) {
+                        auto& entry = (*capturedInternals)[static_cast<size_t>(result - 1)];
+                        // Internal TE plugin — create directly via plugin cache
+                        int midiNote = daw::audio::DrumGridPlugin::baseNote + padIndex;
+                        if (auto* chain = dg2->getChainForNote(midiNote))
+                            dg2->addInternalPluginToChain(chain->index, entry.pluginId);
+                        safeThis->drumGridUI_->getPadChainPanel().refresh();
+                    } else if (result >= 1000) {
+                        int pluginIdx = result - 1000;
+                        if (pluginIdx < capturedPlugins->size()) {
+                            dg2->addPluginToPad(padIndex, (*capturedPlugins)[pluginIdx]);
+                            safeThis->drumGridUI_->getPadChainPanel().refresh();
+                        }
+                    }
+                });
         };
 
         addAndMakeVisible(*drumGridUI_);
@@ -2330,7 +2512,8 @@ void DeviceSlotComponent::updateCustomUI() {
                             if (padIdx >= 0 && padIdx < daw::audio::DrumGridPlugin::maxPads) {
                                 drumGridUI_->updatePadInfo(padIdx, displayName, chain->mute.get(),
                                                            chain->solo.get(), chain->level.get(),
-                                                           chain->pan.get(), chain->index);
+                                                           chain->pan.get(), chain->index,
+                                                           chain->bypassed.get());
                             }
                         }
                     }

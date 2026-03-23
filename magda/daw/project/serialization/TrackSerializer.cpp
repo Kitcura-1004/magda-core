@@ -290,7 +290,6 @@ juce::var ProjectSerializer::serializeDeviceInfo(const DeviceInfo& device) {
         auto* multiOutObj = new juce::DynamicObject();
         multiOutObj->setProperty("isMultiOut", true);
         multiOutObj->setProperty("totalOutputChannels", device.multiOut.totalOutputChannels);
-        multiOutObj->setProperty("mixerChildrenCollapsed", device.multiOut.mixerChildrenCollapsed);
 
         juce::Array<juce::var> pairsArray;
         for (const auto& pair : device.multiOut.outputPairs) {
@@ -416,9 +415,6 @@ bool ProjectSerializer::deserializeDeviceInfo(const juce::var& json, DeviceInfo&
         auto* moObj = multiOutVar.getDynamicObject();
         outDevice.multiOut.isMultiOut = moObj->getProperty("isMultiOut");
         outDevice.multiOut.totalOutputChannels = moObj->getProperty("totalOutputChannels");
-        if (moObj->hasProperty("mixerChildrenCollapsed"))
-            outDevice.multiOut.mixerChildrenCollapsed =
-                moObj->getProperty("mixerChildrenCollapsed");
 
         auto pairsVar = moObj->getProperty("outputPairs");
         if (pairsVar.isArray()) {
@@ -585,6 +581,7 @@ juce::var ProjectSerializer::serializeChainInfo(const ChainInfo& chain) {
     obj->setProperty("outputIndex", chain.outputIndex);
     obj->setProperty("muted", chain.muted);
     obj->setProperty("solo", chain.solo);
+    obj->setProperty("bypassed", chain.bypassed);
     obj->setProperty("volume", chain.volume);
     obj->setProperty("pan", chain.pan);
     obj->setProperty("expanded", chain.expanded);
@@ -612,6 +609,7 @@ bool ProjectSerializer::deserializeChainInfo(const juce::var& json, ChainInfo& o
     outChain.outputIndex = obj->getProperty("outputIndex");
     outChain.muted = obj->getProperty("muted");
     outChain.solo = obj->getProperty("solo");
+    outChain.bypassed = obj->getProperty("bypassed");
     outChain.volume = obj->getProperty("volume");
     outChain.pan = obj->getProperty("pan");
     outChain.expanded = obj->getProperty("expanded");

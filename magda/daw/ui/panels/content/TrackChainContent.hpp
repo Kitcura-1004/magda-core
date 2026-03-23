@@ -1,6 +1,7 @@
 #pragma once
 
 #include <map>
+#include <vector>
 
 #include "../../../core/LinkModeManager.hpp"
 #include "../../themes/MixerLookAndFeel.hpp"
@@ -10,6 +11,12 @@
 #include "core/TrackManager.hpp"
 #include "ui/components/common/SvgButton.hpp"
 #include "ui/components/common/TextSlider.hpp"
+
+namespace tracktion {
+inline namespace engine {
+class Plugin;
+}
+}  // namespace tracktion
 
 namespace magda::daw::ui {
 
@@ -123,7 +130,7 @@ class TrackChainContent : public PanelContent,
     // All node components in signal flow order (devices and racks unified)
     std::vector<std::unique_ptr<NodeComponent>> nodeComponents_;
 
-    static constexpr int ARROW_WIDTH = 20;
+    static constexpr int ARROW_WIDTH = 4;  // Small gap between device slots
     static constexpr int SLOT_SPACING = 8;
     static constexpr int DRAG_LEFT_PADDING = 12;  // Padding during drag for drop indicator
 
@@ -137,6 +144,7 @@ class TrackChainContent : public PanelContent,
 
     static constexpr int HEADER_HEIGHT = 28;
     static constexpr int MODS_PANEL_WIDTH = 160;
+    static constexpr int MIN_CHAIN_HEIGHT = 280;  // Minimum content height before scrolling
 
     // Horizontal zoom
     float zoomLevel_ = 1.0f;
@@ -166,6 +174,8 @@ class TrackChainContent : public PanelContent,
     std::map<juce::String, magda::ChainId> savedExpandedChains_;  // rackPath -> expanded chainId
     std::map<juce::String, bool> savedParamPanelStates_;          // path -> paramPanelVisible
     std::map<juce::String, int> savedCustomUITabStates_;          // path -> custom UI tab index
+    std::map<juce::String, std::vector<tracktion::engine::Plugin*>>
+        savedDrumPadCollapsedPlugins_;  // path -> collapsed plugin ptrs
     void saveNodeStates();
     void restoreNodeStates();
 

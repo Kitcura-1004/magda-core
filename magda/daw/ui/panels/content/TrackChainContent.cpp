@@ -301,18 +301,6 @@ class TrackChainContent::ChainContainer : public juce::Component, public juce::D
     }
 
     void paint(juce::Graphics& g) override {
-        // Draw arrows between elements
-        int arrowY = getHeight() / 2;
-        g.setColour(DarkTheme::getSecondaryTextColour());
-
-        // Draw arrows after each node (except the last one)
-        if (nodeComponents_) {
-            for (size_t i = 0; i + 1 < nodeComponents_->size(); ++i) {
-                int x = (*nodeComponents_)[i]->getRight();
-                drawArrow(g, x, arrowY);
-            }
-        }
-
         // Draw insertion indicator during drag (reorder or drop)
         if (owner_.dragInsertIndex_ >= 0 || owner_.dropInsertIndex_ >= 0) {
             int indicatorIndex =
@@ -418,18 +406,6 @@ class TrackChainContent::ChainContainer : public juce::Component, public juce::D
         }
     }
 
-    void drawArrow(juce::Graphics& g, int x, int y) {
-        int arrowStart = x + 4;
-        int arrowEnd = x + 16;
-        g.drawLine(static_cast<float>(arrowStart), static_cast<float>(y),
-                   static_cast<float>(arrowEnd), static_cast<float>(y), 1.5f);
-        // Arrow head
-        g.drawLine(static_cast<float>(arrowEnd - 4), static_cast<float>(y - 3),
-                   static_cast<float>(arrowEnd), static_cast<float>(y), 1.5f);
-        g.drawLine(static_cast<float>(arrowEnd - 4), static_cast<float>(y + 3),
-                   static_cast<float>(arrowEnd), static_cast<float>(y), 1.5f);
-    }
-
     TrackChainContent& owner_;
     const std::vector<std::unique_ptr<NodeComponent>>* nodeComponents_ = nullptr;
 
@@ -502,7 +478,7 @@ TrackChainContent::TrackChainContent()
     // Viewport for horizontal scrolling of chain content
     DBG("TrackChainContent::ctor - Setting up ZoomableViewport for chain content");
     chainViewport_->setViewedComponent(chainContainer_.get(), false);
-    chainViewport_->setScrollBarsShown(false, true);  // Horizontal only
+    chainViewport_->setScrollBarsShown(true, true);  // Vertical and horizontal
     addAndMakeVisible(*chainViewport_);
 
     // No selection label
@@ -661,9 +637,13 @@ TrackChainContent::TrackChainContent()
     chainBypassButton_->onClick = [this]() {
         bool active = chainBypassButton_->getToggleState();
         chainBypassButton_->setActive(active);
-        // TODO: Actually bypass all devices in the track chain
-        DBG("Track chain bypass: " << (active ? "ACTIVE" : "BYPASSED"));
-        repaint();
+        if (selectedTrackId_ != magda::INVALID_TRACK_ID) {
+            magda::TrackManager::getInstance().setChainBypassed(selectedTrackId_, !active);
+        }
+        // Update all node components to reflect bypass state
+        for (auto& node : nodeComponents_) {
+            node->setBypassed(!active);
+        }
     };
     addChildComponent(*chainBypassButton_);
 
@@ -866,15 +846,18 @@ void TrackChainContent::resized() {
 
 void TrackChainContent::layoutChainContent() {
     auto viewportBounds = chainViewport_->getLocalBounds();
-    int chainHeight = viewportBounds.getHeight();
+    int viewportHeight = viewportBounds.getHeight();
     int availableWidth = viewportBounds.getWidth();
+
+    // Enforce minimum content height — viewport scrolls vertically if panel is too short
+    int chainHeight = juce::jmax(MIN_CHAIN_HEIGHT, viewportHeight);
 
     // Calculate total content width (with zoom applied)
     int totalWidth = calculateTotalContentWidth();
 
     // Account for scrollbar if needed
     if (totalWidth > availableWidth) {
-        chainHeight -= 8;  // Space for scrollbar
+        chainHeight = juce::jmax(MIN_CHAIN_HEIGHT, chainHeight - 8);  // Space for scrollbar
     }
 
     // Set container size
@@ -892,7 +875,7 @@ void TrackChainContent::layoutChainContent() {
         // Check if it's a RackComponent to set available width
         if (auto* rack = dynamic_cast<RackComponent*>(node.get())) {
             int remainingWidth =
-                juce::jmax(300, availableWidth - x - scaledArrowWidth - scaledSlotSpacing);
+                juce::jmax(0, availableWidth - x - scaledArrowWidth - scaledSlotSpacing);
             rack->setAvailableWidth(remainingWidth);
         }
 
@@ -1000,9 +983,21 @@ void TrackChainContent::updateFromSelectedTrack() {
             // Update pan slider
             panSlider_.setValue(track->pan, juce::dontSendNotification);
 
-            // Reset chain bypass button state (active = not bypassed)
-            chainBypassButton_->setToggleState(true, juce::dontSendNotification);
-            chainBypassButton_->setActive(true);
+            // Check if any device in the chain is not bypassed
+            bool anyActive = false;
+            for (const auto& element :
+                 magda::TrackManager::getInstance().getChainElements(selectedTrackId_)) {
+                if (magda::isDevice(element) && !magda::getDevice(element).bypassed) {
+                    anyActive = true;
+                    break;
+                }
+                if (magda::isRack(element) && !magda::getRack(element).bypassed) {
+                    anyActive = true;
+                    break;
+                }
+            }
+            chainBypassButton_->setToggleState(anyActive, juce::dontSendNotification);
+            chainBypassButton_->setActive(anyActive);
 
             showHeader(true);
 
@@ -1369,6 +1364,7 @@ void TrackChainContent::saveNodeStates() {
     savedExpandedChains_.clear();
     savedParamPanelStates_.clear();
     savedCustomUITabStates_.clear();
+    savedDrumPadCollapsedPlugins_.clear();
 
     for (const auto& node : nodeComponents_) {
         const auto& path = node->getNodePath();
@@ -1384,6 +1380,11 @@ void TrackChainContent::saveNodeStates() {
                 int tabIndex = device->getCustomUITabIndex();
                 if (tabIndex > 0)
                     savedCustomUITabStates_[path.toString()] = tabIndex;
+
+                // Save DrumGrid pad chain collapsed plugins
+                auto collapsed = device->getDrumPadCollapsedPlugins();
+                if (!collapsed.empty())
+                    savedDrumPadCollapsedPlugins_[path.toString()] = std::move(collapsed);
             }
 
             // Save expanded chain for racks
@@ -1417,6 +1418,12 @@ void TrackChainContent::restoreNodeStates() {
                 auto tabIt = savedCustomUITabStates_.find(path.toString());
                 if (tabIt != savedCustomUITabStates_.end()) {
                     device->setCustomUITabIndex(tabIt->second);
+                }
+
+                // Restore DrumGrid pad chain collapsed plugins
+                auto collapsedIt = savedDrumPadCollapsedPlugins_.find(path.toString());
+                if (collapsedIt != savedDrumPadCollapsedPlugins_.end()) {
+                    device->setDrumPadCollapsedPlugins(collapsedIt->second);
                 }
             }
 

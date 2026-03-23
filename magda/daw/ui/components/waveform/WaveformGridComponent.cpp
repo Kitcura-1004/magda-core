@@ -2,6 +2,8 @@
 
 #include <juce_audio_basics/juce_audio_basics.h>
 
+#include <cmath>
+
 #include "../../themes/CursorManager.hpp"
 #include "../../themes/DarkTheme.hpp"
 #include "../../themes/FontManager.hpp"
@@ -61,14 +63,13 @@ WaveformGridComponent::WaveformLayout WaveformGridComponent::computeWaveformLayo
 
     double displayLength = displayInfo_.effectiveSourceExtentSeconds;
 
-    int widthPixels = static_cast<int>(displayLength * horizontalZoom_);
+    int clipEndPixel = timeToPixel(displayStartTime + displayLength);
+    int widthPixels = clipEndPixel - positionPixels;
     if (widthPixels <= 0)
         return {};
 
     auto rect =
         juce::Rectangle<int>(positionPixels, bounds.getY(), widthPixels, bounds.getHeight());
-
-    int clipEndPixel = timeToPixel(displayStartTime + displayLength);
 
     return {rect, clipEndPixel};
 }
@@ -141,8 +142,8 @@ void WaveformGridComponent::paintWaveformThumbnail(juce::Graphics& g, const magd
             if (fileDuration > 0.0 && displayEnd > fileDuration)
                 displayEnd = fileDuration;
 
-            int audioWidthPixels =
-                static_cast<int>(displayInfo_.effectiveSourceExtentSeconds * horizontalZoom_);
+            int audioWidthPixels = static_cast<int>(
+                std::ceil(displayInfo_.effectiveSourceExtentSeconds * horizontalZoom_));
             auto audioRect = juce::Rectangle<int>(
                 waveformRect.getX(), waveformRect.getY(),
                 juce::jmin(audioWidthPixels, waveformRect.getWidth()), waveformRect.getHeight());
@@ -488,18 +489,6 @@ void WaveformGridComponent::paintClipBoundaries(juce::Graphics& g) {
 
     double baseTime = getDisplayStartTime();
 
-    // Clip boundaries — clip starts at offset, ends at offset + clipLength (in timeline seconds)
-    // In loop mode, hide clip boundary markers (arrangement length is irrelevant in source editor)
-    if (!isLooped) {
-        int clipStartX = timeToPixel(baseTime + displayInfo_.offsetPositionSeconds);
-        g.setColour(DarkTheme::getAccentColour().withAlpha(0.6f));
-        g.fillRect(clipStartX - 1, 0, 2, bounds.getHeight());
-
-        int clipEndX = timeToPixel(baseTime + displayInfo_.offsetPositionSeconds + clipLength_);
-        g.setColour(DarkTheme::getAccentColour().withAlpha(0.8f));
-        g.fillRect(clipEndX - 1, 0, 3, bounds.getHeight());
-    }
-
     // Loop boundaries - only shown when loop is enabled
     if (isLooped && displayInfo_.loopLengthSeconds > 0.0) {
         // Loop markers from ClipDisplayInfo (at real source positions)
@@ -582,6 +571,32 @@ void WaveformGridComponent::paintClipBoundaries(juce::Graphics& g) {
             g.setColour(bgColour.withAlpha(rightGhostAlpha));
             g.fillRect(juce::Rectangle<int>(rightBoundaryX, bounds.getY(),
                                             rightEdge - rightBoundaryX, bounds.getHeight()));
+        }
+    }
+
+    // Clip boundary markers — drawn AFTER ghost overlays so they're visible on top
+    if (!isLooped) {
+        auto markerColour = juce::Colour(0xFFAAAAAA);
+
+        int clipStartX = timeToPixel(baseTime + displayInfo_.offsetPositionSeconds);
+        {
+            g.setColour(markerColour);
+            g.fillRect(clipStartX - 2, 0, 3, bounds.getHeight());
+            juce::ColourGradient grad(markerColour.withAlpha(0.5f), clipStartX - 2.0f, 0.0f,
+                                      markerColour.withAlpha(0.0f), clipStartX - 10.0f, 0.0f,
+                                      false);
+            g.setGradientFill(grad);
+            g.fillRect(clipStartX - 10, 0, 8, bounds.getHeight());
+        }
+
+        int clipEndX = timeToPixel(baseTime + displayInfo_.offsetPositionSeconds + clipLength_);
+        {
+            g.setColour(markerColour);
+            g.fillRect(clipEndX, 0, 3, bounds.getHeight());
+            juce::ColourGradient grad(markerColour.withAlpha(0.5f), clipEndX + 3.0f, 0.0f,
+                                      markerColour.withAlpha(0.0f), clipEndX + 11.0f, 0.0f, false);
+            g.setGradientFill(grad);
+            g.fillRect(clipEndX + 3, 0, 8, bounds.getHeight());
         }
     }
 }

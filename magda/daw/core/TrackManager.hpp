@@ -222,6 +222,7 @@ class TrackManager {
     DeviceId addDeviceToTrack(TrackId trackId, const DeviceInfo& device, int insertIndex);
     void removeDeviceFromTrack(TrackId trackId, DeviceId deviceId);
     void setDeviceBypassed(TrackId trackId, DeviceId deviceId, bool bypassed);
+    void setChainBypassed(TrackId trackId, bool bypassed);
     DeviceInfo* getDevice(TrackId trackId, DeviceId deviceId);
 
     // Wrap a device in a new rack (device moves into the rack's first chain)
@@ -250,6 +251,7 @@ class TrackManager {
     const ChainInfo* getChain(TrackId trackId, RackId rackId, ChainId chainId) const;
     void setChainOutput(TrackId trackId, RackId rackId, ChainId chainId, int outputIndex);
     void setChainMuted(TrackId trackId, RackId rackId, ChainId chainId, bool muted);
+    void setChainBypassed(TrackId trackId, RackId rackId, ChainId chainId, bool bypassed);
     void setChainSolo(TrackId trackId, RackId rackId, ChainId chainId, bool solo);
     void setChainVolume(TrackId trackId, RackId rackId, ChainId chainId, float volume);
     void setChainPan(TrackId trackId, RackId rackId, ChainId chainId, float pan);
@@ -303,6 +305,20 @@ class TrackManager {
      */
     void setDeviceParameterValueFromPlugin(const ChainNodePath& devicePath, int paramIndex,
                                            float value);
+
+    /**
+     * @brief Get plugin latency for a device by querying the audio engine
+     * @param devicePath Path to the device in the chain
+     * @return Latency in seconds, or 0 if not found
+     */
+    double getDeviceLatencySeconds(const ChainNodePath& devicePath);
+
+    /**
+     * @brief Get total plugin latency for a track (sum of all devices in chain)
+     * @param trackId Track to query
+     * @return Total latency in seconds, or 0 if not found
+     */
+    double getTrackLatencySeconds(TrackId trackId);
 
     // Nested rack management within chains
     RackId addRackToChain(TrackId trackId, RackId parentRackId, ChainId chainId,

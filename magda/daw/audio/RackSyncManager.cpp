@@ -15,6 +15,8 @@ RackSyncManager::RackSyncManager(te::Edit& edit, PluginManager& pluginManager)
 // =============================================================================
 
 te::Plugin::Ptr RackSyncManager::syncRack(TrackId trackId, const RackInfo& rackInfo) {
+    deferredHolders_.clear();  // Drain previous cycle's deferred holders
+
     DBG("syncRack: rackId=" << rackInfo.id << " trackId=" << trackId
                             << " chains=" << (int)rackInfo.chains.size() << " alreadySynced="
                             << (int)(syncedRacks_.find(rackInfo.id) != syncedRacks_.end()));
@@ -164,8 +166,9 @@ void RackSyncManager::removeRack(RackId rackId) {
         edit_.getRackList().removeRackType(synced.rackType);
     }
 
-    // Clear LFO callbacks before destroying CurveSnapshotHolders
+    // Clear LFO callbacks and defer holder destruction
     clearLFOCustomWaveCallbacks(synced.innerModifiers);
+    deferCurveSnapshots(synced.curveSnapshots, deferredHolders_);
 
     DBG("RackSyncManager: Removed rack " << rackId);
 
@@ -309,10 +312,14 @@ void RackSyncManager::clear() {
 
             macroList.removeMacroParameter(*macroParam);
         }
-        // Clear LFO callbacks before destroying CurveSnapshotHolders
+        // Clear LFO callbacks and defer holder destruction
         clearLFOCustomWaveCallbacks(synced.innerModifiers);
+        deferCurveSnapshots(synced.curveSnapshots, deferredHolders_);
     }
     syncedRacks_.clear();
+    // Note: deferredHolders_ are NOT drained here — this is typically called from
+    // PluginManager::clearAllMappings() which drains its own deferred holders after.
+    // These will be cleaned up when RackSyncManager is destroyed.
 }
 
 void RackSyncManager::setMacroValue(RackId rackId, int macroIndex, float value) {
@@ -499,6 +506,14 @@ void RackSyncManager::buildConnections(SyncedRack& synced, const RackInfo& rackI
         if (anySoloed && !chain.solo)
             chainActive = false;
 
+        // Bypassed chain: pass audio straight through to output, skip all plugins
+        if (chain.bypassed && chainActive) {
+            rackType->addConnection(rackIOId, 1, rackIOId, 1);  // Left passthrough
+            rackType->addConnection(rackIOId, 2, rackIOId, 2);  // Right passthrough
+            anyChainConnectedToOutput = true;
+            continue;
+        }
+
         // Collect device plugins in this chain (in order)
         std::vector<te::EditItemID> chainPluginIds;
         for (const auto& element : chain.elements) {
@@ -568,9 +583,9 @@ void RackSyncManager::buildConnections(SyncedRack& synced, const RackInfo& rackI
         }
     }
 
-    // If no chain connected to output (all empty, muted, or no chains),
-    // pass audio straight through so the rack is transparent
-    if (!anyChainConnectedToOutput) {
+    // If no chains exist at all, pass audio straight through so the rack is transparent.
+    // When chains exist but are all muted/inactive, leave output disconnected for silence.
+    if (!anyChainConnectedToOutput && rackInfo.chains.empty()) {
         rackType->addConnection(rackIOId, 1, rackIOId, 1);
         rackType->addConnection(rackIOId, 2, rackIOId, 2);
     }

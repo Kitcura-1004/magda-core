@@ -55,7 +55,7 @@ class DrumGridUI : public juce::Component,
     // Fixed panel widths
     static constexpr int kToggleColWidth = 20;
     static constexpr int kPadGridWidth = 250;
-    static constexpr int kChainsPanelWidth = 220;
+    static constexpr int kChainsPanelWidth = 260;
     static constexpr int kDetailPanelWidth =
         800;  // Accommodate sampler (750px), FX scroll in viewport
     static constexpr int kGap = 6;
@@ -68,7 +68,7 @@ class DrumGridUI : public juce::Component,
 
     /** Update cached info for a single pad. Called from DeviceSlotComponent::updateCustomUI. */
     void updatePadInfo(int padIndex, const juce::String& sampleName, bool mute, bool solo,
-                       float levelDb, float pan, int chainIndex = -1);
+                       float levelDb, float pan, int chainIndex = -1, bool bypassed = false);
 
     /** Set which pad is selected and populate the detail panel. */
     void setSelectedPad(int padIndex);
@@ -102,6 +102,9 @@ class DrumGridUI : public juce::Component,
     /** Called when pad solo changes. (padIndex, soloed) */
     std::function<void(int, bool)> onPadSoloChanged;
 
+    /** Called when pad bypass changes. (padIndex, bypassed) */
+    std::function<void(int, bool)> onPadBypassChanged;
+
     /** Called when a plugin is dropped onto a pad. (padIndex, DynamicObject with plugin info) */
     std::function<void(int, const juce::DynamicObject&)> onPluginDropped;
 
@@ -128,6 +131,9 @@ class DrumGridUI : public juce::Component,
 
     /** Get the PadChainPanel for wiring callbacks from DeviceSlotComponent. */
     PadChainPanel& getPadChainPanel() {
+        return padChainPanel_;
+    }
+    const PadChainPanel& getPadChainPanel() const {
         return padChainPanel_;
     }
 
@@ -210,6 +216,7 @@ class DrumGridUI : public juce::Component,
         juce::String sampleName;
         bool mute = false;
         bool solo = false;
+        bool bypassed = false;
         float level = 0.0f;
         float pan = 0.0f;
         int chainIndex = -1;  // Index of the chain covering this pad, or -1 if empty
@@ -241,6 +248,7 @@ class DrumGridUI : public juce::Component,
 
     // Per-pad FX chain panel (replaces old SamplerUI + param grid)
     PadChainPanel padChainPanel_;
+    bool detailCollapsed_ = false;
 
     // Chains panel
     bool chainsPanelVisible_ = true;
@@ -264,6 +272,7 @@ class DrumGridUI : public juce::Component,
     daw::audio::DrumGridPlugin* drumGridPlugin_ = nullptr;
 
     //==============================================================================
+    void setDetailCollapsed(bool collapsed);
     void refreshPadButtons();
     void refreshDetailPanel();
     void goToPrevPage();

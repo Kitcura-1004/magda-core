@@ -34,6 +34,16 @@ class AboutDialog::ContentComponent : public juce::Component {
             }
         }
 
+        // Load JUCE logo
+        if (auto xml = juce::XmlDocument::parse(juce::String::fromUTF8(
+                BinaryData::fadlogojuce_svg, BinaryData::fadlogojuce_svgSize))) {
+            juceLogo_ = juce::Drawable::createFromSVG(*xml);
+            if (juceLogo_) {
+                juceLogo_->replaceColour(juce::Colour(0xFF000000),
+                                         juce::Colour(DarkTheme::TEXT_DIM));
+            }
+        }
+
         // Title as clickable link to website
         titleLink_ =
             std::make_unique<juce::HyperlinkButton>("MAGDA", juce::URL("https://magda.land"));
@@ -42,7 +52,7 @@ class AboutDialog::ContentComponent : public juce::Component {
                               juce::Colour(DarkTheme::TEXT_PRIMARY));
         addAndMakeVisible(*titleLink_);
 
-        setSize(400, 410);
+        setSize(500, 440);
     }
 
     void paint(juce::Graphics& g) override {
@@ -74,24 +84,57 @@ class AboutDialog::ContentComponent : public juce::Component {
         g.drawText(juce::String("Version ") + MAGDA_VERSION, bounds.removeFromTop(20),
                    juce::Justification::centred);
 
-        // "powered by" + Tracktion Engine logo
+        // Credits line
         bounds.removeFromTop(10);
-        auto poweredRow = bounds.removeFromTop(24);
-        g.setFont(fm.getUIFont(10.0f));
+        auto creditsArea = bounds.reduced(10, 0);
+        auto font = fm.getUIFont(10.0f);
+        g.setFont(font);
+        int logoSize = 16;
+        int gap = 4;
+        int dotGap = 4;
+
+        g.setColour(juce::Colour(DarkTheme::BORDER));
+        g.drawHorizontalLine(creditsArea.getY(), (float)creditsArea.getX(),
+                             (float)creditsArea.getRight());
+        creditsArea.removeFromTop(6);
+
+        auto row = creditsArea.removeFromTop(20);
         g.setColour(juce::Colour(DarkTheme::TEXT_DIM));
 
-        int textWidth = 62;
-        int logoWidth = 24;
-        int totalWidth = textWidth + logoWidth + 4;
-        auto centred = poweredRow.withSizeKeepingCentre(totalWidth, 24);
+        juce::GlyphArrangement ga;
+        auto measure = [&](const juce::String& text) {
+            ga = {};
+            ga.addLineOfText(font, text, 0, 0);
+            return juce::roundToInt(ga.getBoundingBox(0, -1, false).getWidth()) + 1;
+        };
 
-        g.drawText("powered by", centred.removeFromLeft(textWidth),
-                   juce::Justification::centredRight);
-        if (teLogo_) {
-            centred.removeFromLeft(4);
-            teLogo_->drawWithin(g, centred.removeFromLeft(logoWidth).toFloat(),
+        int powW = measure("powered by");
+        int teW = measure("Tracktion Engine");
+        int dotW = measure("|");
+        int madeW = measure("made with");
+        int juceW = measure("JUCE");
+
+        int totalW = powW + gap + teW + gap + logoSize + dotGap + dotW + dotGap + madeW + gap +
+                     juceW + gap + logoSize;
+        auto centred = row.withSizeKeepingCentre(totalW, 20);
+
+        g.drawText("powered by", centred.removeFromLeft(powW), juce::Justification::centred);
+        centred.removeFromLeft(gap);
+        g.drawText("Tracktion Engine", centred.removeFromLeft(teW), juce::Justification::centred);
+        centred.removeFromLeft(gap);
+        if (teLogo_)
+            teLogo_->drawWithin(g, centred.removeFromLeft(logoSize).toFloat(),
                                 juce::RectanglePlacement::centred, 1.0f);
-        }
+        centred.removeFromLeft(dotGap);
+        g.drawText("|", centred.removeFromLeft(dotW), juce::Justification::centred);
+        centred.removeFromLeft(dotGap);
+        g.drawText("made with", centred.removeFromLeft(madeW), juce::Justification::centred);
+        centred.removeFromLeft(gap);
+        g.drawText("JUCE", centred.removeFromLeft(juceW), juce::Justification::centred);
+        centred.removeFromLeft(gap);
+        if (juceLogo_)
+            juceLogo_->drawWithin(g, centred.removeFromLeft(logoSize).toFloat(),
+                                  juce::RectanglePlacement::centred, 1.0f);
     }
 
     void resized() override {
@@ -119,6 +162,7 @@ class AboutDialog::ContentComponent : public juce::Component {
   private:
     std::unique_ptr<juce::Drawable> logo_;
     std::unique_ptr<juce::Drawable> teLogo_;
+    std::unique_ptr<juce::Drawable> juceLogo_;
     std::unique_ptr<juce::HyperlinkButton> titleLink_;
 };
 

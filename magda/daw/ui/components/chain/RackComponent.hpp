@@ -10,6 +10,7 @@
 #include "core/TrackManager.hpp"
 #include "ui/components/common/SvgButton.hpp"
 #include "ui/components/common/TextSlider.hpp"
+#include "ui/components/mixer/LevelMeter.hpp"
 
 namespace magda::daw::ui {
 
@@ -73,6 +74,7 @@ class RackComponent : public NodeComponent, public juce::Timer {
     void resizedContent(juce::Rectangle<int> contentArea) override;
     void resizedHeaderExtra(juce::Rectangle<int>& headerArea) override;
     void resizedCollapsed(juce::Rectangle<int>& area) override;
+    juce::String getCollapsedName() const override;
 
     // Get the full path to this rack (for nested context)
     const magda::ChainNodePath& getRackPath() const {
@@ -97,6 +99,10 @@ class RackComponent : public NodeComponent, public juce::Timer {
     std::unique_ptr<magda::SvgButton> macroButton_;          // Macros toggle
     TextSlider volumeSlider_{TextSlider::Format::Decibels};  // Rack volume (dB)
     juce::TextButton addChainButton_;
+
+    // Level meter (right side of content area, like DeviceSlotComponent)
+    static constexpr int METER_STRIP_WIDTH = 10;
+    magda::LevelMeter levelMeter_;
 
     // Content area
     juce::Label chainsLabel_;  // "Chains:" label
@@ -151,6 +157,9 @@ class RackComponent : public NodeComponent, public juce::Timer {
     // Override panel widths for rack-specific sizing
     int getParamPanelWidth() const override;
     int getModPanelWidth() const override;
+    int getCollapsedMeterWidth() const override {
+        return METER_STRIP_WIDTH;
+    }
 
     static constexpr int CHAINS_LABEL_HEIGHT = 18;
     static constexpr int MIN_CONTENT_HEIGHT = 30;

@@ -51,7 +51,6 @@ float dbToMeterPos(float db) {
     float normalized = (db - MIN_DB) / (MAX_DB - MIN_DB);
 
     // Apply power curve: y = x^3
-    // -12 dB → ~38%, 0 dB → ~75%, +6 dB → 100%
     return std::pow(normalized, 3.0f);
 }
 
@@ -89,41 +88,53 @@ class TrackMeter : public juce::Component {
         // Draw level fills
         drawMeterBar(g, leftBar, levelL_);
         drawMeterBar(g, rightBar, levelR_);
+
+        // 0dB tick mark (aligned with header separator)
+        if (nameRowY_ >= 0) {
+            float localY = static_cast<float>(nameRowY_ - getY());
+            if (localY > 0 && localY < bounds.getBottom()) {
+                g.setColour(DarkTheme::getColour(DarkTheme::BORDER).withAlpha(0.5f));
+                g.drawHorizontalLine(static_cast<int>(localY), bounds.getX(), bounds.getRight());
+            }
+        }
+    }
+
+    void setNameRowY(int y) {
+        nameRowY_ = y;
     }
 
   private:
     float levelL_ = 0.0f;
     float levelR_ = 0.0f;
+    int nameRowY_ = -1;  // Absolute Y of name row bottom (for separator line)
 
     void drawMeterBar(juce::Graphics& g, juce::Rectangle<float> bounds, float level) {
         if (level <= 0.0f)
             return;
 
-        // Convert gain to dB, then to meter position (linear dB scaling)
-        float db = gainToDb(level);
-        float meterPos = dbToMeterPos(db);
-        float fillHeight = bounds.getHeight() * meterPos;
-        auto fillBounds = bounds.removeFromBottom(fillHeight);
+        float meterPos = dbToMeterPos(gainToDb(level));
+        float meterHeight = bounds.getHeight() * meterPos;
+        auto fillBounds = bounds;
+        auto fullBounds = bounds;  // Save full bounds for gradient
+        fillBounds = fillBounds.removeFromBottom(meterHeight);
 
-        // Color gradient based on dB: green -> yellow -> red
-        // Green: < -12 dB, Yellow: -12 to 0 dB, Red: 0 to +12 dB
-        juce::Colour color;
-        if (db < -12.0f) {
-            color = juce::Colour(0xFF55AA55);  // Green (safe zone)
-        } else if (db < 0.0f) {
-            // Transition from green to yellow
-            float t = (db + 12.0f) / 12.0f;
-            color = juce::Colour(0xFF55AA55).interpolatedWith(juce::Colour(0xFFAAAA55), t);
-        } else if (db < 6.0f) {
-            // Transition from yellow/orange to red
-            float t = db / 6.0f;
-            color = juce::Colour(0xFFAAAA55).interpolatedWith(juce::Colour(0xFFAA5555), t);
-        } else {
-            color = juce::Colour(0xFFAA5555);  // Red (clipping zone above +6 dB)
-        }
+        const juce::Colour green(0xFF55AA55);
+        const juce::Colour yellow(0xFFAAAA55);
+        const juce::Colour red(0xFFAA5555);
 
-        g.setColour(color);
-        g.fillRoundedRectangle(fillBounds, 1.0f);
+        float yellowPos = dbToMeterPos(-12.0f);
+        float redPos = dbToMeterPos(0.0f);
+        constexpr float fade = 0.03f;
+
+        juce::ColourGradient grad(green, 0.0f, fullBounds.getBottom(), red, 0.0f, fullBounds.getY(),
+                                  false);
+        grad.addColour(std::max(0.0, (double)yellowPos - fade), green);
+        grad.addColour(std::min(1.0, (double)yellowPos + fade), yellow);
+        grad.addColour(std::max(0.0, (double)redPos - fade), yellow);
+        grad.addColour(std::min(1.0, (double)redPos + fade), red);
+
+        g.setGradientFill(grad);
+        g.fillRect(fillBounds);
     }
 };
 
@@ -778,6 +789,9 @@ void TrackHeadersPanel::tracksChanged() {
         header->volume = track->volume;
         header->pan = track->pan;
 
+        // Set track colour on swatch
+        header->trackColour = track->colour;
+
         // Inherit global I/O routing visibility
         header->showIORouting = showIORouting_;
 
@@ -913,6 +927,9 @@ void TrackHeadersPanel::trackPropertyChanged(int trackId) {
             header.monitorButton->setToggleState(track->inputMonitor != InputMonitorMode::Off,
                                                  juce::dontSendNotification);
         }
+
+        // Update track colour
+        header.trackColour = track->colour;
 
         // Update session mode button
         if (header.sessionModeButton) {
@@ -1444,6 +1461,20 @@ void TrackHeadersPanel::paintTrackHeader(juce::Graphics& g, const TrackHeader& h
         g.fillRect(stripX, bgArea.getY(), 3, bgArea.getHeight());
     }
 
+    // Track colour tinted name row — stretches to 0dB mark
+    float zeroDbFrac = 1.0f - dbToMeterPos(0.0f);
+    int nameRowHeight = juce::jmax(22, static_cast<int>(bgArea.getHeight() * zeroDbFrac));
+    if (!header.isMaster && header.trackColour != juce::Colour(0xFF444444)) {
+        auto nameRowArea = bgArea.withHeight(nameRowHeight);
+        g.setColour(header.trackColour.withAlpha(0.5f));
+        g.fillRect(nameRowArea);
+    }
+
+    // Separator line at 0dB boundary
+    g.setColour(DarkTheme::getColour(DarkTheme::BORDER).withAlpha(0.5f));
+    g.drawHorizontalLine(bgArea.getY() + nameRowHeight, static_cast<float>(bgArea.getX()),
+                         static_cast<float>(bgArea.getRight()));
+
     // Frozen overlay — dim the track header
     if (header.frozen) {
         g.setColour(juce::Colours::black.withAlpha(0.3f));
@@ -1509,6 +1540,7 @@ void TrackHeadersPanel::layoutMeterColumn(TrackHeader& header, juce::Rectangle<i
     // Audio meter spans full track height
     header.meterComponent->setBounds(meterArea);
     header.meterComponent->setVisible(true);
+    static_cast<TrackMeter*>(header.meterComponent.get())->setNameRowY(header.nameRowBottomY);
 
     // MIDI indicator in top portion, session mode button in bottom portion
     const int sessionBtnSize = 14;
@@ -1633,10 +1665,9 @@ void TrackHeadersPanel::layoutVolPanAndButtons(TrackHeader& header, juce::Rectan
 
 void TrackHeadersPanel::layoutControlArea(TrackHeader& header, juce::Rectangle<int>& tcpArea,
                                           const SideColumn& inner, int trackHeight) {
-    const int nameRowHeight = 18;
     const int spacing = 2;
 
-    // Master track: skip name row to give all space to volume + mute
+    // Master track: skip name row space (painted "Master" label), then volume + mute
     if (header.isMaster) {
         header.nameLabel->setVisible(false);
         header.collapseButton->setVisible(false);
@@ -1654,28 +1685,7 @@ void TrackHeadersPanel::layoutControlArea(TrackHeader& header, juce::Rectangle<i
         return;
     }
 
-    // Top row: collapse button (if group) + name label
-    // Name fills remaining width so no anchoring needed — just place collapse from left
-    auto topRow = tcpArea.removeFromTop(nameRowHeight);
-
-    if (header.isGroup) {
-        auto btnArea = topRow.removeFromLeft(COLLAPSE_BUTTON_SIZE);
-        int btnY = btnArea.getCentreY() - COLLAPSE_BUTTON_SIZE / 2;
-        header.collapseButton->setBounds(btnArea.getX(), btnY, COLLAPSE_BUTTON_SIZE,
-                                         COLLAPSE_BUTTON_SIZE);
-        topRow.removeFromLeft(2);
-        header.collapseButton->setVisible(true);
-    } else {
-        header.collapseButton->setVisible(false);
-    }
-
-    // Leave some breathing room so the label doesn't span the full header width
-    auto nameArea = topRow.withTrimmedRight(topRow.getWidth() / 4);
-    header.nameLabel->setBounds(nameArea);
-    header.nameLabel->setVisible(true);
-    header.nameLabel->setJustificationType(headersOnRight_ ? juce::Justification::centredRight
-                                                           : juce::Justification::centredLeft);
-    tcpArea.removeFromTop(3);
+    // Name row is laid out by the parent (in the coloured top area)
 
     // Helper to hide all routing selectors and sends
     auto hideAllRouting = [&]() {
@@ -1802,6 +1812,11 @@ void TrackHeadersPanel::updateTrackHeaderLayout() {
         if (!headerArea.isEmpty()) {
             const int trackHeight = headerArea.getHeight();
 
+            // Split at 0dB: top = name/header area, bottom = controls
+            float zeroDbFrac = 1.0f - dbToMeterPos(0.0f);
+            int nameRowHeight = juce::jmax(22, static_cast<int>(trackHeight * zeroDbFrac));
+            header.nameRowBottomY = headerArea.getY() + nameRowHeight;
+
             auto workArea = headerArea.reduced(4);
             layoutMeterColumn(header, workArea, outer);
 
@@ -1809,6 +1824,31 @@ void TrackHeadersPanel::updateTrackHeaderLayout() {
             int indent = header.depth * INDENT_WIDTH;
             auto tcpArea = inner.trimmed(workArea, indent);
 
+            // Name label in the top (coloured) area
+            auto topArea = tcpArea.removeFromTop(nameRowHeight - 4);  // -4 for reduced() padding
+            {
+                const int nameRowH = 18;
+                auto nameRow = topArea.removeFromTop(nameRowH);
+                if (header.isGroup) {
+                    auto btnArea = nameRow.removeFromLeft(COLLAPSE_BUTTON_SIZE);
+                    int btnY = btnArea.getCentreY() - COLLAPSE_BUTTON_SIZE / 2;
+                    header.collapseButton->setBounds(btnArea.getX(), btnY, COLLAPSE_BUTTON_SIZE,
+                                                     COLLAPSE_BUTTON_SIZE);
+                    nameRow.removeFromLeft(2);
+                    header.collapseButton->setVisible(true);
+                } else {
+                    header.collapseButton->setVisible(false);
+                }
+                auto nameArea = nameRow.withTrimmedRight(nameRow.getWidth() / 4);
+                header.nameLabel->setBounds(nameArea);
+                header.nameLabel->setVisible(true);
+                header.nameLabel->setJustificationType(headersOnRight_
+                                                           ? juce::Justification::centredRight
+                                                           : juce::Justification::centredLeft);
+            }
+
+            // Controls in the bottom area (below 0dB line)
+            tcpArea.removeFromTop(3);
             layoutControlArea(header, tcpArea, inner, trackHeight);
         }
     }
@@ -2046,15 +2086,6 @@ void TrackHeadersPanel::showContextMenu(int trackIndex, juce::Point<int> positio
     // Track type info
     menu.addSectionHeader(track->name);
     menu.addSeparator();
-
-    // MultiOut tracks have limited context menu (can't delete/move independently)
-    if (track->type == TrackType::MultiOut) {
-        menu.addItem(0, "Output track (managed by parent instrument)", false, false);
-        menu.showMenuAsync(juce::PopupMenu::Options().withTargetScreenArea(localAreaToGlobal(
-                               juce::Rectangle<int>(position.x, position.y, 1, 1))),
-                           nullptr);
-        return;
-    }
 
     // Group operations
     if (track->isGroup()) {

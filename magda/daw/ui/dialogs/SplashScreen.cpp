@@ -14,7 +14,7 @@ namespace magda {
 class SplashScreen::ContentComponent : public juce::Component {
   public:
     ContentComponent() {
-        setSize(450, 390);
+        setSize(450, 450);
 
         // Load the SVG logo
         if (auto xml = juce::XmlDocument::parse(
@@ -32,6 +32,16 @@ class SplashScreen::ContentComponent : public juce::Component {
             teLogo_ = juce::Drawable::createFromSVG(*xml);
             if (teLogo_) {
                 teLogo_->replaceColour(juce::Colour(0xFF000000), juce::Colour(DarkTheme::TEXT_DIM));
+            }
+        }
+
+        // Load JUCE logo
+        if (auto xml = juce::XmlDocument::parse(juce::String::fromUTF8(
+                BinaryData::fadlogojuce_svg, BinaryData::fadlogojuce_svgSize))) {
+            juceLogo_ = juce::Drawable::createFromSVG(*xml);
+            if (juceLogo_) {
+                juceLogo_->replaceColour(juce::Colour(0xFF000000),
+                                         juce::Colour(DarkTheme::TEXT_DIM));
             }
         }
     }
@@ -72,29 +82,75 @@ class SplashScreen::ContentComponent : public juce::Component {
         g.drawText(juce::String("Version ") + MAGDA_VERSION, bounds.removeFromTop(20),
                    juce::Justification::centred);
 
-        // "powered by" + Tracktion Engine logo
-        bounds.removeFromTop(10);
-        auto poweredRow = bounds.removeFromTop(24);
-        g.setFont(fm.getUIFont(10.0f));
+        // Status text
+        bounds.removeFromTop(4);
+        g.setFont(fm.getUIFont(11.0f));
+        g.setColour(juce::Colour(DarkTheme::ACCENT_BLUE));
+        g.drawText(statusText_, bounds.removeFromTop(18), juce::Justification::centred);
+
+        // Credits line
+        bounds.removeFromTop(6);
+        auto creditsArea = bounds.reduced(10, 0);
+        auto font = fm.getUIFont(10.0f);
+        g.setFont(font);
+        int logoSize = 16;
+        int gap = 4;
+        int dotGap = 4;
+
+        g.setColour(juce::Colour(DarkTheme::BORDER));
+        g.drawHorizontalLine(creditsArea.getY(), (float)creditsArea.getX(),
+                             (float)creditsArea.getRight());
+        creditsArea.removeFromTop(6);
+
+        auto row = creditsArea.removeFromTop(20);
         g.setColour(juce::Colour(DarkTheme::TEXT_DIM));
 
-        int textWidth = 62;
-        int logoWidth = 24;
-        int totalWidth = textWidth + logoWidth + 4;
-        auto centred = poweredRow.withSizeKeepingCentre(totalWidth, 24);
+        juce::GlyphArrangement ga;
+        auto measure = [&](const juce::String& text) {
+            ga = {};
+            ga.addLineOfText(font, text, 0, 0);
+            return juce::roundToInt(ga.getBoundingBox(0, -1, false).getWidth()) + 1;
+        };
 
-        g.drawText("powered by", centred.removeFromLeft(textWidth),
-                   juce::Justification::centredRight);
-        if (teLogo_) {
-            centred.removeFromLeft(4);
-            teLogo_->drawWithin(g, centred.removeFromLeft(logoWidth).toFloat(),
+        int powW = measure("powered by");
+        int teW = measure("Tracktion Engine");
+        int dotW = measure("|");
+        int madeW = measure("made with");
+        int juceW = measure("JUCE");
+
+        int totalW = powW + gap + teW + gap + logoSize + dotGap + dotW + dotGap + madeW + gap +
+                     juceW + gap + logoSize;
+        auto centred = row.withSizeKeepingCentre(totalW, 20);
+
+        g.drawText("powered by", centred.removeFromLeft(powW), juce::Justification::centred);
+        centred.removeFromLeft(gap);
+        g.drawText("Tracktion Engine", centred.removeFromLeft(teW), juce::Justification::centred);
+        centred.removeFromLeft(gap);
+        if (teLogo_)
+            teLogo_->drawWithin(g, centred.removeFromLeft(logoSize).toFloat(),
                                 juce::RectanglePlacement::centred, 1.0f);
-        }
+        centred.removeFromLeft(dotGap);
+        g.drawText("|", centred.removeFromLeft(dotW), juce::Justification::centred);
+        centred.removeFromLeft(dotGap);
+        g.drawText("made with", centred.removeFromLeft(madeW), juce::Justification::centred);
+        centred.removeFromLeft(gap);
+        g.drawText("JUCE", centred.removeFromLeft(juceW), juce::Justification::centred);
+        centred.removeFromLeft(gap);
+        if (juceLogo_)
+            juceLogo_->drawWithin(g, centred.removeFromLeft(logoSize).toFloat(),
+                                  juce::RectanglePlacement::centred, 1.0f);
+    }
+
+    void setStatus(const juce::String& text) {
+        statusText_ = text;
+        repaint();
     }
 
   private:
     std::unique_ptr<juce::Drawable> logo_;
     std::unique_ptr<juce::Drawable> teLogo_;
+    std::unique_ptr<juce::Drawable> juceLogo_;
+    juce::String statusText_;
 };
 
 // =============================================================================
@@ -107,12 +163,21 @@ SplashScreen::SplashScreen() : DocumentWindow("", juce::Colour(DarkTheme::PANEL_
     setTitleBarHeight(0);
     setResizable(false, false);
     setDropShadowEnabled(true);
-    centreWithSize(450, 390);
+    centreWithSize(450, 446);
     setAlwaysOnTop(true);
 }
 
 void SplashScreen::dismiss() {
     setVisible(false);
+}
+
+void SplashScreen::setStatus(const juce::String& text) {
+    if (auto* content = dynamic_cast<ContentComponent*>(getContentComponent())) {
+        content->setStatus(text);
+        // Pump the message loop so the repaint is processed immediately,
+        // since callers typically block the message thread during init.
+        juce::MessageManager::getInstance()->runDispatchLoopUntil(10);
+    }
 }
 
 std::unique_ptr<SplashScreen> SplashScreen::create() {

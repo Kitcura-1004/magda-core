@@ -34,6 +34,8 @@ SvgIconData getSvgForContentType(PanelContentType type) {
             return {BinaryData::sinewave_svg, BinaryData::sinewave_svgSize};
         case PanelContentType::DrumGridClipView:
             return {BinaryData::script_svg, BinaryData::script_svgSize};
+        case PanelContentType::AudioClipProperties:
+            return {BinaryData::knob_svg, BinaryData::knob_svgSize};
         case PanelContentType::Empty:
             break;
     }
@@ -182,6 +184,7 @@ void PanelTabBar::setupButton(size_t index, PanelContentType type) {
     btn->setNormalColor(DarkTheme::getColour(DarkTheme::TEXT_SECONDARY));
     btn->setHoverColor(DarkTheme::getColour(DarkTheme::TEXT_PRIMARY));
     btn->setActiveColor(DarkTheme::getColour(DarkTheme::ACCENT_BLUE));
+    btn->setActiveBackgroundColor(DarkTheme::getColour(DarkTheme::ACCENT_BLUE).withAlpha(0.15f));
 
     // Click handler
     btn->onClick = [this, index]() {

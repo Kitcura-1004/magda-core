@@ -9,12 +9,14 @@
 #include "../../../audio/AudioBridge.hpp"
 #include "../../../audio/MidiBridge.hpp"
 #include "../../../engine/AudioEngine.hpp"
+#include "../../components/common/ColourSwatch.hpp"
 #include "../../components/mixer/RoutingSyncHelper.hpp"
 #include "../../state/TimelineController.hpp"
 #include "../../themes/DarkTheme.hpp"
 #include "../../themes/FontManager.hpp"
 #include "../../themes/SmallButtonLookAndFeel.hpp"
 #include "core/ClipManager.hpp"
+#include "core/Config.hpp"
 #include "core/TrackPropertyCommands.hpp"
 #include "core/UndoManager.hpp"
 
@@ -40,6 +42,79 @@ TrackInspector::TrackInspector() {
         }
     };
     addAndMakeVisible(trackNameValue_);
+
+    // Colour swatch
+    colourSwatch_ = std::make_unique<magda::ColourSwatch>();
+    auto* swatch = static_cast<magda::ColourSwatch*>(colourSwatch_.get());
+    swatch->onColourClicked = [this, swatch]() {
+        if (selectedTrackId_ == magda::INVALID_TRACK_ID)
+            return;
+
+        auto menu = juce::PopupMenu();
+        menu.addItem(1, "None");
+        menu.addSeparator();
+
+        // Helper to create a colour chip icon for menu items
+        auto makeChip = [](juce::Colour colour) {
+            juce::Image chip(juce::Image::ARGB, 14, 14, true);
+            juce::Graphics cg(chip);
+            cg.setColour(colour);
+            cg.fillRoundedRectangle(0.0f, 0.0f, 14.0f, 14.0f, 2.0f);
+            auto drawable = std::make_unique<juce::DrawableImage>();
+            drawable->setImage(chip);
+            return drawable;
+        };
+
+        // Default colours (always available)
+        for (size_t i = 0; i < magda::Config::defaultColourPalette.size(); ++i) {
+            auto colour = juce::Colour(magda::Config::defaultColourPalette[i].colour);
+            menu.addItem(static_cast<int>(i + 2), magda::Config::defaultColourPalette[i].name, true,
+                         false, makeChip(colour));
+        }
+
+        // Custom colours from Config (user-defined)
+        const auto customPalette = magda::Config::getInstance().getTrackColourPalette();
+        const int customOffset = static_cast<int>(magda::Config::defaultColourPalette.size()) + 2;
+        if (!customPalette.empty()) {
+            menu.addSeparator();
+            for (size_t i = 0; i < customPalette.size(); ++i) {
+                auto colour = juce::Colour(customPalette[i].colour);
+                menu.addItem(customOffset + static_cast<int>(i),
+                             juce::String(customPalette[i].name), true, false, makeChip(colour));
+            }
+        }
+
+        menu.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(swatch), [this, swatch,
+                                                                                    customPalette](
+                                                                                       int result) {
+            if (result == 0)
+                return;
+            const int customOff = static_cast<int>(magda::Config::defaultColourPalette.size()) + 2;
+            if (result == 1) {
+                // "None"
+                swatch->clearColour();
+                magda::UndoManager::getInstance().executeCommand(
+                    std::make_unique<magda::SetTrackColourCommand>(selectedTrackId_,
+                                                                   juce::Colour(0xFF444444)));
+            } else if (result >= 2 && result < customOff) {
+                // Default colour
+                auto colour = juce::Colour(magda::Config::getDefaultColour(result - 2));
+                swatch->setColour(colour);
+                magda::UndoManager::getInstance().executeCommand(
+                    std::make_unique<magda::SetTrackColourCommand>(selectedTrackId_, colour));
+            } else {
+                // Custom colour
+                auto idx = static_cast<size_t>(result - customOff);
+                if (idx < customPalette.size()) {
+                    auto colour = juce::Colour(customPalette[idx].colour);
+                    swatch->setColour(colour);
+                    magda::UndoManager::getInstance().executeCommand(
+                        std::make_unique<magda::SetTrackColourCommand>(selectedTrackId_, colour));
+                }
+            }
+        });
+    };
+    addAndMakeVisible(*colourSwatch_);
 
     // Mute button (TCP style)
     muteButton_.setButtonText("M");
@@ -322,6 +397,16 @@ TrackInspector::TrackInspector() {
     clipCountLabel_.setFont(FontManager::getInstance().getUIFont(12.0f));
     clipCountLabel_.setColour(juce::Label::textColourId, DarkTheme::getTextColour());
     addAndMakeVisible(clipCountLabel_);
+
+    // Latency display
+    latencyLabel_.setText("Latency", juce::dontSendNotification);
+    latencyLabel_.setFont(FontManager::getInstance().getUIFont(11.0f));
+    latencyLabel_.setColour(juce::Label::textColourId, DarkTheme::getSecondaryTextColour());
+    addAndMakeVisible(latencyLabel_);
+
+    latencyValue_.setFont(FontManager::getInstance().getUIFont(12.0f));
+    latencyValue_.setColour(juce::Label::textColourId, DarkTheme::getTextColour());
+    addAndMakeVisible(latencyValue_);
 }
 
 TrackInspector::~TrackInspector() {
@@ -334,19 +419,18 @@ void TrackInspector::timerCallback() {
         return;
 
     auto* midiBridge = audioEngine_->getMidiBridge();
-    if (!midiBridge)
-        return;
+    if (midiBridge) {
+        size_t inputCount = midiBridge->getAvailableMidiInputs().size();
+        size_t outputCount = midiBridge->getAvailableMidiOutputs().size();
 
-    size_t inputCount = midiBridge->getAvailableMidiInputs().size();
-    size_t outputCount = midiBridge->getAvailableMidiOutputs().size();
-
-    if (inputCount != lastMidiInputCount_ || outputCount != lastMidiOutputCount_) {
-        lastMidiInputCount_ = inputCount;
-        lastMidiOutputCount_ = outputCount;
-        populateMidiInputOptions();
-        populateMidiOutputOptions();
-        if (selectedTrackId_ != magda::INVALID_TRACK_ID)
-            updateRoutingSelectorsFromTrack();
+        if (inputCount != lastMidiInputCount_ || outputCount != lastMidiOutputCount_) {
+            lastMidiInputCount_ = inputCount;
+            lastMidiOutputCount_ = outputCount;
+            populateMidiInputOptions();
+            populateMidiOutputOptions();
+            if (selectedTrackId_ != magda::INVALID_TRACK_ID)
+                updateRoutingSelectorsFromTrack();
+        }
     }
 }
 
@@ -382,7 +466,10 @@ void TrackInspector::resized() {
 
     // Track properties layout (TCP style)
     trackNameLabel_.setBounds(bounds.removeFromTop(16));
-    trackNameValue_.setBounds(bounds.removeFromTop(24));
+    auto nameRow = bounds.removeFromTop(24);
+    colourSwatch_->setBounds(nameRow.removeFromRight(24));
+    nameRow.removeFromRight(4);
+    trackNameValue_.setBounds(nameRow);
     bounds.removeFromTop(separatorPadding);
     sectionSeparatorYs_.push_back(bounds.getY());
     bounds.removeFromTop(separatorPadding);
@@ -578,6 +665,16 @@ void TrackInspector::resized() {
         bounds.removeFromTop(4);
         clipCountLabel_.setBounds(bounds.removeFromTop(20));
     }
+
+    // Latency — only lay out if visible
+    if (latencyLabel_.isVisible()) {
+        bounds.removeFromTop(separatorPadding);
+        sectionSeparatorYs_.push_back(bounds.getY());
+        bounds.removeFromTop(separatorPadding);
+        latencyLabel_.setBounds(bounds.removeFromTop(16));
+        bounds.removeFromTop(4);
+        latencyValue_.setBounds(bounds.removeFromTop(20));
+    }
 }
 
 void TrackInspector::setSelectedTrack(magda::TrackId trackId) {
@@ -724,6 +821,16 @@ void TrackInspector::trackPropertyChanged(int trackId) {
 void TrackInspector::trackDevicesChanged(magda::TrackId trackId) {
     if (trackId == selectedTrackId_) {
         rebuildSendsUI();
+
+        // Refresh latency (devices added/removed/loaded)
+        if (latencyLabel_.isVisible()) {
+            double latency =
+                magda::TrackManager::getInstance().getTrackLatencySeconds(selectedTrackId_);
+            auto latencyMs = latency * 1000.0;
+            latencyValue_.setText((latency > 0.0) ? juce::String(latencyMs, 1) + " ms" : "0 ms",
+                                  juce::dontSendNotification);
+            latencyValue_.repaint();
+        }
     }
 }
 
@@ -779,6 +886,13 @@ void TrackInspector::updateFromSelectedTrack() {
 
     const auto* track = magda::TrackManager::getInstance().getTrack(selectedTrackId_);
     if (track) {
+        // Update colour swatch
+        auto* swatch = static_cast<magda::ColourSwatch*>(colourSwatch_.get());
+        if (track->colour == juce::Colour(0xFF444444))
+            swatch->clearColour();
+        else
+            swatch->setColour(track->colour);
+
         trackNameValue_.setText(track->name, juce::dontSendNotification);
         muteButton_.setToggleState(track->muted, juce::dontSendNotification);
         soloButton_.setToggleState(track->soloed, juce::dontSendNotification);
@@ -810,25 +924,18 @@ void TrackInspector::updateFromSelectedTrack() {
         juce::String clipText = juce::String(clipCount) + (clipCount == 1 ? " clip" : " clips");
         clipCountLabel_.setText(clipText, juce::dontSendNotification);
 
+        // Update track latency
+        double latency =
+            magda::TrackManager::getInstance().getTrackLatencySeconds(selectedTrackId_);
+        if (latency > 0.0) {
+            auto latencyMs = latency * 1000.0;
+            latencyValue_.setText(juce::String(latencyMs, 1) + " ms", juce::dontSendNotification);
+        } else {
+            latencyValue_.setText("0 ms", juce::dontSendNotification);
+        }
+
         // Update routing selectors to match track state
         updateRoutingSelectorsFromTrack();
-
-        // MultiOut children: show where audio actually goes (parent's output destination)
-        if (track->type == magda::TrackType::MultiOut && track->hasParent()) {
-            juce::String outputName = "Master";
-            if (auto* parent = magda::TrackManager::getInstance().getTrack(track->parentId)) {
-                if (parent->hasParent()) {
-                    if (auto* group =
-                            magda::TrackManager::getInstance().getTrack(parent->parentId)) {
-                        if (group->isGroup())
-                            outputName = group->name;
-                    }
-                }
-            }
-            outputSelector_->setOptions({{1, outputName}});
-            outputSelector_->setSelectedId(1);
-            outputSelector_->setEnabled(false);
-        }
 
         // Update send level values in-place (don't rebuild — that destroys mid-drag labels)
         const auto& sends = track->sends;
@@ -1050,6 +1157,8 @@ void TrackInspector::updateFromMultiTrackSelection() {
 
     clipsSectionLabel_.setVisible(false);
     clipCountLabel_.setVisible(false);
+    latencyLabel_.setVisible(false);
+    latencyValue_.setVisible(false);
 
     resized();
     repaint();
@@ -1070,6 +1179,7 @@ void TrackInspector::showTrackControls(bool show) {
 
     trackNameLabel_.setVisible(show);
     trackNameValue_.setVisible(show);
+    colourSwatch_->setVisible(show && !isMaster);
     muteButton_.setVisible(show && !isMaster);
     speakerButton_->setVisible(isMaster);
     soloButton_.setVisible(show && !isMaster);
@@ -1106,6 +1216,10 @@ void TrackInspector::showTrackControls(bool show) {
     // Clips section — hidden for master
     clipsSectionLabel_.setVisible(show && !isMaster);
     clipCountLabel_.setVisible(show && !isMaster);
+
+    // Latency — shown for all tracks (including master)
+    latencyLabel_.setVisible(show);
+    latencyValue_.setVisible(show);
 }
 
 void TrackInspector::rebuildSendsUI() {

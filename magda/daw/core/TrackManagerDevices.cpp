@@ -532,6 +532,67 @@ void TrackManager::setDeviceParameterValueFromPlugin(const ChainNodePath& device
     }
 }
 
+double TrackManager::getDeviceLatencySeconds(const ChainNodePath& devicePath) {
+    auto* device = getDeviceInChainByPath(devicePath);
+    if (!device || !audioEngine_)
+        return 0.0;
+
+    if (auto* bridge = audioEngine_->getAudioBridge()) {
+        if (auto* processor = bridge->getPluginManager().getDeviceProcessor(device->id)) {
+            if (auto plugin = processor->getPlugin())
+                return plugin->getLatencySeconds();
+        }
+    }
+    return 0.0;
+}
+
+double TrackManager::getTrackLatencySeconds(TrackId trackId) {
+    if (!audioEngine_)
+        return 0.0;
+
+    auto* bridge = audioEngine_->getAudioBridge();
+    if (!bridge)
+        return 0.0;
+
+    auto* track = getTrack(trackId);
+    if (!track)
+        return 0.0;
+
+    auto& pm = bridge->getPluginManager();
+    double total = 0.0;
+
+    // Helper to get latency for a single device
+    auto getDeviceLatency = [&](const DeviceInfo& device) -> double {
+        if (auto* proc = pm.getDeviceProcessor(device.id)) {
+            if (auto plugin = proc->getPlugin())
+                return plugin->getLatencySeconds();
+        }
+        return 0.0;
+    };
+
+    // Sum latency across top-level chain elements
+    for (const auto& element : track->chainElements) {
+        if (magda::isDevice(element)) {
+            total += getDeviceLatency(magda::getDevice(element));
+        } else if (magda::isRack(element)) {
+            // For racks: each chain is parallel, so take the max chain latency
+            const auto& rack = magda::getRack(element);
+            double maxChainLatency = 0.0;
+            for (const auto& chain : rack.chains) {
+                double chainLatency = 0.0;
+                for (const auto& chainElem : chain.elements) {
+                    if (magda::isDevice(chainElem))
+                        chainLatency += getDeviceLatency(magda::getDevice(chainElem));
+                }
+                maxChainLatency = std::max(maxChainLatency, chainLatency);
+            }
+            total += maxChainLatency;
+        }
+    }
+
+    return total;
+}
+
 // ============================================================================
 // Wrap Device in Rack
 // ============================================================================

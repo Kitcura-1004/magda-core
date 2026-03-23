@@ -322,12 +322,27 @@ MainWindow::MainComponent::MainComponent(AudioEngine* externalEngine) {
         daw::ui::DebugDialog::setMidiBridge(externalEngine->getMidiBridge());
     }
 
-    // Initialize panel sizes from LayoutConfig
+    // Initialize panel sizes from LayoutConfig, scaled to display size
     auto& layout = LayoutConfig::getInstance();
     transportHeight = layout.defaultTransportHeight;
-    leftPanelWidth = layout.defaultLeftPanelWidth;
-    rightPanelWidth = layout.defaultRightPanelWidth;
-    bottomPanelHeight = daw::ui::DebugSettings::getInstance().getBottomPanelHeight();
+
+    // Scale side panel defaults based on screen width
+    if (auto* display = juce::Desktop::getInstance().getDisplays().getPrimaryDisplay()) {
+        int screenWidth = display->userArea.getWidth();
+        if (screenWidth >= 2560) {  // Large display (1440p+)
+            leftPanelWidth = rightPanelWidth = 400;
+            bottomPanelHeight = 380;
+        } else if (screenWidth >= 1920) {  // Full HD
+            leftPanelWidth = rightPanelWidth = 350;
+            bottomPanelHeight = 350;
+        } else {
+            leftPanelWidth = rightPanelWidth = layout.defaultLeftPanelWidth;
+            bottomPanelHeight = layout.defaultBottomPanelHeight;
+        }
+    } else {
+        leftPanelWidth = rightPanelWidth = layout.defaultLeftPanelWidth;
+        bottomPanelHeight = layout.defaultBottomPanelHeight;
+    }
 
     // Listen for debug settings changes
     daw::ui::DebugSettings::getInstance().addListener([this]() {
@@ -674,9 +689,11 @@ void MainWindow::MainComponent::setupAudioEngineCallbacks(AudioEngine* engine) {
             if (sessionView)
                 sessionView->setSessionPlayheadPositions(clipPositions);
         };
-    positionTimer_->onCpuUsageUpdate = [this](float cpu) {
-        if (transportPanel)
+    positionTimer_->onCpuUsageUpdate = [this](float cpu, int xruns) {
+        if (transportPanel) {
             transportPanel->setCpuUsage(cpu);
+            transportPanel->setXrunCount(xruns);
+        }
     };
     positionTimer_->start();  // Start once and keep running
 
@@ -1027,6 +1044,15 @@ void MainWindow::MainComponent::viewModeChanged(ViewMode mode,
 }
 
 void MainWindow::MainComponent::selectionTypeChanged(SelectionType newType) {
+    // Auto-expand bottom panel when something is selected
+    if (bottomPanelCollapsed && newType != SelectionType::None) {
+        bottomPanelCollapsed = false;
+        bottomPanel->setCollapsed(false);
+        if (footerBar)
+            footerBar->setBottomPanelCollapsed(false);
+        resized();
+    }
+
     // Update menu state based on selection
     auto& selectionManager = SelectionManager::getInstance();
     bool hasSelection = ((newType == SelectionType::Clip || newType == SelectionType::MultiClip) &&

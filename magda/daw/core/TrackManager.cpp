@@ -6,6 +6,7 @@
 #include "../audio/MidiBridge.hpp"
 #include "../audio/SidechainTriggerBus.hpp"
 #include "../engine/AudioEngine.hpp"
+#include "Config.hpp"
 #include "ModulatorEngine.hpp"
 #include "RackInfo.hpp"
 #include "SelectionManager.hpp"
@@ -86,7 +87,7 @@ TrackId TrackManager::createTrack(const juce::String& name, TrackType type) {
     track.id = nextTrackId_++;
     track.type = type;
     track.name = name.isEmpty() ? generateTrackName() : name;
-    track.colour = TrackInfo::getDefaultColor(static_cast<int>(tracks_.size()));
+    track.colour = juce::Colour(Config::getDefaultColour(static_cast<int>(tracks_.size())));
 
     // Set default routing
     track.audioOutputDevice = "master";  // Audio always routes to master
@@ -208,21 +209,30 @@ TrackId TrackManager::activateMultiOutPair(TrackId parentTrackId, DeviceId devic
     newTrack.type = TrackType::MultiOut;
     newTrack.name = device->name + ": " + pair.name;
     newTrack.colour = parentTrack->colour;
-    newTrack.parentId = parentTrackId;
     newTrack.audioOutputDevice = "master";
 
-    // Set the multi-out link
+    // Set the multi-out link (keeps routing reference, no parent-child hierarchy)
     newTrack.multiOutLink = MultiOutTrackLink{parentTrackId, deviceId, pairIndex};
 
-    tracks_.push_back(std::move(newTrack));
+    // Insert after the parent track (and any existing multi-out siblings) for adjacency
+    auto parentIt =
+        std::find_if(tracks_.begin(), tracks_.end(),
+                     [parentTrackId](const TrackInfo& t) { return t.id == parentTrackId; });
+    if (parentIt != tracks_.end()) {
+        // Find last consecutive multi-out track for this device after the parent
+        auto insertIt = parentIt + 1;
+        while (insertIt != tracks_.end() && insertIt->type == TrackType::MultiOut &&
+               insertIt->multiOutLink && insertIt->multiOutLink->sourceTrackId == parentTrackId) {
+            ++insertIt;
+        }
+        tracks_.insert(insertIt, std::move(newTrack));
+    } else {
+        tracks_.push_back(std::move(newTrack));
+    }
 
-    // Re-fetch pointers after push_back (vector reallocation invalidates them)
-    parentTrack = getTrack(parentTrackId);
+    // Re-fetch pointers after insert (vector reallocation invalidates them)
     device = getDevice(parentTrackId, deviceId);
     auto& pairRef = device->multiOut.outputPairs[static_cast<size_t>(pairIndex)];
-
-    // Add to parent's children
-    parentTrack->childIds.push_back(newTrackId);
 
     // Update the output pair state
     pairRef.active = true;
@@ -252,10 +262,6 @@ void TrackManager::deactivateMultiOutPair(TrackId parentTrackId, DeviceId device
         return;
 
     TrackId trackToRemove = pair.trackId;
-
-    // Remove from parent's children
-    auto& children = parentTrack->childIds;
-    children.erase(std::remove(children.begin(), children.end(), trackToRemove), children.end());
 
     // Remove the track
     auto it = std::find_if(tracks_.begin(), tracks_.end(),
@@ -402,10 +408,9 @@ void TrackManager::addTrackToGroup(TrackId trackId, TrackId groupId) {
     group->childIds.push_back(trackId);
 
     // Auto-route child's audio output to the group track
-    // (but skip MultiOut tracks — they always route to master)
-    if (track->type != TrackType::MultiOut) {
+    // Multi-out tracks keep their routing to the source track's output
+    if (track->type != TrackType::MultiOut)
         track->audioOutputDevice = "track:" + juce::String(groupId);
-    }
     notifyTrackPropertyChanged(trackId);
 
     notifyTracksChanged();
@@ -964,6 +969,35 @@ void TrackManager::setDeviceBypassed(TrackId trackId, DeviceId deviceId, bool by
     }
 }
 
+void TrackManager::setChainBypassed(TrackId trackId, bool bypassed) {
+    if (auto* track = getTrack(trackId)) {
+        std::vector<DeviceId> affectedDevices;
+        for (auto& element : track->chainElements) {
+            if (magda::isDevice(element)) {
+                auto& device = magda::getDevice(element);
+                device.bypassed = bypassed;
+                affectedDevices.push_back(device.id);
+            } else if (magda::isRack(element)) {
+                auto& rack = magda::getRack(element);
+                rack.bypassed = bypassed;
+                for (auto& chain : rack.chains) {
+                    for (auto& chainElement : chain.elements) {
+                        if (magda::isDevice(chainElement)) {
+                            auto& device = magda::getDevice(chainElement);
+                            device.bypassed = bypassed;
+                            affectedDevices.push_back(device.id);
+                        }
+                    }
+                }
+            }
+        }
+        for (auto deviceId : affectedDevices) {
+            notifyDevicePropertyChanged(deviceId);
+        }
+        notifyTrackDevicesChanged(trackId);
+    }
+}
+
 DeviceInfo* TrackManager::getDevice(TrackId trackId, DeviceId deviceId) {
     if (auto* track = getTrack(trackId)) {
         for (auto& element : track->chainElements) {
@@ -1216,6 +1250,14 @@ void TrackManager::setChainOutput(TrackId trackId, RackId rackId, ChainId chainI
 void TrackManager::setChainMuted(TrackId trackId, RackId rackId, ChainId chainId, bool muted) {
     if (auto* chain = getChain(trackId, rackId, chainId)) {
         chain->muted = muted;
+        notifyTrackDevicesChanged(trackId);
+    }
+}
+
+void TrackManager::setChainBypassed(TrackId trackId, RackId rackId, ChainId chainId,
+                                    bool bypassed) {
+    if (auto* chain = getChain(trackId, rackId, chainId)) {
+        chain->bypassed = bypassed;
         notifyTrackDevicesChanged(trackId);
     }
 }

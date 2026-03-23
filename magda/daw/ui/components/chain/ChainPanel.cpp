@@ -87,26 +87,6 @@ class ChainPanel::ElementSlotsContainer : public juce::Component, public juce::D
         if (!elementSlots_)
             return;
 
-        // Draw arrows between elements
-        int arrowY = getHeight() / 2;
-
-        for (size_t i = 0; i < elementSlots_->size(); ++i) {
-            auto& slot = (*elementSlots_)[i];
-            int x = slot->getRight();  // Arrow starts after the slot
-
-            // Draw arrow after each element
-            g.setColour(DarkTheme::getSecondaryTextColour());
-            int arrowStart = x + 4;
-            int arrowEnd = x + 12;
-            g.drawLine(static_cast<float>(arrowStart), static_cast<float>(arrowY),
-                       static_cast<float>(arrowEnd), static_cast<float>(arrowY), 1.5f);
-            // Arrow head
-            g.drawLine(static_cast<float>(arrowEnd - 4), static_cast<float>(arrowY - 3),
-                       static_cast<float>(arrowEnd), static_cast<float>(arrowY), 1.5f);
-            g.drawLine(static_cast<float>(arrowEnd - 4), static_cast<float>(arrowY + 3),
-                       static_cast<float>(arrowEnd), static_cast<float>(arrowY), 1.5f);
-        }
-
         // Draw insertion indicator during drag (reorder or drop)
         if (owner_.dragInsertIndex_ >= 0 || owner_.dropInsertIndex_ >= 0) {
             int indicatorIndex =
@@ -329,8 +309,8 @@ int ChainPanel::calculateTotalContentWidth() const {
 }
 
 int ChainPanel::getContentWidth() const {
-    // Return the total content width (devices + arrows + add button)
-    return juce::jmax(300, calculateTotalContentWidth());  // Minimum 300px
+    // Content width + NodeComponent's reduced(2,1) padding (4px horizontal)
+    return calculateTotalContentWidth() + 4;
 }
 
 void ChainPanel::setMaxWidth(int maxWidth) {
@@ -424,7 +404,7 @@ void ChainPanel::showChain(const magda::ChainNodePath& chainPath) {
                             << " resolved.chain=" << (resolved.chain ? "found" : "nullptr"));
     if (resolved.valid && resolved.chain) {
         setNodeName(resolved.chain->name);
-        setBypassed(false);  // Chains don't have bypass yet
+        setBypassed(resolved.chain->bypassed);
     }
 
     rebuildElementSlots();

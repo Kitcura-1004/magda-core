@@ -52,7 +52,6 @@ float dbToMeterPos(float db) {
     float normalized = (db - MIN_DB) / (MAX_DB - MIN_DB);
 
     // Apply power curve: y = x^3
-    // -12 dB → ~38%, 0 dB → ~75%, +6 dB → 100%
     return std::pow(normalized, 3.0f);
 }
 
@@ -1797,8 +1796,8 @@ void MainView::SelectionOverlayComponent::drawRecordingRegion(juce::Graphics& g)
 
         if (drawHeight > 0) {
             // Use the same style as a MIDI clip: darker fill of the default clip color
-            auto clipColour = ClipInfo::getDefaultColor(
-                static_cast<int>(ClipManager::getInstance().getArrangementClips().size()));
+            auto clipColour = juce::Colour(Config::getDefaultColour(
+                static_cast<int>(ClipManager::getInstance().getArrangementClips().size())));
             g.setColour(clipColour.darker(0.3f));
             g.fillRoundedRectangle(startX, drawY, endX - startX, drawHeight, 3.0f);
 
@@ -1836,6 +1835,13 @@ class MainView::MasterHeaderPanel::HorizontalStereoMeter : public juce::Componen
         // Right channel (bottom bar)
         auto rightBounds = bounds.removeFromTop(barHeight);
         drawMeterBar(g, rightBounds, rightLevel_);
+
+        // 0dB tick mark (vertical line)
+        auto fullBounds = getLocalBounds().toFloat();
+        float zeroDbPos = dbToMeterPos(0.0f);
+        float tickX = fullBounds.getX() + fullBounds.getWidth() * zeroDbPos;
+        g.setColour(DarkTheme::getColour(DarkTheme::BORDER).withAlpha(0.5f));
+        g.drawVerticalLine(static_cast<int>(tickX), fullBounds.getY(), fullBounds.getBottom());
     }
 
   private:
@@ -1847,33 +1853,30 @@ class MainView::MasterHeaderPanel::HorizontalStereoMeter : public juce::Componen
         g.setColour(DarkTheme::getColour(DarkTheme::SURFACE));
         g.fillRoundedRectangle(bounds, 1.0f);
 
-        // Meter fill (using same scaling as track meters for visual consistency)
         float displayLevel = dbToMeterPos(gainToDb(level));
         float meterWidth = bounds.getWidth() * displayLevel;
+        if (meterWidth < 1.0f)
+            return;
+
         auto fillBounds = bounds.withWidth(meterWidth);
 
-        // Color based on level
-        g.setColour(getMeterColour(level));
+        const juce::Colour green(0xFF55AA55);
+        const juce::Colour yellow(0xFFAAAA55);
+        const juce::Colour red(0xFFAA5555);
+
+        float yellowPos = dbToMeterPos(-12.0f);
+        float redPos = dbToMeterPos(0.0f);
+        constexpr float fade = 0.03f;
+
+        // Horizontal gradient: green at left, red at right
+        juce::ColourGradient grad(green, bounds.getX(), 0.0f, red, bounds.getRight(), 0.0f, false);
+        grad.addColour(std::max(0.0, (double)yellowPos - fade), green);
+        grad.addColour(std::min(1.0, (double)yellowPos + fade), yellow);
+        grad.addColour(std::max(0.0, (double)redPos - fade), yellow);
+        grad.addColour(std::min(1.0, (double)redPos + fade), red);
+
+        g.setGradientFill(grad);
         g.fillRoundedRectangle(fillBounds, 1.0f);
-    }
-
-    static juce::Colour getMeterColour(float level) {
-        float dbLevel = gainToDb(level);
-        juce::Colour green(0xFF55AA55);
-        juce::Colour yellow(0xFFAAAA55);
-        juce::Colour red(0xFFAA5555);
-
-        if (dbLevel < -12.0f) {
-            return green;
-        } else if (dbLevel < 0.0f) {
-            float t = (dbLevel + 12.0f) / 12.0f;
-            return green.interpolatedWith(yellow, t);
-        } else if (dbLevel < 3.0f) {
-            float t = dbLevel / 3.0f;
-            return yellow.interpolatedWith(red, t);
-        } else {
-            return red;
-        }
     }
 };
 
@@ -1940,12 +1943,19 @@ void MainView::MasterHeaderPanel::setupControls() {
 }
 
 void MainView::MasterHeaderPanel::paint(juce::Graphics& g) {
-    // Background - slightly different from regular tracks to distinguish
+    // Background
     g.fillAll(DarkTheme::getColour(DarkTheme::PANEL_BACKGROUND));
 
     // Border
+    auto bounds = getLocalBounds();
     g.setColour(DarkTheme::getColour(DarkTheme::BORDER));
-    g.drawRect(getLocalBounds(), 1);
+    g.drawRect(bounds, 1);
+
+    // "Master" label at top
+    auto labelArea = bounds.reduced(6, 2).removeFromTop(14);
+    g.setColour(DarkTheme::getColour(DarkTheme::TEXT_PRIMARY));
+    g.setFont(FontManager::getInstance().getUIFont(11.0f));
+    g.drawText("Master", labelArea, juce::Justification::centredLeft);
 }
 
 void MainView::MasterHeaderPanel::mouseDown(const juce::MouseEvent& /*event*/) {
@@ -1955,6 +1965,7 @@ void MainView::MasterHeaderPanel::mouseDown(const juce::MouseEvent& /*event*/) {
 void MainView::MasterHeaderPanel::resized() {
     auto contentArea = getLocalBounds().reduced(2);
     contentArea.removeFromLeft(4);  // Extra left padding
+    contentArea.removeFromTop(14);  // Space for "Master" label
 
     // Use 80% width, left-aligned
     int usableWidth = contentArea.getWidth() * 80 / 100;
