@@ -1,5 +1,7 @@
 #include "AIChatConsoleContent.hpp"
 
+#include <algorithm>
+
 #include "../../../../agents/daw_agent.hpp"
 #include "../../../core/ClipManager.hpp"
 #include "../../../core/SelectionManager.hpp"
@@ -355,6 +357,25 @@ AIChatConsoleContent::~AIChatConsoleContent() {
         agent_->stop();
 }
 
+juce::String AIChatConsoleContent::resolveAliases(const juce::String& text) {
+    if (allAliases_.empty())
+        buildAliasList();
+
+    // Sort by alias length descending to avoid prefix collisions
+    // (e.g. @pro matching inside @pro_q_3)
+    auto sorted = allAliases_;
+    std::sort(sorted.begin(), sorted.end(),
+              [](const auto& a, const auto& b) { return a.alias.length() > b.alias.length(); });
+
+    auto resolved = text;
+    for (const auto& entry : sorted) {
+        auto token = "@" + entry.alias;
+        if (resolved.contains(token))
+            resolved = resolved.replace(token, entry.pluginName);
+    }
+    return resolved;
+}
+
 void AIChatConsoleContent::sendMessage(const juce::String& text) {
     // If a previous request thread is still around, stop it before starting a new one
     if (requestThread_ && requestThread_->isThreadRunning()) {
@@ -364,6 +385,9 @@ void AIChatConsoleContent::sendMessage(const juce::String& text) {
             DBG("AIChatConsole: Warning - previous request thread did not stop within timeout");
         requestThread_.reset();
     }
+
+    // Resolve @alias mentions to real plugin names before sending to the LLM
+    auto resolvedText = resolveAliases(text);
 
     processing_ = true;
     inputBox_.clear();
@@ -377,7 +401,7 @@ void AIChatConsoleContent::sendMessage(const juce::String& text) {
     shouldStop_ = false;
     agent_->resetCancel();
 
-    pendingMessage_ = text;
+    pendingMessage_ = resolvedText;
 
     dotCount_ = 0;
     startTimer(400);  // Animate dots every 400ms

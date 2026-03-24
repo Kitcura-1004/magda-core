@@ -1,5 +1,6 @@
 #include "PluginManager.hpp"
 
+#include <unordered_set>
 #include <vector>
 
 #include "../core/RackInfo.hpp"
@@ -944,21 +945,32 @@ void PluginManager::ensureVolumePluginPosition(te::AudioTrack* track) const {
 
     auto& plugins = track->pluginList;
 
-    // Use getVolumePlugin() which returns the *last* VolumeAndPanPlugin instance.
-    // This is critical when a Utility plugin (also a VolumeAndPanPlugin) is present
-    // on the track — we must only move the master fader, not the utility instance.
-    auto* volPanRaw = track->getVolumePlugin();
+    // Find the track's fader VolumeAndPanPlugin, excluding any Utility instances
+    // (which are also VolumeAndPanPlugins but are tracked in syncedDevices_).
+    // Snapshot synced plugin pointers under the lock to avoid racing with mutations.
+    std::unordered_set<te::Plugin*> syncedPlugins;
+    {
+        juce::ScopedLock lock(pluginLock_);
+        for (const auto& [devId, syncInfo] : syncedDevices_) {
+            if (syncInfo.plugin)
+                syncedPlugins.insert(syncInfo.plugin.get());
+        }
+    }
+
+    te::VolumeAndPanPlugin* volPanRaw = nullptr;
+    int volPanIndex = -1;
+    for (int i = 0; i < plugins.size(); ++i) {
+        if (auto* vp = dynamic_cast<te::VolumeAndPanPlugin*>(plugins[i])) {
+            if (syncedPlugins.find(vp) == syncedPlugins.end()) {
+                volPanRaw = vp;
+                volPanIndex = i;
+            }
+        }
+    }
     if (!volPanRaw)
         return;
 
     te::Plugin::Ptr volPanPlugin = volPanRaw;
-    int volPanIndex = -1;
-    for (int i = 0; i < plugins.size(); ++i) {
-        if (plugins[i] == volPanRaw) {
-            volPanIndex = i;
-            break;
-        }
-    }
 
     if (volPanIndex < 0)
         return;
@@ -1956,7 +1968,14 @@ void PluginManager::syncMultiOutTrack(TrackId trackId, const TrackInfo& trackInf
         link.outputPairIndex >= static_cast<int>(device->multiOut.outputPairs.size()))
         return;
 
-    const auto& outPair = device->multiOut.outputPairs[static_cast<size_t>(link.outputPairIndex)];
+    auto& outPair = device->multiOut.outputPairs[static_cast<size_t>(link.outputPairIndex)];
+
+    // Restore pair state from the existing multi-out track (needed after project load,
+    // since the async plugin callback rebuilds pairs with active=false before tracks are restored)
+    if (!outPair.active || outPair.trackId != trackId) {
+        outPair.active = true;
+        outPair.trackId = trackId;
+    }
 
     // Get or create the RackInstance for this output pair
     auto rackInstance = instrumentRackManager_.createOutputInstance(
@@ -2367,6 +2386,9 @@ te::Plugin::Ptr PluginManager::createPluginOnly(TrackId trackId, const DeviceInf
             plugin = createInternalPlugin(te::ToneGeneratorPlugin::xmlTypeName, ps);
         } else if (device.pluginId.containsIgnoreCase("4osc")) {
             plugin = createInternalPlugin(te::FourOscPlugin::xmlTypeName, ps);
+        } else if (device.pluginId.containsIgnoreCase("utility") ||
+                   device.pluginId.containsIgnoreCase("volume")) {
+            plugin = createInternalPlugin(te::VolumeAndPanPlugin::xmlTypeName, ps);
         } else if (device.pluginId.containsIgnoreCase(
                        daw::audio::MagdaSamplerPlugin::xmlTypeName)) {
             juce::ValueTree ps(te::IDs::PLUGIN);

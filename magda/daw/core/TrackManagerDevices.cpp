@@ -454,6 +454,7 @@ void TrackManager::updateDeviceParameters(DeviceId deviceId,
         for (auto& element : track.chainElements) {
             if (magda::isDevice(element) && magda::getDevice(element).id == deviceId) {
                 magda::getDevice(element).parameters = params;
+                DBG("  -> found on track " << track.id << " (top-level)");
                 return;
             }
             if (magda::isRack(element)) {
@@ -462,6 +463,8 @@ void TrackManager::updateDeviceParameters(DeviceId deviceId,
                         if (magda::isDevice(chainElement) &&
                             magda::getDevice(chainElement).id == deviceId) {
                             magda::getDevice(chainElement).parameters = params;
+                            DBG("  -> found in rack chain " << chain.id << " on track "
+                                                            << track.id);
                             return;
                         }
                     }
@@ -469,6 +472,7 @@ void TrackManager::updateDeviceParameters(DeviceId deviceId,
             }
         }
     }
+    DBG("  -> NOT FOUND!");
 }
 
 void TrackManager::setDeviceVisibleParameters(DeviceId deviceId,

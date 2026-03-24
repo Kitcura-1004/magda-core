@@ -8,6 +8,7 @@
 #include "../daw/core/ClipManager.hpp"
 #include "../daw/core/DeviceInfo.hpp"
 #include "../daw/core/MidiNoteCommands.hpp"
+#include "../daw/core/PluginAlias.hpp"
 #include "../daw/core/SelectionManager.hpp"
 #include "../daw/core/TrackManager.hpp"
 #include "../daw/core/UndoManager.hpp"
@@ -960,8 +961,14 @@ bool Interpreter::executeAddFx(const Params& params) {
     const auto& knownPlugins = teWrapper->getKnownPluginList();
     const juce::PluginDescription* bestMatch = nullptr;
 
+    DBG("DSL executeAddFx: looking for plugin fxName=\"" + fxName + "\"");
     for (const auto& desc : knownPlugins.getTypes()) {
-        if (desc.name.equalsIgnoreCase(fxName)) {
+        // Match by exact plugin name or generated alias (e.g. "pro_q_3" matches "Pro-Q 3")
+        auto alias = magda::pluginNameToAlias(desc.name);
+        bool nameMatch = desc.name.equalsIgnoreCase(fxName) || alias.equalsIgnoreCase(fxName);
+        DBG("  comparing: desc.name=\"" + desc.name + "\" alias=\"" + alias +
+            "\" match=" + juce::String(nameMatch ? "YES" : "no"));
+        if (nameMatch) {
             // Filter by format hint if provided
             if (formatHint.isNotEmpty()) {
                 auto descFormat = desc.pluginFormatName.toLowerCase();
@@ -1007,6 +1014,13 @@ bool Interpreter::executeAddFx(const Params& params) {
     if (deviceId == INVALID_DEVICE_ID) {
         ctx_.setError("Failed to add FX '" + fxName + "' to track");
         return false;
+    }
+
+    // If the track was named with the alias form, rename it to the real plugin name.
+    auto& tm = TrackManager::getInstance();
+    if (auto* trackInfo = tm.getTrack(ctx_.currentTrackId)) {
+        if (trackInfo->name.equalsIgnoreCase(fxName) && !fxName.equalsIgnoreCase(matchedName))
+            tm.setTrackName(ctx_.currentTrackId, matchedName);
     }
 
     ctx_.addResult("Added " + matchedFormat + " FX '" + matchedName + "' by " +
@@ -1237,10 +1251,6 @@ TrackType Interpreter::parseTrackType(const Params& params) {
         return TrackType::Audio;
 
     std::string typeStr = params.get("type");
-    if (typeStr == "midi")
-        return TrackType::MIDI;
-    if (typeStr == "instrument")
-        return TrackType::Instrument;
     if (typeStr == "group")
         return TrackType::Group;
     if (typeStr == "aux")
