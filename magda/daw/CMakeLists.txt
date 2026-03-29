@@ -53,12 +53,18 @@ juce_add_binary_data(MagdaAssets
     ../../assets/icons/density_medium.svg
     ../../assets/icons/density_large.svg
     ../../assets/icons/chord.svg
+    ../../assets/icons/funnel.svg
+    ../../assets/icons/refresh.svg
+    ../../assets/icons/send.svg
+    ../../assets/icons/chevron_left.svg
     ../../assets/icons/bar_chart.svg
     ../../assets/icons/link_flat.svg
     ../../assets/icons/knob.svg
     ../../assets/icons/sine-wave.svg
     ../../assets/icons/bare_sine.svg
     ../../assets/icons/play_bare.svg
+    ../../assets/icons/server_play.svg
+    ../../assets/icons/server_stop.svg
     ../../assets/icons/open_in_new.svg
     ../../assets/icons/power_on.svg
     ../../assets/icons/rack.svg
@@ -146,6 +152,16 @@ juce_add_binary_data(MagdaAssets
     # Fontaudio logo icons
     ../../assets/icons/fontaudio/fad-logo-tracktion.svg
     ../../assets/icons/fontaudio/fad-logo-juce.svg
+    # Chord engine icons
+    ../../assets/icons/psychology.svg
+    ../../assets/icons/robot.svg
+    ../../assets/icons/ai.svg
+    # Cloud provider icons
+    ../../assets/icons/cloud_providers/openai.svg
+    ../../assets/icons/cloud_providers/anthropic.svg
+    ../../assets/icons/cloud_providers/gemini.svg
+    ../../assets/icons/cloud_providers/deepseek.svg
+    ../../assets/icons/cloud_providers/openrouter.svg
     # App logo
     ../../assets/magda-lisa.svg
 )
@@ -212,6 +228,7 @@ set(DAW_CORE_SOURCES
     audio/MidiReceivePlugin.cpp
     audio/MagdaSamplerPlugin.cpp
     audio/DrumGridPlugin.cpp
+    audio/MidiChordEnginePlugin.cpp
     # Project serialization
     project/serialization/ProjectSerializer.cpp
     project/serialization/TrackSerializer.cpp
@@ -220,6 +237,9 @@ set(DAW_CORE_SOURCES
     project/ProjectManager.cpp
     # Preset management
     core/PresetManager.cpp
+    # Music theory (chord detection, suggestion, scales)
+    music/ChordEngine.cpp
+    music/ChordSuggestionEngine.cpp
     # UI components needed by tests
     ui/components/timeline/LoopMarkerInteraction.cpp
     ui/components/timeline/TimelineComponent.cpp
@@ -244,6 +264,7 @@ set(DAW_UI_SOURCES
     ui/windows/MainWindowExport.cpp
     ui/windows/MenuManager.cpp
     # Dialogs
+    ui/dialogs/AISettingsDialog.cpp
     ui/dialogs/AudioSettingsDialog.cpp
     ui/dialogs/ChainTreeDialog.cpp
     ui/dialogs/ExportAudioDialog.cpp
@@ -286,12 +307,15 @@ set(DAW_UI_SOURCES
     ui/panels/content/inspector/InspectorContainer.cpp
     ui/panels/content/AIChatConsoleContent.cpp
     ui/panels/content/ScriptingConsoleContent.cpp
+    ui/panels/content/DSLTokeniser.cpp
     ui/panels/content/TrackChainContent.cpp
     ui/panels/content/MidiEditorContent.cpp
     ui/panels/content/PianoRollContent.cpp
     ui/panels/content/DrumGridClipContent.cpp
     ui/panels/content/WaveformEditorContent.cpp
     ui/panels/content/AudioClipPropertiesContent.cpp
+    ui/panels/content/ChordPanelContent.cpp
+    ui/components/chord/ChordBlockComponent.cpp
     # Audio
     audio/AudioEngineOptimizer.cpp
     # Views
@@ -414,6 +438,7 @@ set(DAW_HEADERS
     core/TrackPropertyCommands.hpp
     core/AutomationCommands.hpp
     core/MidiNoteCommands.hpp
+    core/ChordAnnotationCommands.hpp
     engine/AudioEngine.hpp
     engine/TracktionEngineWrapper.hpp
     engine/MagdaUIBehaviour.hpp
@@ -433,6 +458,7 @@ set(DAW_HEADERS
     ui/windows/MainWindow.hpp
     ui/windows/MenuManager.hpp
     # Dialogs
+    ui/dialogs/AISettingsDialog.hpp
     ui/dialogs/AudioSettingsDialog.hpp
     ui/dialogs/ChainTreeDialog.hpp
     ui/dialogs/ExportAudioDialog.hpp
@@ -472,6 +498,7 @@ set(DAW_HEADERS
     ui/panels/content/inspector/InspectorContainer.hpp
     ui/panels/content/AIChatConsoleContent.hpp
     ui/panels/content/ScriptingConsoleContent.hpp
+    ui/panels/content/DSLTokeniser.hpp
     ui/panels/content/TrackChainContent.hpp
     ui/panels/content/PianoRollContent.hpp
     ui/panels/content/WaveformEditorContent.hpp
@@ -500,6 +527,7 @@ set(DAW_HEADERS
     audio/MidiReceivePlugin.hpp
     audio/MagdaSamplerPlugin.hpp
     audio/DrumGridPlugin.hpp
+    audio/MidiChordEnginePlugin.hpp
     # Views
     ui/views/MainView.hpp
     ui/views/SessionView.hpp
@@ -644,7 +672,9 @@ target_link_libraries(magda_daw
     juce::juce_audio_formats
     juce::juce_audio_utils
     juce::juce_gui_basics
+    juce::juce_gui_extra
     tracktion::tracktion_engine
+    juce_llm
     MagdaAssets
     # Link GTK/WebKit and curl dependencies on Linux
     $<$<PLATFORM_ID:Linux>:juce::pkgconfig_JUCE_BROWSER_LINUX_DEPS>
@@ -689,6 +719,7 @@ target_link_libraries(magda_daw_app
     magda_agents
     MagdaAssets
     juce::juce_gui_basics
+    juce::juce_gui_extra
     juce::juce_audio_devices
     juce::juce_audio_formats
     juce::juce_audio_processors

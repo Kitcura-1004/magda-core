@@ -5,8 +5,11 @@
 
 #include <memory>
 
+#include "../../magda/agents/llama_model_manager.hpp"
+#include "../../magda/agents/llm_presets.hpp"
 #include "audio/AudioThumbnailManager.hpp"
 #include "core/ClipManager.hpp"
+#include "core/Config.hpp"
 #include "core/ModulatorEngine.hpp"
 #include "core/TrackManager.hpp"
 #include "engine/TracktionEngineWrapper.hpp"
@@ -36,6 +39,7 @@ class MagdaDAWApplication : public JUCEApplication {
         }
     };
     std::unique_ptr<InitTimer> initTimer_;
+    std::thread modelLoadThread_;
 
   public:
     MagdaDAWApplication() = default;
@@ -101,12 +105,35 @@ class MagdaDAWApplication : public JUCEApplication {
         // 5. Dismiss splash screen
         splashScreen_.reset();
 
+        // 6. Auto-load local model if configured
+        {
+            auto& config = magda::Config::getInstance();
+            if (!config.getLocalModelPath().empty()) {
+                magda::LlamaModelManager::Config modelCfg;
+                modelCfg.modelPath = config.getLocalModelPath();
+                modelCfg.gpuLayers = config.getLocalLlamaGpuLayers();
+                modelCfg.contextSize = config.getLocalLlamaContextSize();
+                DBG("Auto-loading local model: " << modelCfg.modelPath);
+                modelLoadThread_ = std::thread([modelCfg]() {
+                    bool ok = magda::LlamaModelManager::getInstance().loadModel(modelCfg);
+                    if (ok) {
+                        DBG("Local model loaded successfully");
+                    } else {
+                        DBG("Failed to load local model");
+                    }
+                });
+            }
+        }
+
         DBG("MAGDA is ready!");
     }
 
     void shutdown() override {
         initTimer_.reset();
         DBG("=== SHUTDOWN START ===");
+
+        if (modelLoadThread_.joinable())
+            modelLoadThread_.join();
 
         // Stop timers first to prevent callbacks during destruction
         DBG("[1] ModulatorEngine shutdown...");

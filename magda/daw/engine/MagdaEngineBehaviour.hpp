@@ -3,6 +3,7 @@
 
 #include "../audio/DrumGridPlugin.hpp"
 #include "../audio/MagdaSamplerPlugin.hpp"
+#include "../audio/MidiChordEnginePlugin.hpp"
 #include "../audio/MidiReceivePlugin.hpp"
 #include "../audio/SidechainMonitorPlugin.hpp"
 #include "../project/ProjectManager.hpp"
@@ -80,6 +81,10 @@ class MagdaEngineBehaviour : public tracktion::EngineBehaviour {
         if (type == MidiReceivePlugin::xmlTypeName) {
             DBG("MagdaEngineBehaviour::createCustomPlugin - creating MidiReceivePlugin");
             return new MidiReceivePlugin(info);
+        }
+        if (type == daw::audio::MidiChordEnginePlugin::xmlTypeName) {
+            DBG("MagdaEngineBehaviour::createCustomPlugin - creating MidiChordEnginePlugin");
+            return new daw::audio::MidiChordEnginePlugin(info);
         }
         DBG("MagdaEngineBehaviour::createCustomPlugin - unknown type: " << type);
         return {};

@@ -1,14 +1,19 @@
 #include "PianoRollContent.hpp"
 
+#include <limits>
+
 #include "../../core/SelectionManager.hpp"
 #include "../../state/TimelineController.hpp"
 #include "../../themes/DarkTheme.hpp"
 #include "../../themes/FontManager.hpp"
 #include "BinaryData.h"
+#include "audio/MidiChordEnginePlugin.hpp"
+#include "core/ChordAnnotationCommands.hpp"
 #include "core/MidiNoteCommands.hpp"
 #include "core/SelectionManager.hpp"
 #include "core/TrackManager.hpp"
 #include "core/UndoManager.hpp"
+#include "music/ChordEngine.hpp"
 #include "ui/components/common/SvgButton.hpp"
 #include "ui/components/pianoroll/CCLaneComponent.hpp"
 #include "ui/components/pianoroll/MidiDrawerComponent.hpp"
@@ -22,16 +27,27 @@ namespace magda::daw::ui {
 PianoRollContent::PianoRollContent() {
     setName("PianoRoll");
 
-    // Create chord toggle button (hidden — chord feature disabled for now)
+    // Create chord toggle button
     chordToggle_ = std::make_unique<magda::SvgButton>("ChordToggle", BinaryData::chord_svg,
                                                       BinaryData::chord_svgSize);
-    chordToggle_->setTooltip("Toggle chord detection row");
-    chordToggle_->setOriginalColor(juce::Colour(0xFFB3B3B3));  // SVG fill color
+    chordToggle_->setTooltip("Toggle chord row");
+    chordToggle_->setOriginalColor(juce::Colour(0xFFB3B3B3));
     chordToggle_->setActive(showChordRow_);
     chordToggle_->onClick = [this]() {
         setChordRowVisible(!showChordRow_);
         chordToggle_->setActive(showChordRow_);
     };
+    addAndMakeVisible(chordToggle_.get());
+
+    // Create chord detect button (appears in chord row's keyboard column)
+    chordDetectBtn_ = std::make_unique<magda::SvgButton>("ChordDetect", BinaryData::refresh_svg,
+                                                         BinaryData::refresh_svgSize);
+    chordDetectBtn_->setTooltip("Recalculate chords from notes");
+    chordDetectBtn_->setOriginalColor(juce::Colour(0xFFE3E3E3));
+    chordDetectBtn_->setNormalColor(DarkTheme::getColour(DarkTheme::TEXT_SECONDARY));
+    chordDetectBtn_->onClick = [this]() { detectChordsFromNotes(); };
+    chordDetectBtn_->setVisible(showChordRow_);
+    addAndMakeVisible(chordDetectBtn_.get());
 
     // Create velocity toggle button (bar chart icon for controls drawer)
     velocityToggle_ = std::make_unique<magda::SvgButton>(
@@ -326,10 +342,10 @@ void PianoRollContent::setupGridCallbacks() {
     };
 
     // Handle quantize from right-click context menu
-    gridComponent_->onQuantizeNotes = [this](magda::ClipId clipId, std::vector<size_t> noteIndices,
-                                             magda::QuantizeMode mode) {
+    gridComponent_->onQuantizeNotes = [](magda::ClipId clipId, std::vector<size_t> noteIndices,
+                                         magda::QuantizeMode mode, double gridBeats) {
         auto cmd = std::make_unique<magda::QuantizeMidiNotesCommand>(clipId, std::move(noteIndices),
-                                                                     gridResolutionBeats_, mode);
+                                                                     gridBeats, mode);
         magda::UndoManager::getInstance().executeCommand(std::move(cmd));
     };
 
@@ -418,6 +434,47 @@ void PianoRollContent::setupGridCallbacks() {
     gridComponent_->onEditCursorSet = [this](double positionSeconds) {
         setLocalEditCursor(positionSeconds);
     };
+
+    // Handle chord block drops from the chord panel
+    gridComponent_->onChordDropped = [](magda::ClipId clipId, double beat, double noteLength,
+                                        std::vector<std::pair<int, int>> notes,
+                                        juce::String chordName) {
+        if (notes.empty())
+            return;
+
+        // Allocate chord group ID for linking notes to annotation
+        auto* clipData = magda::ClipManager::getInstance().getClip(clipId);
+        int groupId = clipData ? clipData->nextChordGroupId++ : 0;
+
+        // Compound: MIDI notes + chord annotation undo as one step
+        magda::CompoundOperationScope scope("Add Chord");
+
+        std::vector<magda::MidiNote> midiNotes;
+        midiNotes.reserve(notes.size());
+        for (const auto& [noteNumber, velocity] : notes) {
+            magda::MidiNote mn;
+            mn.noteNumber = noteNumber;
+            mn.velocity = velocity;
+            mn.startBeat = beat;
+            mn.lengthBeats = noteLength;
+            mn.chordGroup = groupId;
+            midiNotes.push_back(mn);
+        }
+
+        auto noteCmd = std::make_unique<magda::AddMultipleMidiNotesCommand>(
+            clipId, std::move(midiNotes), "Add chord notes");
+        magda::UndoManager::getInstance().executeCommand(std::move(noteCmd));
+
+        if (chordName.isNotEmpty()) {
+            magda::ClipInfo::ChordAnnotation annotation;
+            annotation.beatPosition = beat;
+            annotation.lengthBeats = noteLength;
+            annotation.chordName = chordName;
+            annotation.chordGroup = groupId;
+            auto chordCmd = std::make_unique<magda::AddChordAnnotationCommand>(clipId, annotation);
+            magda::UndoManager::getInstance().executeCommand(std::move(chordCmd));
+        }
+    };
 }
 
 // ============================================================================
@@ -427,6 +484,8 @@ void PianoRollContent::setupGridCallbacks() {
 void PianoRollContent::setGridPixelsPerBeat(double ppb) {
     if (gridComponent_)
         gridComponent_->setPixelsPerBeat(ppb);
+    if (showChordRow_)
+        repaint();
 }
 
 void PianoRollContent::setGridPlayheadPosition(double position) {
@@ -484,6 +543,11 @@ void PianoRollContent::paint(juce::Graphics& g) {
         chordArea = chordArea.removeFromTop(CHORD_ROW_HEIGHT);
         chordArea.removeFromLeft(KEYBOARD_WIDTH);
         drawChordRow(g, chordArea);
+
+        // Horizontal separator at bottom of chord row — full width
+        g.setColour(DarkTheme::getColour(DarkTheme::BORDER));
+        g.drawHorizontalLine(CHORD_ROW_HEIGHT - 1, static_cast<float>(SIDEBAR_WIDTH),
+                             static_cast<float>(getWidth()));
     }
 
     // Draw velocity drawer header (if open) — only for legacy path without MidiDrawer
@@ -496,20 +560,40 @@ void PianoRollContent::paint(juce::Graphics& g) {
     }
 }
 
+void PianoRollContent::paintOverChildren(juce::Graphics& g) {
+    // Extend the ruler's tick-area border line through the sidebar/keyboard corner
+    int rulerTop = showChordRow_ ? CHORD_ROW_HEIGHT : 0;
+    int tickLineY = rulerTop + RULER_HEIGHT - LayoutConfig::getInstance().rulerMajorTickHeight;
+    g.setColour(DarkTheme::getColour(DarkTheme::BORDER));
+    g.fillRect(SIDEBAR_WIDTH, tickLineY, KEYBOARD_WIDTH, 1);
+}
+
 void PianoRollContent::resized() {
     auto bounds = getLocalBounds();
 
     // Skip sidebar (painted in paint())
     bounds.removeFromLeft(SIDEBAR_WIDTH);
 
-    // Position sidebar icons: velocity at bottom (chord toggle hidden)
+    // Position sidebar icons
     int iconSize = 22;
     int padding = (SIDEBAR_WIDTH - iconSize) / 2;
+    // Chord toggle at top of sidebar — vertically centered in chord row height
+    int chordToggleY = showChordRow_ ? (CHORD_ROW_HEIGHT - iconSize) / 2 : padding;
+    chordToggle_->setBounds(padding, chordToggleY, iconSize, iconSize);
+    // Velocity toggle at bottom
     velocityToggle_->setBounds(padding, getHeight() - iconSize - padding, iconSize, iconSize);
 
     // Skip chord row space if visible (drawn in paint)
     if (showChordRow_) {
         bounds.removeFromTop(CHORD_ROW_HEIGHT);
+        // Position detect button in the keyboard column of the chord row
+        int detectSize = 18;
+        int detectX = SIDEBAR_WIDTH + (KEYBOARD_WIDTH - detectSize) / 2;
+        int detectY = (CHORD_ROW_HEIGHT - detectSize) / 2;
+        chordDetectBtn_->setBounds(detectX, detectY, detectSize, detectSize);
+        chordDetectBtn_->setVisible(true);
+    } else {
+        chordDetectBtn_->setVisible(false);
     }
 
     // MIDI drawer at bottom (if open)
@@ -833,6 +917,24 @@ void PianoRollContent::onActivated() {
                 setRelativeTimeMode(true);
             }
 
+            // Auto-show chord row if track has a chord engine
+            if (!showChordRow_ && clip->trackId != magda::INVALID_TRACK_ID) {
+                auto* trackInfo = magda::TrackManager::getInstance().getTrack(clip->trackId);
+                if (trackInfo) {
+                    for (const auto& elem : trackInfo->chainElements) {
+                        if (magda::isDevice(elem)) {
+                            const auto& dev = magda::getDevice(elem);
+                            if (dev.pluginId.containsIgnoreCase(
+                                    magda::daw::audio::MidiChordEnginePlugin::xmlTypeName)) {
+                                setChordRowVisible(true);
+                                chordToggle_->setActive(true);
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+
             updateGridSize();
             updateTimeRuler();
             updateVelocityLane();
@@ -920,6 +1022,14 @@ void PianoRollContent::clipPropertyChanged(magda::ClipId clipId) {
                     if (forceRelative) {
                         self->setRelativeTimeMode(true);
                     }
+                }
+
+                // Sync chord annotations with their linked notes
+                self->syncChordAnnotations(clipId);
+
+                // Auto-clear chord annotations if notes were all deleted
+                if (clip && clip->midiNotes.empty() && !clip->chordAnnotations.empty()) {
+                    magda::ClipManager::getInstance().clearChordAnnotations(clipId);
                 }
 
                 self->applyClipGridSettings();
@@ -1166,36 +1276,31 @@ void PianoRollContent::drawChordRow(juce::Graphics& g, juce::Rectangle<int> area
     g.drawLine(static_cast<float>(area.getX()), static_cast<float>(area.getBottom() - 1),
                static_cast<float>(area.getRight()), static_cast<float>(area.getBottom() - 1), 1.0f);
 
-    // Get time signature for beat timing
-    int timeSignatureNumerator = 4;
-    if (auto* controller = magda::TimelineController::getCurrent()) {
-        timeSignatureNumerator = controller->getState().tempo.timeSignatureNumerator;
+    // Get chord annotations from the editing clip
+    const auto* clip = (editingClipId_ != magda::INVALID_CLIP_ID)
+                           ? magda::ClipManager::getInstance().getClip(editingClipId_)
+                           : nullptr;
+    if (!clip || clip->chordAnnotations.empty()) {
+        // Empty state hint
+        g.setColour(DarkTheme::getSecondaryTextColour().withAlpha(0.3f));
+        g.setFont(FontManager::getInstance().getUIFont(10.0f));
+        g.drawText("No chords detected", area.reduced(4, 0), juce::Justification::centredLeft);
+        return;
     }
 
-    // Get scroll offset from viewport
     int scrollX = viewport_ ? viewport_->getViewPositionX() : 0;
+    g.setFont(FontManager::getInstance().getUIFont(11.0f));
 
-    // Mock chords - one chord per 2 bars for demonstration
-    const char* mockChords[] = {"C", "Am", "F", "G", "Dm", "Em", "Bdim", "C"};
-    int numMockChords = 8;
-
-    // Calculate beats per bar and pixels per beat
-    double beatsPerBar = timeSignatureNumerator;
-    double beatsPerChord = beatsPerBar * 2;  // 2 bars per chord
-
-    g.setFont(11.0f);
-
-    for (int i = 0; i < numMockChords; ++i) {
-        double startBeat = i * beatsPerChord;
-        double endBeat = (i + 1) * beatsPerChord;
-
-        int startX = static_cast<int>(startBeat * horizontalZoom_) + GRID_LEFT_PADDING - scrollX;
-        int endX = static_cast<int>(endBeat * horizontalZoom_) + GRID_LEFT_PADDING - scrollX;
+    for (const auto& annotation : clip->chordAnnotations) {
+        int startX = static_cast<int>(annotation.beatPosition * horizontalZoom_) +
+                     GRID_LEFT_PADDING - scrollX;
+        int endX =
+            static_cast<int>((annotation.beatPosition + annotation.lengthBeats) * horizontalZoom_) +
+            GRID_LEFT_PADDING - scrollX;
 
         // Skip if out of view
-        if (endX < 0 || startX > area.getWidth()) {
+        if (endX < 0 || startX > area.getWidth())
             continue;
-        }
 
         // Clip to visible area
         int drawStartX = juce::jmax(0, startX) + area.getX();
@@ -1207,12 +1312,160 @@ void PianoRollContent::drawChordRow(juce::Graphics& g, juce::Rectangle<int> area
         g.setColour(DarkTheme::getColour(DarkTheme::ACCENT_BLUE).withAlpha(0.2f));
         g.fillRoundedRectangle(blockBounds.toFloat(), 3.0f);
 
-        // Draw chord name (only if block is mostly visible)
-        if (startX >= -20 && endX <= area.getWidth() + 20) {
+        // Draw chord name
+        if (blockBounds.getWidth() > 10) {
             g.setColour(DarkTheme::getColour(DarkTheme::TEXT_PRIMARY));
-            g.drawText(mockChords[i], blockBounds, juce::Justification::centred, true);
+            g.drawText(annotation.chordName, blockBounds.reduced(2, 0),
+                       juce::Justification::centredLeft, true);
         }
     }
+}
+
+void PianoRollContent::syncChordAnnotations(magda::ClipId clipId) {
+    if (isSyncingChords_)
+        return;
+    isSyncingChords_ = true;
+
+    auto* clip = magda::ClipManager::getInstance().getClip(clipId);
+    if (!clip || clip->chordAnnotations.empty()) {
+        isSyncingChords_ = false;
+        return;
+    }
+
+    auto& engine = magda::music::ChordEngine::getInstance();
+
+    for (auto it = clip->chordAnnotations.begin(); it != clip->chordAnnotations.end();) {
+        if (it->chordGroup == 0) {
+            ++it;
+            continue;  // Skip unlinked annotations
+        }
+
+        // Find all notes in this chord group
+        std::vector<magda::music::ChordNote> chordNotes;
+        double minBeat = std::numeric_limits<double>::max();
+        double maxEnd = 0.0;
+
+        for (const auto& note : clip->midiNotes) {
+            if (note.chordGroup == it->chordGroup) {
+                chordNotes.push_back({note.noteNumber, note.velocity});
+                minBeat = std::min(minBeat, note.startBeat);
+                maxEnd = std::max(maxEnd, note.startBeat + note.lengthBeats);
+            }
+        }
+
+        if (chordNotes.empty()) {
+            // All notes in group deleted — remove annotation
+            it = clip->chordAnnotations.erase(it);
+            continue;
+        }
+
+        // Update position and length from note extents
+        it->beatPosition = minBeat;
+        it->lengthBeats = maxEnd - minBeat;
+
+        // Re-detect chord name if pitches changed
+        if (chordNotes.size() >= 2) {
+            auto chord = engine.detect(chordNotes);
+            if (chord.name != "none" && !chord.name.isEmpty())
+                it->chordName = chord.getDisplayName();
+        }
+        ++it;
+    }
+
+    isSyncingChords_ = false;
+}
+
+void PianoRollContent::detectChordsFromNotes() {
+    if (editingClipId_ == magda::INVALID_CLIP_ID)
+        return;
+
+    auto* clip = magda::ClipManager::getInstance().getClip(editingClipId_);
+    if (!clip || clip->midiNotes.empty())
+        return;
+
+    int beatsPerBar = 4;
+    if (auto* controller = magda::TimelineController::getCurrent())
+        beatsPerBar = controller->getState().tempo.timeSignatureNumerator;
+
+    // Find the end of the last note (not the full clip length)
+    double lastNoteEnd = 0.0;
+    for (const auto& note : clip->midiNotes)
+        lastNoteEnd = juce::jmax(lastNoteEnd, note.startBeat + note.lengthBeats);
+
+    double scanLength = lastNoteEnd;
+    double step = beatsPerBar;
+
+    // Collect detected chords with their contributing note indices
+    struct DetectedChord {
+        double beat;
+        juce::String name;
+        std::vector<size_t> noteIndices;
+    };
+    std::vector<DetectedChord> detected;
+
+    auto& engine = magda::music::ChordEngine::getInstance();
+    for (double beat = 0.0; beat < scanLength; beat += step) {
+        // Collect notes sounding at this beat
+        std::vector<magda::music::ChordNote> chordNotes;
+        std::vector<size_t> indices;
+        for (size_t i = 0; i < clip->midiNotes.size(); ++i) {
+            const auto& note = clip->midiNotes[i];
+            if (note.startBeat <= beat && (note.startBeat + note.lengthBeats) > beat) {
+                chordNotes.push_back({note.noteNumber, note.velocity});
+                indices.push_back(i);
+            }
+        }
+
+        if (chordNotes.size() < 2)
+            continue;
+
+        auto chord = engine.detect(chordNotes);
+        if (chord.name == "none" || chord.name == "unknown" || chord.name.isEmpty())
+            continue;
+
+        detected.push_back({beat, chord.getDisplayName(), std::move(indices)});
+    }
+
+    if (detected.empty())
+        return;
+
+    // Clear existing + add new, all as one undo step
+    magda::CompoundOperationScope scope("Detect Chords");
+
+    auto clearCmd = std::make_unique<magda::ClearChordAnnotationsCommand>(editingClipId_);
+    magda::UndoManager::getInstance().executeCommand(std::move(clearCmd));
+
+    // Assign chordGroup IDs to annotations and their notes
+    std::vector<std::pair<size_t, int>> noteGroupAssignments;
+
+    for (size_t i = 0; i < detected.size(); ++i) {
+        int groupId = clip->nextChordGroupId++;
+
+        magda::ClipInfo::ChordAnnotation annotation;
+        annotation.beatPosition = detected[i].beat;
+        // Extend to next chord or end of last note
+        annotation.lengthBeats = (i + 1 < detected.size())
+                                     ? (detected[i + 1].beat - detected[i].beat)
+                                     : (lastNoteEnd - detected[i].beat);
+        annotation.chordName = detected[i].name;
+        annotation.chordGroup = groupId;
+
+        auto cmd = std::make_unique<magda::AddChordAnnotationCommand>(editingClipId_, annotation);
+        magda::UndoManager::getInstance().executeCommand(std::move(cmd));
+
+        // Collect note-to-group assignments
+        for (size_t noteIdx : detected[i].noteIndices)
+            noteGroupAssignments.emplace_back(noteIdx, groupId);
+    }
+
+    // Tag notes with their chord group IDs (undoable)
+    if (!noteGroupAssignments.empty()) {
+        auto groupCmd = std::make_unique<magda::SetNoteChordGroupsCommand>(
+            editingClipId_, std::move(noteGroupAssignments));
+        magda::UndoManager::getInstance().executeCommand(std::move(groupCmd));
+    }
+
+    repaint();
 }
 
 void PianoRollContent::drawVelocityHeader(juce::Graphics& g, juce::Rectangle<int> area) {

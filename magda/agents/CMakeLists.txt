@@ -8,11 +8,30 @@ set(AGENTS_SOURCES
     agent_manager.cpp
     simple_agent.hpp
     simple_agent.cpp
-    openai_client.hpp
-    openai_client.cpp
-    dsl_grammar.hpp
+dsl_grammar.hpp
     dsl_interpreter.hpp
     dsl_interpreter.cpp
+    music_helpers.hpp
+    compact_parser.hpp
+    compact_parser.cpp
+    compact_executor.hpp
+    compact_executor.cpp
+    llm_config_utils.hpp
+    llm_presets.hpp
+    llm_presets.cpp
+    command_agent.hpp
+    command_agent.cpp
+    music_agent.hpp
+    music_agent.cpp
+    router_agent.hpp
+    router_agent.cpp
+    llama_model_manager.hpp
+    llama_model_manager.cpp
+    llama_local_client.hpp
+    llama_local_client.cpp
+    llm_client_factory.hpp
+    model_downloader.hpp
+    model_downloader.cpp
     daw_agent.hpp
     daw_agent.cpp
 )
@@ -26,6 +45,8 @@ target_link_libraries(magda_agents
     magda_daw
     PRIVATE
     Threads::Threads
+    llama
+    ggml
 )
 
 # Include directories

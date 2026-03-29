@@ -87,6 +87,8 @@ class TracktionEngineWrapper : public AudioEngine,
     // Metronome/click track control
     void setMetronomeEnabled(bool enabled) override;
     bool isMetronomeEnabled() const override;
+    void setCountInMode(int mode) override;
+    int getCountInMode() const override;
 
     // Device management
     juce::AudioDeviceManager* getDeviceManager() override;
@@ -412,6 +414,7 @@ class TracktionEngineWrapper : public AudioEngine,
 
     // Device change tracking
     int lastKnownDeviceCount_ = 0;
+    juce::String lastKnownAudioDeviceName_;
 
     // Helper methods
     tracktion::Track* findTrackById(const std::string& track_id) const;
@@ -434,6 +437,7 @@ class TracktionEngineWrapper : public AudioEngine,
 
     // Track recording start time per track (populated in recordingAboutToStart)
     std::unordered_map<int, double> recordingStartTimes_;
+    double intendedRecordPosition_ = 0.0;  // Position before count-in offset
 
     // Real-time MIDI recording preview (outside ClipManager)
     RecordingNoteQueue recordingNoteQueue_;

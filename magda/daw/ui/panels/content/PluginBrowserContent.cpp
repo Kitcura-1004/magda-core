@@ -6,6 +6,7 @@
 #include "../../themes/SmallComboBoxLookAndFeel.hpp"
 #include "audio/DrumGridPlugin.hpp"
 #include "audio/MagdaSamplerPlugin.hpp"
+#include "audio/MidiChordEnginePlugin.hpp"
 #include "core/DeviceInfo.hpp"
 #include "core/PluginAlias.hpp"
 #include "core/TrackManager.hpp"
@@ -310,29 +311,35 @@ void PluginBrowserContent::onDeactivated() {
     // Could save state here
 }
 
-void PluginBrowserContent::buildInternalPluginList() {
-    // Add built-in MAGDA/Tracktion plugins
-    plugins_.push_back(PluginBrowserInfo::createInternal("Test Tone", "tone", false));
-    plugins_.push_back(PluginBrowserInfo::createInternal("4OSC Synth", "4osc", true));
-    plugins_.push_back(PluginBrowserInfo::createInternal(
-        audio::MagdaSamplerPlugin::getPluginName(), audio::MagdaSamplerPlugin::xmlTypeName, true));
-    plugins_.push_back(PluginBrowserInfo::createInternal(audio::DrumGridPlugin::getPluginName(),
-                                                         audio::DrumGridPlugin::xmlTypeName, true));
-
-    // Built-in FX (TE plugins)
-    plugins_.push_back(PluginBrowserInfo::createInternal("Equaliser", "eq", false, "EQ"));
-    plugins_.push_back(
+std::vector<PluginBrowserInfo> PluginBrowserContent::getInternalPlugins() {
+    std::vector<PluginBrowserInfo> list;
+    list.push_back(PluginBrowserInfo::createInternal("Test Tone", "tone", false));
+    list.push_back(PluginBrowserInfo::createInternal("4OSC Synth", "4osc", true));
+    list.push_back(PluginBrowserInfo::createInternal(audio::MagdaSamplerPlugin::getPluginName(),
+                                                     audio::MagdaSamplerPlugin::xmlTypeName, true));
+    list.push_back(PluginBrowserInfo::createInternal(audio::DrumGridPlugin::getPluginName(),
+                                                     audio::DrumGridPlugin::xmlTypeName, true));
+    list.push_back(PluginBrowserInfo::createInternal(audio::MidiChordEnginePlugin::getPluginName(),
+                                                     audio::MidiChordEnginePlugin::xmlTypeName,
+                                                     false, "MIDI"));
+    list.push_back(PluginBrowserInfo::createInternal("Equaliser", "eq", false, "EQ"));
+    list.push_back(
         PluginBrowserInfo::createInternal("Compressor", "compressor", false, "Dynamics"));
-    plugins_.push_back(PluginBrowserInfo::createInternal("Reverb", "reverb", false, "Reverb"));
-    plugins_.push_back(PluginBrowserInfo::createInternal("Delay", "delay", false, "Delay"));
-    plugins_.push_back(PluginBrowserInfo::createInternal("Chorus", "chorus", false, "Modulation"));
-    plugins_.push_back(PluginBrowserInfo::createInternal("Phaser", "phaser", false, "Modulation"));
-    plugins_.push_back(PluginBrowserInfo::createInternal("Filter", "lowpass", false, "Filter"));
-    plugins_.push_back(
-        PluginBrowserInfo::createInternal("Pitch Shift", "pitchshift", false, "Pitch"));
-    plugins_.push_back(
+    list.push_back(PluginBrowserInfo::createInternal("Reverb", "reverb", false, "Reverb"));
+    list.push_back(PluginBrowserInfo::createInternal("Delay", "delay", false, "Delay"));
+    list.push_back(PluginBrowserInfo::createInternal("Chorus", "chorus", false, "Modulation"));
+    list.push_back(PluginBrowserInfo::createInternal("Phaser", "phaser", false, "Modulation"));
+    list.push_back(PluginBrowserInfo::createInternal("Filter", "lowpass", false, "Filter"));
+    list.push_back(PluginBrowserInfo::createInternal("Pitch Shift", "pitchshift", false, "Pitch"));
+    list.push_back(
         PluginBrowserInfo::createInternal("IR Reverb", "impulseresponse", false, "Reverb"));
-    plugins_.push_back(PluginBrowserInfo::createInternal("Utility", "utility", false, "Utility"));
+    list.push_back(PluginBrowserInfo::createInternal("Utility", "utility", false, "Utility"));
+    return list;
+}
+
+void PluginBrowserContent::buildInternalPluginList() {
+    auto internals = getInternalPlugins();
+    plugins_.insert(plugins_.end(), internals.begin(), internals.end());
 }
 
 void PluginBrowserContent::loadExternalPlugins() {
@@ -528,6 +535,12 @@ void PluginBrowserContent::showPluginContextMenu(const PluginBrowserInfo& plugin
                 device.pluginId = plugin.uniqueId.isEmpty() ? (plugin.name + "_" + plugin.format)
                                                             : plugin.uniqueId;
                 device.isInstrument = (plugin.category == "Instrument");
+                if (plugin.subcategory == "MIDI")
+                    device.deviceType = magda::DeviceType::MIDI;
+                else if (device.isInstrument)
+                    device.deviceType = magda::DeviceType::Instrument;
+                else
+                    device.deviceType = magda::DeviceType::Effect;
                 // External plugin identification
                 device.uniqueId = plugin.uniqueId;
                 device.fileOrIdentifier = plugin.fileOrIdentifier;

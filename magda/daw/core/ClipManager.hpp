@@ -232,6 +232,10 @@ class ClipManager {
     void setLeftChannelActive(ClipId clipId, bool active);
     void setRightChannelActive(ClipId clipId, bool active);
 
+    // Groove/Shuffle/Swing (MIDI clips)
+    void setGrooveTemplate(ClipId clipId, const juce::String& templateName);
+    void setGrooveStrength(ClipId clipId, float strength);
+
     // Per-clip grid settings (MIDI editor)
     void setClipGridSettings(ClipId clipId, bool autoGrid, int numerator, int denominator);
     void setClipSnapEnabled(ClipId clipId, bool enabled);
@@ -288,6 +292,11 @@ class ClipManager {
     void addMidiNote(ClipId clipId, const MidiNote& note);
     void removeMidiNote(ClipId clipId, int noteIndex);
     void clearMidiNotes(ClipId clipId);
+
+    // Chord annotations
+    void addChordAnnotation(ClipId clipId, const ClipInfo::ChordAnnotation& annotation);
+    void removeChordAnnotation(ClipId clipId, size_t index);
+    void clearChordAnnotations(ClipId clipId);
 
     // ========================================================================
     // Access

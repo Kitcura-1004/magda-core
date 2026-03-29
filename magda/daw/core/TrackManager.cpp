@@ -39,6 +39,13 @@ DeviceInfo TrackManager::deviceInfoFromPluginObject(const juce::DynamicObject& p
                                             : pluginObj.getProperty("name").toString() + "_" +
                                                   pluginObj.getProperty("format").toString();
     device.isInstrument = static_cast<bool>(pluginObj.getProperty("isInstrument"));
+    if (pluginObj.hasProperty("deviceType"))
+        device.deviceType =
+            static_cast<DeviceType>(static_cast<int>(pluginObj.getProperty("deviceType")));
+    else if (pluginObj.getProperty("subcategory").toString() == "MIDI")
+        device.deviceType = DeviceType::MIDI;
+    else
+        device.deviceType = device.isInstrument ? DeviceType::Instrument : DeviceType::Effect;
     device.uniqueId = pluginObj.getProperty("uniqueId").toString();
     device.fileOrIdentifier = pluginObj.getProperty("fileOrIdentifier").toString();
 
@@ -903,7 +910,8 @@ void TrackManager::moveNode(TrackId trackId, int fromIndex, int toIndex) {
 
 DeviceId TrackManager::addDeviceToTrack(TrackId trackId, const DeviceInfo& device) {
     if (auto* track = getTrack(trackId)) {
-        if ((track->type == TrackType::Aux || track->type == TrackType::Group) &&
+        if ((track->type == TrackType::Aux || track->type == TrackType::Group ||
+             track->type == TrackType::Master) &&
             device.isInstrument) {
             DBG("Cannot add instrument plugin to non-instrument track");
             return INVALID_DEVICE_ID;
@@ -922,7 +930,8 @@ DeviceId TrackManager::addDeviceToTrack(TrackId trackId, const DeviceInfo& devic
 DeviceId TrackManager::addDeviceToTrack(TrackId trackId, const DeviceInfo& device,
                                         int insertIndex) {
     if (auto* track = getTrack(trackId)) {
-        if ((track->type == TrackType::Aux || track->type == TrackType::Group) &&
+        if ((track->type == TrackType::Aux || track->type == TrackType::Group ||
+             track->type == TrackType::Master) &&
             device.isInstrument) {
             DBG("Cannot add instrument plugin to non-instrument track");
             return INVALID_DEVICE_ID;

@@ -14,7 +14,7 @@ namespace magda {
  *
  * Supports different value formats: dB, pan (L/C/R), percentage, etc.
  */
-class DraggableValueLabel : public juce::Component {
+class DraggableValueLabel : public juce::Component, public juce::SettableTooltipClient {
   public:
     enum class Format {
         Decibels,    // -60.0 dB to +6.0 dB, shows "-inf" at minimum
@@ -109,6 +109,11 @@ class DraggableValueLabel : public juce::Component {
         repaint();
     }
 
+    void setJustification(juce::Justification j) {
+        justification_ = j;
+        repaint();
+    }
+
     // Whether to draw the border
     void setDrawBorder(bool draw) {
         drawBorder_ = draw;
@@ -161,6 +166,7 @@ class DraggableValueLabel : public juce::Component {
     bool drawBackground_ = true;
     bool drawBorder_ = true;
     float fontSize_ = 10.0f;
+    juce::Justification justification_ = juce::Justification::centred;
     juce::String textOverride_;
 
   public:

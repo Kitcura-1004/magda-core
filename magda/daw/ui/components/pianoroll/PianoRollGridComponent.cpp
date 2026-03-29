@@ -202,6 +202,36 @@ void PianoRollGridComponent::paint(juce::Graphics& g) {
                                static_cast<float>(gw), static_cast<float>(gh), 2.0f, 1.0f);
     }
 
+    // Draw chord drop preview (vertical line during DnD drag)
+    if (chordDropActive_) {
+        int lineX = beatToPixel(chordDropBeat_);
+        g.setColour(juce::Colour(0xFF5599FF).withAlpha(0.8f));
+        g.drawLine(float(lineX), 0.f, float(lineX), float(bounds.getHeight()), 2.0f);
+    }
+
+    // Draw pending chord placement preview (after drop, awaiting length confirmation)
+    if (pendingChord_.active) {
+        int startX = beatToPixel(pendingChord_.startBeat);
+        int endX = beatToPixel(pendingChord_.previewEndBeat);
+
+        // Draw the span region
+        if (endX > startX) {
+            g.setColour(juce::Colour(0xFF5599FF).withAlpha(0.12f));
+            g.fillRect(startX, 0, endX - startX, bounds.getHeight());
+        }
+
+        // Draw blinking start line
+        float alpha = pendingChord_.blinkOn ? 0.9f : 0.3f;
+        g.setColour(juce::Colour(0xFF5599FF).withAlpha(alpha));
+        g.drawLine(float(startX), 0.f, float(startX), float(bounds.getHeight()), 2.0f);
+
+        // Draw end line at mouse position
+        if (endX > startX + 2) {
+            g.setColour(juce::Colour(0xFF5599FF).withAlpha(0.5f));
+            g.drawLine(float(endX), 0.f, float(endX), float(bounds.getHeight()), 1.0f);
+        }
+    }
+
     // Draw edit cursor line (blinking white)
     if (editCursorPosition_ >= 0.0 && editCursorVisible_) {
         double tempo = 120.0;
@@ -366,6 +396,23 @@ void PianoRollGridComponent::resized() {
 }
 
 void PianoRollGridComponent::mouseDown(const juce::MouseEvent& e) {
+    // If pending chord is active, click confirms the length
+    if (pendingChord_.active) {
+        if (e.mods.isPopupMenu()) {
+            cancelPendingChord();
+            return;
+        }
+        double beat = pixelToBeat(e.x);
+        if (snapEnabled_)
+            beat = snapBeatToGrid(beat);
+        // Only accept clicks to the right of the start position
+        if (beat > pendingChord_.startBeat)
+            confirmPendingChord(beat);
+        else
+            cancelPendingChord();
+        return;
+    }
+
     isEditCursorClick_ = false;
 
     // Right-click context menu
@@ -389,32 +436,81 @@ void PianoRollGridComponent::mouseDown(const juce::MouseEvent& e) {
             menu.addItem(13, "Delete", hasSelection);
             menu.addSeparator();
 
-            // Quantize operations
-            menu.addItem(1, "Quantize Start to Grid", hasSelection);
-            menu.addItem(2, "Quantize Length to Grid", hasSelection);
-            menu.addItem(3, "Quantize Start & Length to Grid", hasSelection);
+            // Quantize submenu
+            {
+                juce::PopupMenu quantizeMenu;
 
-            menu.showMenuAsync(juce::PopupMenu::Options(),
-                               [this, indices = std::move(selectedIndices)](int result) {
-                                   if (result == 0)
-                                       return;
-                                   if (result == 10 && onCopyNotes)
-                                       onCopyNotes(clipId_, indices);
-                                   else if (result == 11 && onPasteNotes)
-                                       onPasteNotes(clipId_);
-                                   else if (result == 12 && onDuplicateNotes)
-                                       onDuplicateNotes(clipId_, indices);
-                                   else if (result == 13 && onDeleteNotes)
-                                       onDeleteNotes(clipId_, indices);
-                                   else if (result >= 1 && result <= 3 && onQuantizeNotes) {
-                                       QuantizeMode mode = QuantizeMode::StartOnly;
-                                       if (result == 2)
-                                           mode = QuantizeMode::LengthOnly;
-                                       else if (result == 3)
-                                           mode = QuantizeMode::StartAndLength;
-                                       onQuantizeNotes(clipId_, indices, mode);
-                                   }
-                               });
+                // Current Grid (IDs 1-3)
+                {
+                    juce::PopupMenu modeMenu;
+                    modeMenu.addItem(1, "Start");
+                    modeMenu.addItem(2, "Length");
+                    modeMenu.addItem(3, "Start & Length");
+                    quantizeMenu.addSubMenu("Current Grid", modeMenu,
+                                            hasSelection && gridResolutionBeats_ > 0.0);
+                }
+                quantizeMenu.addSeparator();
+
+                // Fixed grid values
+                struct GridOption {
+                    const char* name;
+                    double beats;
+                };
+                // clang-format off
+                const GridOption grids[] = {
+                    {"1/1",   4.0},    {"1/2",   2.0},    {"1/4",   1.0},
+                    {"1/8",   0.5},    {"1/16",  0.25},   {"1/32",  0.125},
+                    {"1/2.",  3.0},    {"1/4.",  1.5},
+                    {"1/8.",  0.75},   {"1/16.", 0.375},
+                    {"1/2T",  4.0/3},  {"1/4T",  2.0/3},
+                    {"1/8T",  1.0/3},  {"1/16T", 1.0/6},
+                };
+                // clang-format on
+
+                int itemId = 20;  // IDs 20-61 (14 grids x 3 modes)
+                for (const auto& grid : grids) {
+                    juce::PopupMenu modeMenu;
+                    modeMenu.addItem(itemId++, "Start");
+                    modeMenu.addItem(itemId++, "Length");
+                    modeMenu.addItem(itemId++, "Start & Length");
+                    quantizeMenu.addSubMenu(grid.name, modeMenu, hasSelection);
+                }
+                menu.addSubMenu("Quantize", quantizeMenu, hasSelection);
+            }
+
+            menu.showMenuAsync(juce::PopupMenu::Options(), [this,
+                                                            indices = std::move(selectedIndices),
+                                                            gridRes =
+                                                                gridResolutionBeats_](int result) {
+                if (result == 0)
+                    return;
+                if (result == 10 && onCopyNotes)
+                    onCopyNotes(clipId_, indices);
+                else if (result == 11 && onPasteNotes)
+                    onPasteNotes(clipId_);
+                else if (result == 12 && onDuplicateNotes)
+                    onDuplicateNotes(clipId_, indices);
+                else if (result == 13 && onDeleteNotes)
+                    onDeleteNotes(clipId_, indices);
+                else if (result >= 1 && result <= 3 && onQuantizeNotes) {
+                    // Current Grid
+                    const QuantizeMode modes[] = {QuantizeMode::StartOnly, QuantizeMode::LengthOnly,
+                                                  QuantizeMode::StartAndLength};
+                    onQuantizeNotes(clipId_, indices, modes[result - 1], gridRes);
+                } else if (result >= 20 && result <= 61 && onQuantizeNotes) {
+                    // clang-format off
+                        const double gridBeats[] = {
+                            4.0, 2.0, 1.0, 0.5, 0.25, 0.125,
+                            3.0, 1.5, 0.75, 0.375,
+                            4.0/3, 2.0/3, 1.0/3, 1.0/6,
+                        };
+                    // clang-format on
+                    const QuantizeMode modes[] = {QuantizeMode::StartOnly, QuantizeMode::LengthOnly,
+                                                  QuantizeMode::StartAndLength};
+                    int offset = result - 20;
+                    onQuantizeNotes(clipId_, indices, modes[offset % 3], gridBeats[offset / 3]);
+                }
+            });
         }
         return;
     }
@@ -518,6 +614,20 @@ void PianoRollGridComponent::mouseUp(const juce::MouseEvent& e) {
 }
 
 void PianoRollGridComponent::mouseMove(const juce::MouseEvent& e) {
+    // Update pending chord preview end position
+    if (pendingChord_.active) {
+        auto localPos = e.getEventRelativeTo(this).getPosition();
+        double beat = pixelToBeat(localPos.x);
+        if (snapEnabled_)
+            beat = snapBeatToGrid(beat);
+        if (beat > pendingChord_.startBeat)
+            pendingChord_.previewEndBeat = beat;
+        else
+            pendingChord_.previewEndBeat = pendingChord_.startBeat + gridResolutionBeats_;
+        repaint();
+        return;
+    }
+
     // Get mouse position relative to this component (important for child-forwarded events)
     auto localPos = e.getEventRelativeTo(this).getPosition();
 
@@ -658,6 +768,18 @@ void PianoRollGridComponent::mouseDoubleClick(const juce::MouseEvent& e) {
 }
 
 bool PianoRollGridComponent::keyPressed(const juce::KeyPress& key) {
+    // Handle pending chord confirmation/cancellation
+    if (pendingChord_.active) {
+        if (key.getKeyCode() == juce::KeyPress::returnKey) {
+            confirmPendingChord(pendingChord_.previewEndBeat);
+            return true;
+        }
+        if (key.getKeyCode() == juce::KeyPress::escapeKey) {
+            cancelPendingChord();
+            return true;
+        }
+    }
+
     // M5: Cmd+A — Select all notes
     if (key.getModifiers().isCommandDown() && key.getKeyCode() == 'A') {
         if (clipId_ == INVALID_CLIP_ID)
@@ -1484,13 +1606,48 @@ void PianoRollGridComponent::createNoteComponents() {
                 menu.addItem(12, "Duplicate", hasSelection);
                 menu.addItem(13, "Delete", hasSelection);
                 menu.addSeparator();
-                menu.addItem(1, "Quantize Start to Grid", hasSelection);
-                menu.addItem(2, "Quantize Length to Grid", hasSelection);
-                menu.addItem(3, "Quantize Start & Length to Grid", hasSelection);
+
+                // Quantize submenu
+                {
+                    juce::PopupMenu quantizeMenu;
+                    {
+                        juce::PopupMenu modeMenu;
+                        modeMenu.addItem(1, "Start");
+                        modeMenu.addItem(2, "Length");
+                        modeMenu.addItem(3, "Start & Length");
+                        quantizeMenu.addSubMenu("Current Grid", modeMenu,
+                                                hasSelection && gridResolutionBeats_ > 0.0);
+                    }
+                    quantizeMenu.addSeparator();
+
+                    struct GridOption {
+                        const char* name;
+                        double beats;
+                    };
+                    // clang-format off
+                    const GridOption grids[] = {
+                        {"1/1",   4.0},    {"1/2",   2.0},    {"1/4",   1.0},
+                        {"1/8",   0.5},    {"1/16",  0.25},   {"1/32",  0.125},
+                        {"1/2.",  3.0},    {"1/4.",  1.5},
+                        {"1/8.",  0.75},   {"1/16.", 0.375},
+                        {"1/2T",  4.0/3},  {"1/4T",  2.0/3},
+                        {"1/8T",  1.0/3},  {"1/16T", 1.0/6},
+                    };
+                    // clang-format on
+                    int itemId = 20;
+                    for (const auto& grid : grids) {
+                        juce::PopupMenu modeMenu;
+                        modeMenu.addItem(itemId++, "Start");
+                        modeMenu.addItem(itemId++, "Length");
+                        modeMenu.addItem(itemId++, "Start & Length");
+                        quantizeMenu.addSubMenu(grid.name, modeMenu, hasSelection);
+                    }
+                    menu.addSubMenu("Quantize", quantizeMenu, hasSelection);
+                }
 
                 menu.showMenuAsync(
-                    juce::PopupMenu::Options(),
-                    [this, clipId, indices = std::move(selectedIndices)](int result) {
+                    juce::PopupMenu::Options(), [this, clipId, indices = std::move(selectedIndices),
+                                                 gridRes = gridResolutionBeats_](int result) {
                         if (result == 0)
                             return;
                         if (result == 10 && onCopyNotes)
@@ -1502,12 +1659,24 @@ void PianoRollGridComponent::createNoteComponents() {
                         else if (result == 13 && onDeleteNotes)
                             onDeleteNotes(clipId, indices);
                         else if (result >= 1 && result <= 3 && onQuantizeNotes) {
-                            QuantizeMode mode = QuantizeMode::StartOnly;
-                            if (result == 2)
-                                mode = QuantizeMode::LengthOnly;
-                            else if (result == 3)
-                                mode = QuantizeMode::StartAndLength;
-                            onQuantizeNotes(clipId, indices, mode);
+                            const QuantizeMode modes[] = {QuantizeMode::StartOnly,
+                                                          QuantizeMode::LengthOnly,
+                                                          QuantizeMode::StartAndLength};
+                            onQuantizeNotes(clipId, indices, modes[result - 1], gridRes);
+                        } else if (result >= 20 && result <= 61 && onQuantizeNotes) {
+                            // clang-format off
+                            const double gridBeats[] = {
+                                4.0, 2.0, 1.0, 0.5, 0.25, 0.125,
+                                3.0, 1.5, 0.75, 0.375,
+                                4.0/3, 2.0/3, 1.0/3, 1.0/6,
+                            };
+                            // clang-format on
+                            const QuantizeMode modes[] = {QuantizeMode::StartOnly,
+                                                          QuantizeMode::LengthOnly,
+                                                          QuantizeMode::StartAndLength};
+                            int offset = result - 20;
+                            onQuantizeNotes(clipId, indices, modes[offset % 3],
+                                            gridBeats[offset / 3]);
                         }
                     });
             };
@@ -1643,6 +1812,118 @@ void PianoRollGridComponent::setPlayheadPosition(double positionSeconds) {
 void PianoRollGridComponent::setEditCursorPosition(double positionSeconds, bool blinkVisible) {
     editCursorPosition_ = positionSeconds;
     editCursorVisible_ = blinkVisible;
+    repaint();
+}
+
+// ============================================================================
+// DragAndDropTarget — chord block drops
+// ============================================================================
+
+bool PianoRollGridComponent::isInterestedInDragSource(const SourceDetails& details) {
+    if (auto* obj = details.description.getDynamicObject())
+        return obj->getProperty("type").toString() == "chordBlock";
+    return false;
+}
+
+void PianoRollGridComponent::itemDragEnter(const SourceDetails& details) {
+    double beat = pixelToBeat(details.localPosition.x);
+    if (snapEnabled_)
+        beat = snapBeatToGrid(beat);
+    chordDropActive_ = true;
+    chordDropBeat_ = beat;
+    repaint();
+}
+
+void PianoRollGridComponent::itemDragMove(const SourceDetails& details) {
+    double beat = pixelToBeat(details.localPosition.x);
+    if (snapEnabled_)
+        beat = snapBeatToGrid(beat);
+    chordDropBeat_ = beat;
+    repaint();
+}
+
+void PianoRollGridComponent::itemDragExit(const SourceDetails& /*details*/) {
+    chordDropActive_ = false;
+    repaint();
+}
+
+void PianoRollGridComponent::itemDropped(const SourceDetails& details) {
+    chordDropActive_ = false;
+
+    auto* obj = details.description.getDynamicObject();
+    if (!obj)
+        return;
+
+    if (clipId_ == INVALID_CLIP_ID && selectedClipIds_.empty())
+        return;
+
+    double dropBeat = pixelToBeat(details.localPosition.x);
+    if (snapEnabled_)
+        dropBeat = snapBeatToGrid(dropBeat);
+
+    // Extract notes from drag data
+    auto* notesVar = obj->getProperties().getVarPointer("notes");
+    if (!notesVar || !notesVar->isArray())
+        return;
+
+    std::vector<std::pair<int, int>> notes;
+    for (int i = 0; i < notesVar->size(); ++i) {
+        auto& pair = (*notesVar)[i];
+        if (pair.isArray() && pair.size() >= 2)
+            notes.emplace_back(static_cast<int>(pair[0]), static_cast<int>(pair[1]));
+    }
+
+    if (notes.empty())
+        return;
+
+    juce::String chordName = obj->getProperty("chordName").toString();
+
+    ClipId targetClipId = clipId_;
+    if (targetClipId == INVALID_CLIP_ID && !selectedClipIds_.empty())
+        targetClipId = selectedClipIds_.front();
+
+    // Enter pending chord state — user must click to set length or press Enter for default
+    pendingChord_.clipId = targetClipId;
+    pendingChord_.startBeat = dropBeat;
+    pendingChord_.previewEndBeat = dropBeat + gridResolutionBeats_;  // Default length preview
+    pendingChord_.notes = std::move(notes);
+    pendingChord_.chordName = chordName;
+    pendingChord_.active = true;
+    pendingChord_.blinkOn = true;
+
+    grabKeyboardFocus();
+    startTimerHz(3);  // Blink at ~3Hz
+    repaint();
+}
+
+void PianoRollGridComponent::timerCallback() {
+    if (!pendingChord_.active) {
+        stopTimer();
+        return;
+    }
+    pendingChord_.blinkOn = !pendingChord_.blinkOn;
+    repaint();
+}
+
+void PianoRollGridComponent::confirmPendingChord(double endBeat) {
+    if (!pendingChord_.active)
+        return;
+
+    double length = endBeat - pendingChord_.startBeat;
+    if (length < gridResolutionBeats_)
+        length = gridResolutionBeats_;
+
+    if (onChordDropped)
+        onChordDropped(pendingChord_.clipId, pendingChord_.startBeat, length,
+                       std::move(pendingChord_.notes), pendingChord_.chordName);
+
+    cancelPendingChord();
+}
+
+void PianoRollGridComponent::cancelPendingChord() {
+    pendingChord_.active = false;
+    pendingChord_.notes.clear();
+    stopTimer();
     repaint();
 }
 

@@ -35,6 +35,7 @@ class PianoRollContent : public MidiEditorContent, public magda::SelectionManage
     }
 
     void paint(juce::Graphics& g) override;
+    void paintOverChildren(juce::Graphics& g) override;
     void resized() override;
     void mouseWheelMove(const juce::MouseEvent& e, const juce::MouseWheelDetails& wheel) override;
 
@@ -103,6 +104,7 @@ class PianoRollContent : public MidiEditorContent, public magda::SelectionManage
 
     // Chord row visibility
     bool showChordRow_ = false;
+    bool isSyncingChords_ = false;  // Re-entry guard for syncChordAnnotations
 
     // Initial centering flag
     bool needsInitialCentering_ = true;
@@ -111,6 +113,7 @@ class PianoRollContent : public MidiEditorContent, public magda::SelectionManage
     std::unique_ptr<magda::PianoRollGridComponent> gridComponent_;
     std::unique_ptr<magda::PianoRollKeyboard> keyboard_;
     std::unique_ptr<magda::SvgButton> chordToggle_;
+    std::unique_ptr<magda::SvgButton> chordDetectBtn_;
     std::unique_ptr<magda::SvgButton> velocityToggle_;
 
     // Grid component management
@@ -118,6 +121,8 @@ class PianoRollContent : public MidiEditorContent, public magda::SelectionManage
     void drawSidebar(juce::Graphics& g, juce::Rectangle<int> area);
     void drawChordRow(juce::Graphics& g, juce::Rectangle<int> area);
     void drawVelocityHeader(juce::Graphics& g, juce::Rectangle<int> area);
+    void detectChordsFromNotes();
+    void syncChordAnnotations(magda::ClipId clipId);
 
     // Helper to get current header height based on chord row visibility
     int getHeaderHeight() const {

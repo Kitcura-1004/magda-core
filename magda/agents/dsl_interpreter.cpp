@@ -4,8 +4,11 @@
 #include <cctype>
 #include <cmath>
 #include <cstdlib>
+#include <random>
 
+#include "../daw/audio/AudioThumbnailManager.hpp"
 #include "../daw/core/ClipManager.hpp"
+#include "../daw/core/ClipPropertyCommands.hpp"
 #include "../daw/core/DeviceInfo.hpp"
 #include "../daw/core/MidiNoteCommands.hpp"
 #include "../daw/core/PluginAlias.hpp"
@@ -14,6 +17,7 @@
 #include "../daw/core/UndoManager.hpp"
 #include "../daw/engine/AudioEngine.hpp"
 #include "../daw/engine/TracktionEngineWrapper.hpp"
+#include "music_helpers.hpp"
 
 namespace magda::dsl {
 
@@ -390,6 +394,8 @@ bool Interpreter::parseStatement(Tokenizer& tok) {
         return parseTrackStatement(tok);
     else if (t.is("filter"))
         return parseFilterStatement(tok);
+    else if (t.is("groove"))
+        return parseGrooveStatement(tok);
     else if (t.type == TokenType::END_OF_INPUT) {
         return true;
     } else {
@@ -666,13 +672,75 @@ bool Interpreter::parseParams(Tokenizer& tok, Params& outParams) {
 bool Interpreter::parseValue(Tokenizer& tok, std::string& outValue) {
     Token t = tok.next();
 
-    if (t.type == TokenType::STRING || t.type == TokenType::NUMBER ||
-        t.type == TokenType::IDENTIFIER) {
+    if (t.type == TokenType::STRING || t.type == TokenType::NUMBER) {
+        outValue = t.value;
+        return true;
+    }
+
+    if (t.type == TokenType::IDENTIFIER) {
+        // Check for function call: identifier(args...)
+        if (tok.peek().is(TokenType::LPAREN)) {
+            tok.next();  // consume '('
+            return evaluateFunction(t.value, tok, outValue);
+        }
         outValue = t.value;
         return true;
     }
 
     ctx_.setError("Expected value, got '" + juce::String(t.value) + "'");
+    return false;
+}
+
+// ============================================================================
+// Built-in Functions
+// ============================================================================
+
+bool Interpreter::evaluateFunction(const std::string& name, Tokenizer& tok, std::string& outValue) {
+    // Parse arguments as comma-separated values
+    std::vector<std::string> args;
+    if (!tok.peek().is(TokenType::RPAREN)) {
+        while (true) {
+            std::string arg;
+            if (!parseValue(tok, arg))
+                return false;
+            args.push_back(arg);
+            if (tok.peek().is(TokenType::COMMA))
+                tok.next();
+            else
+                break;
+        }
+    }
+    if (!tok.expect(TokenType::RPAREN)) {
+        ctx_.setError("Expected ')' after function arguments");
+        return false;
+    }
+
+    if (name == "random") {
+        if (args.size() != 2) {
+            ctx_.setError("random() requires 2 arguments: random(min, max)");
+            return false;
+        }
+        double lo = std::stod(args[0]);
+        double hi = std::stod(args[1]);
+        if (lo > hi)
+            std::swap(lo, hi);
+
+        static thread_local std::mt19937 rng{std::random_device{}()};
+
+        // Integer range if both args are integers
+        bool isInt =
+            (args[0].find('.') == std::string::npos) && (args[1].find('.') == std::string::npos);
+        if (isInt) {
+            std::uniform_int_distribution<int> dist(static_cast<int>(lo), static_cast<int>(hi));
+            outValue = std::to_string(dist(rng));
+        } else {
+            std::uniform_real_distribution<double> dist(lo, hi);
+            outValue = std::to_string(dist(rng));
+        }
+        return true;
+    }
+
+    ctx_.setError("Unknown function: " + juce::String(name));
     return false;
 }
 
@@ -907,6 +975,10 @@ bool Interpreter::executeAddFx(const Params& params) {
 
     juce::String fxName(params.get("name"));
     juce::String formatHint(params.get("format"));
+
+    // Strip <alias> token wrapper — resolve at execution time
+    if (fxName.startsWith("<") && fxName.endsWith(">"))
+        fxName = fxName.substring(1, fxName.length() - 1);
 
     // --- Internal plugin lookup (case-insensitive alias map) ---
     static const std::map<juce::String, juce::String> internalAliases = {
@@ -1145,18 +1217,17 @@ bool Interpreter::executeSelectClips(Tokenizer& tok) {
         return false;
     }
 
-    Token value = tok.next();
-    if (value.type != TokenType::NUMBER && value.type != TokenType::STRING) {
-        ctx_.setError("Expected value in clips.select condition");
+    std::string valueStr;
+    if (!parseValue(tok, valueStr))
         return false;
-    }
 
     if (!tok.expect(TokenType::RPAREN)) {
         ctx_.setError("Expected ')' after clips.select condition");
         return false;
     }
 
-    double numValue = std::atof(value.value.c_str());
+    // Determine if this is a string or numeric field
+    bool isStringField = (field.value == "name" || field.value == "type");
 
     // Get tempo for bar/time conversions
     double bpm = 120.0;
@@ -1165,8 +1236,10 @@ bool Interpreter::executeSelectClips(Tokenizer& tok) {
         bpm = engine->getTempo();
     double secondsPerBar = 4.0 * 60.0 / bpm;
 
-    // Comparator lambda
-    auto compare = [&](double clipVal) -> bool {
+    double numValue = isStringField ? 0.0 : std::atof(valueStr.c_str());
+
+    // Numeric comparator
+    auto compareNum = [&](double clipVal) -> bool {
         if (op.type == TokenType::EQUALS_EQUALS)
             return std::abs(clipVal - numValue) < 0.001;
         if (op.type == TokenType::NOT_EQUALS)
@@ -1182,7 +1255,50 @@ bool Interpreter::executeSelectClips(Tokenizer& tok) {
         return false;
     };
 
+    // String comparator (== and != only, case-insensitive contains for ==)
+    auto compareStr = [&](const juce::String& clipStr) -> bool {
+        if (op.type == TokenType::EQUALS_EQUALS)
+            return clipStr.equalsIgnoreCase(juce::String(valueStr));
+        if (op.type == TokenType::NOT_EQUALS)
+            return !clipStr.equalsIgnoreCase(juce::String(valueStr));
+        return false;
+    };
+
     auto& cm = ClipManager::getInstance();
+
+    // Resolve a clip field to either a numeric or string match
+    auto matchClip = [&](const ClipInfo* clip) -> bool {
+        if (isStringField) {
+            juce::String strVal;
+            if (field.value == "name")
+                strVal = clip->name;
+            else if (field.value == "type")
+                strVal = (clip->type == ClipType::Audio) ? "audio" : "midi";
+            return compareStr(strVal);
+        }
+
+        // Numeric fields
+        double val = 0.0;
+        if (field.value == "length_bars")
+            val = clip->length / secondsPerBar;
+        else if (field.value == "start_bar")
+            val = (clip->startTime / secondsPerBar) + 1.0;
+        else if (field.value == "length")
+            val = clip->length;
+        else if (field.value == "start")
+            val = clip->startTime;
+        else if (field.value == "start_beats")
+            val = clip->startBeats;
+        else if (field.value == "id")
+            val = static_cast<double>(clip->id);
+        else if (field.value == "track_id")
+            val = static_cast<double>(clip->trackId);
+        else {
+            ctx_.setError("Unknown clip field: " + juce::String(field.value));
+            return false;
+        }
+        return compareNum(val);
+    };
 
     auto matchOnTrack = [&](int trackId) {
         auto clipIds = cm.getClipsOnTrack(trackId);
@@ -1192,22 +1308,7 @@ bool Interpreter::executeSelectClips(Tokenizer& tok) {
             auto* clip = cm.getClip(clipId);
             if (!clip)
                 continue;
-
-            double clipVal = 0.0;
-            if (field.value == "length_bars")
-                clipVal = clip->length / secondsPerBar;
-            else if (field.value == "start_bar")
-                clipVal = (clip->startTime / secondsPerBar) + 1.0;
-            else if (field.value == "length")
-                clipVal = clip->length;
-            else if (field.value == "start")
-                clipVal = clip->startTime;
-            else {
-                ctx_.setError("Unknown clip field: " + juce::String(field.value));
-                return matched;  // empty
-            }
-
-            if (compare(clipVal))
+            if (matchClip(clip))
                 matched.insert(clipId);
         }
         return matched;
@@ -1347,68 +1448,7 @@ juce::String Interpreter::buildStateSnapshot() {
 // ============================================================================
 
 int Interpreter::parseNoteName(const std::string& name) {
-    // Parse note names like C4, C#4, Db3, Bb3 → MIDI number
-    // C4 = 60
-    if (name.empty())
-        return -1;
-
-    // If it's a plain number, return it directly
-    bool allDigits = true;
-    size_t start = (name[0] == '-') ? 1 : 0;
-    for (size_t i = start; i < name.size(); i++) {
-        if (!std::isdigit(static_cast<unsigned char>(name[i]))) {
-            allDigits = false;
-            break;
-        }
-    }
-    if (allDigits && !name.empty())
-        return std::atoi(name.c_str());
-
-    // Parse note letter
-    static const int noteOffsets[] = {
-        9, 11, 0, 2, 4, 5, 7  // A=9, B=11, C=0, D=2, E=4, F=5, G=7
-    };
-
-    char letter = static_cast<char>(std::toupper(static_cast<unsigned char>(name[0])));
-    if (letter < 'A' || letter > 'G')
-        return -1;
-
-    int semitone = noteOffsets[letter - 'A'];
-    size_t pos = 1;
-
-    // Check for sharp/flat
-    if (pos < name.size() && name[pos] == '#') {
-        semitone++;
-        pos++;
-    } else if (pos < name.size() && (name[pos] == 'b' || name[pos] == 'B')) {
-        // Distinguish 'b' (flat) from 'B' at start — here pos>0 so it's a modifier
-        // But watch for "Bb3" — first B is note, second b is flat
-        semitone--;
-        pos++;
-    }
-
-    // Parse octave number
-    if (pos >= name.size())
-        return -1;
-
-    bool negative = false;
-    if (name[pos] == '-') {
-        negative = true;
-        pos++;
-    }
-    if (pos >= name.size())
-        return -1;
-
-    int octave = 0;
-    while (pos < name.size() && std::isdigit(static_cast<unsigned char>(name[pos]))) {
-        octave = octave * 10 + (name[pos] - '0');
-        pos++;
-    }
-    if (negative)
-        octave = -octave;
-
-    // MIDI: C4 = 60, so octave 4 base = (4+1)*12 = 60, C offset = 0 → 60
-    return (octave + 1) * 12 + semitone;
+    return music::parseNoteName(name);
 }
 
 // ============================================================================
@@ -1628,98 +1668,21 @@ bool Interpreter::executeAddNote(const Params& params) {
 }
 
 bool Interpreter::resolveChordNotes(const Params& params, std::vector<int>& outNotes) {
-    // Parse root (required)
     if (!params.has("root")) {
         ctx_.setError("notes.add_chord requires 'root' parameter");
         return false;
     }
-    int rootNote = parseNoteName(params.get("root"));
-    if (rootNote < 0 || rootNote > 127) {
-        ctx_.setError("Invalid root note: " + juce::String(params.get("root")));
-        return false;
-    }
-
-    // Parse quality (required)
     if (!params.has("quality")) {
         ctx_.setError("notes.add_chord requires 'quality' parameter");
         return false;
     }
 
-    // Chord quality → semitone intervals
-    static const std::map<std::string, std::vector<int>> chordQualities = {
-        {"major", {0, 4, 7}},
-        {"maj", {0, 4, 7}},
-        {"minor", {0, 3, 7}},
-        {"min", {0, 3, 7}},
-        {"dim", {0, 3, 6}},
-        {"aug", {0, 4, 8}},
-        {"sus2", {0, 2, 7}},
-        {"sus4", {0, 5, 7}},
-        {"dom7", {0, 4, 7, 10}},
-        {"7", {0, 4, 7, 10}},
-        {"maj7", {0, 4, 7, 11}},
-        {"min7", {0, 3, 7, 10}},
-        {"dim7", {0, 3, 6, 9}},
-        // 9th chords
-        {"dom9", {0, 4, 7, 10, 14}},
-        {"9", {0, 4, 7, 10, 14}},
-        {"maj9", {0, 4, 7, 11, 14}},
-        {"min9", {0, 3, 7, 10, 14}},
-        // 11th chords
-        {"dom11", {0, 4, 7, 10, 14, 17}},
-        {"11", {0, 4, 7, 10, 14, 17}},
-        {"min11", {0, 3, 7, 10, 14, 17}},
-        {"maj11", {0, 4, 7, 11, 14, 17}},
-        // 13th chords
-        {"dom13", {0, 4, 7, 10, 14, 21}},
-        {"13", {0, 4, 7, 10, 14, 21}},
-        {"min13", {0, 3, 7, 10, 14, 21}},
-        {"maj13", {0, 4, 7, 11, 14, 21}},
-        // Add chords
-        {"add9", {0, 4, 7, 14}},
-        {"add11", {0, 4, 7, 17}},
-        {"add13", {0, 4, 7, 21}},
-        {"madd9", {0, 3, 7, 14}},
-        // 6th chords
-        {"6", {0, 4, 7, 9}},
-        {"maj6", {0, 4, 7, 9}},
-        {"min6", {0, 3, 7, 9}},
-        // Altered dominants
-        {"7b5", {0, 4, 6, 10}},
-        {"7sharp5", {0, 4, 8, 10}},
-        {"7b9", {0, 4, 7, 10, 13}},
-        {"7sharp9", {0, 4, 7, 10, 15}},
-        // Half-diminished
-        {"min7b5", {0, 3, 6, 10}},
-        {"half_dim", {0, 3, 6, 10}},
-        // Other
-        {"power", {0, 7}},
-        {"5", {0, 7}},
-    };
-
-    std::string quality = params.get("quality");
-    auto it = chordQualities.find(quality);
-    if (it == chordQualities.end()) {
-        ctx_.setError("Unknown chord quality: " + juce::String(quality));
+    juce::String error;
+    if (!music::resolveChordNotes(params.get("root"), params.get("quality"),
+                                  params.getInt("inversion", 0), outNotes, error)) {
+        ctx_.setError(error);
         return false;
     }
-
-    const auto& intervals = it->second;
-    int inversion = params.getInt("inversion", 0);
-
-    // Build MIDI note numbers from root + intervals
-    outNotes.clear();
-    for (int interval : intervals)
-        outNotes.push_back(rootNote + interval);
-
-    // Apply inversions: rotate the lowest N notes up an octave
-    for (int i = 0; i < inversion && i < static_cast<int>(outNotes.size()); i++)
-        outNotes[static_cast<size_t>(i)] += 12;
-
-    // Clamp to valid MIDI range
-    for (auto& n : outNotes)
-        n = juce::jlimit(0, 127, n);
-
     return true;
 }
 
@@ -2040,6 +2003,332 @@ bool Interpreter::executeResizeNotes(const Params& params) {
 
     ctx_.addResult("Resized " + juce::String(static_cast<int>(noteSel.noteIndices.size())) +
                    " note(s) to " + juce::String(length, 2) + " beats");
+    return true;
+}
+
+// ============================================================================
+// Groove Commands
+// ============================================================================
+
+bool Interpreter::parseGrooveStatement(Tokenizer& tok) {
+    tok.next();  // consume 'groove'
+
+    if (!tok.peek().is(TokenType::DOT)) {
+        ctx_.setError("Expected '.' after 'groove'");
+        return false;
+    }
+    tok.next();  // consume '.'
+
+    Token method = tok.next();
+    if (method.type != TokenType::IDENTIFIER) {
+        ctx_.setError("Expected method name after 'groove.'");
+        return false;
+    }
+
+    // groove.list() — no params
+    if (method.value == "list") {
+        if (!tok.expect(TokenType::LPAREN) || !tok.expect(TokenType::RPAREN)) {
+            ctx_.setError("Expected '()' after 'groove.list'");
+            return false;
+        }
+        return executeGrooveList();
+    }
+
+    if (!tok.expect(TokenType::LPAREN)) {
+        ctx_.setError("Expected '(' after 'groove." + juce::String(method.value) + "'");
+        return false;
+    }
+
+    Params params;
+    if (!parseParams(tok, params))
+        return false;
+
+    if (!tok.expect(TokenType::RPAREN)) {
+        ctx_.setError("Expected ')' after groove parameters");
+        return false;
+    }
+
+    if (method.value == "new")
+        return executeGrooveNew(params);
+    else if (method.value == "extract")
+        return executeGrooveExtract(params);
+    else if (method.value == "set")
+        return executeGrooveSet(params);
+    else {
+        ctx_.setError("Unknown groove method: " + juce::String(method.value));
+        return false;
+    }
+}
+
+// groove.new(name="My Swing", notesPerBeat=4, shifts="0.0,0.15,-0.05,0.4", parameterized=true)
+bool Interpreter::executeGrooveNew(const Params& params) {
+    auto name = params.get("name");
+    if (name.empty()) {
+        ctx_.setError("groove.new requires 'name' parameter");
+        return false;
+    }
+
+    auto shiftsStr = params.get("shifts");
+    if (shiftsStr.empty()) {
+        ctx_.setError("groove.new requires 'shifts' parameter (comma-separated lateness values)");
+        return false;
+    }
+
+    int notesPerBeat = params.getInt("notesPerBeat", 2);
+    bool parameterized = params.getBool("parameterized", true);
+
+    // Parse shifts string: "0.0,0.15,-0.05,0.4"
+    juce::StringArray shiftTokens;
+    shiftTokens.addTokens(juce::String(shiftsStr), ",", "");
+
+    if (shiftTokens.isEmpty()) {
+        ctx_.setError("groove.new: 'shifts' must contain at least one value");
+        return false;
+    }
+
+    // Get TE engine
+    auto* engine = TrackManager::getInstance().getAudioEngine();
+    auto* teWrapper = dynamic_cast<TracktionEngineWrapper*>(engine);
+    if (!teWrapper || !teWrapper->getEngine()) {
+        ctx_.setError("Audio engine not available");
+        return false;
+    }
+
+    // Build GrooveTemplate
+    tracktion::GrooveTemplate groove;
+    groove.setName(juce::String(name));
+    groove.setNumberOfNotes(shiftTokens.size());
+    groove.setNotesPerBeat(notesPerBeat);
+    groove.setParameterized(parameterized);
+
+    for (int i = 0; i < shiftTokens.size(); ++i) {
+        float lateness = shiftTokens[i].trim().getFloatValue();
+        groove.setLatenessProportion(i, lateness, 1.0f);
+    }
+
+    // Register with TE's GrooveTemplateManager
+    auto& gtm = teWrapper->getEngine()->getGrooveTemplateManager();
+    gtm.useParameterizedGrooves(true);
+
+    // Check if template with this name already exists and update it
+    int existingIndex = -1;
+    for (int i = 0; i < gtm.getNumTemplates(); ++i) {
+        if (gtm.getTemplateName(i) == juce::String(name)) {
+            existingIndex = i;
+            break;
+        }
+    }
+
+    if (existingIndex >= 0) {
+        gtm.updateTemplate(existingIndex, groove);
+        ctx_.addResult("Updated groove template: " + juce::String(name));
+    } else {
+        // Add as new template (use index -1 to append)
+        gtm.updateTemplate(-1, groove);
+        ctx_.addResult("Created groove template: " + juce::String(name) + " (" +
+                       juce::String(shiftTokens.size()) + " steps, " + juce::String(notesPerBeat) +
+                       " per beat)");
+    }
+
+    // Refresh clip inspector so new template appears in dropdown immediately
+    auto clipId = getSelectedClipId();
+    if (clipId != INVALID_CLIP_ID) {
+        auto* clip = ClipManager::getInstance().getClip(clipId);
+        if (clip && clip->type == ClipType::MIDI)
+            ClipManager::getInstance().setGrooveTemplate(clipId, clip->grooveTemplate);
+    }
+
+    return true;
+}
+
+// groove.extract(clip=0, resolution=16, name="Extracted Groove")
+bool Interpreter::executeGrooveExtract(const Params& params) {
+    auto name = params.get("name", "Extracted Groove");
+    int resolution = params.getInt("resolution", 16);  // 8 or 16
+
+    // Get clip — use param or current selection
+    ClipId clipId;
+    if (params.has("clip")) {
+        int clipIndex = params.getInt("clip", 0);
+        // Find clip by index on current track
+        if (ctx_.currentTrackId < 0) {
+            ctx_.setError(
+                "groove.extract: no track in context. Use track(...).groove.extract(...)");
+            return false;
+        }
+        auto& cm = ClipManager::getInstance();
+        auto trackClips = cm.getClipsOnTrack(ctx_.currentTrackId);
+        if (clipIndex < 0 || clipIndex >= static_cast<int>(trackClips.size())) {
+            ctx_.setError("groove.extract: clip index " + juce::String(clipIndex) +
+                          " out of range");
+            return false;
+        }
+        clipId = trackClips[static_cast<size_t>(clipIndex)];
+    } else {
+        clipId = getSelectedClipId();
+    }
+
+    if (clipId == INVALID_CLIP_ID) {
+        ctx_.setError("groove.extract: no clip selected or specified");
+        return false;
+    }
+
+    const auto* clip = ClipManager::getInstance().getClip(clipId);
+    if (!clip || clip->type != ClipType::Audio) {
+        ctx_.setError("groove.extract: clip must be an audio clip");
+        return false;
+    }
+
+    // Get cached transients
+    auto& thumbnailManager = AudioThumbnailManager::getInstance();
+    const auto* transients = thumbnailManager.getCachedTransients(clip->audioFilePath);
+    if (!transients || transients->isEmpty()) {
+        ctx_.setError("groove.extract: no transients detected for this clip. "
+                      "Enable warp or detect transients first.");
+        return false;
+    }
+
+    // Determine clip parameters
+    double clipBPM = clip->sourceBPM > 0.0 ? clip->sourceBPM : 120.0;
+    double beatDuration = 60.0 / clipBPM;  // seconds per beat
+    double clipStartSec = clip->offset;    // source offset
+
+    // notesPerBeat: 2 for 8th notes, 4 for 16th notes
+    int notesPerBeat = (resolution >= 16) ? 4 : 2;
+    double gridStepSec = beatDuration / notesPerBeat;
+
+    // Compute how many grid steps fit in the clip
+    double clipLengthSec = clip->lengthBeats * beatDuration;
+    int numSteps = static_cast<int>(std::round(clipLengthSec / gridStepSec));
+    if (numSteps < 2) {
+        ctx_.setError("groove.extract: clip too short for groove extraction");
+        return false;
+    }
+
+    // For each transient, find the nearest grid position and compute delta
+    std::vector<float> latenesses(static_cast<size_t>(numSteps), 0.0f);
+    std::vector<bool> hasTransient(static_cast<size_t>(numSteps), false);
+
+    for (int i = 0; i < transients->size(); ++i) {
+        double transientSec = (*transients)[i] - clipStartSec;
+        if (transientSec < 0.0 || transientSec >= clipLengthSec)
+            continue;
+
+        // Find nearest grid position
+        double gridIndex = transientSec / gridStepSec;
+        int nearestGrid = static_cast<int>(std::round(gridIndex));
+        if (nearestGrid < 0 || nearestGrid >= numSteps)
+            continue;
+
+        // Delta = how far the transient is from the grid, as proportion of grid step
+        double delta = (transientSec - nearestGrid * gridStepSec) / gridStepSec;
+        latenesses[static_cast<size_t>(nearestGrid)] = static_cast<float>(delta);
+        hasTransient[static_cast<size_t>(nearestGrid)] = true;
+    }
+
+    // Determine repeating pattern length (try to find the smallest cycle)
+    // Default: use all steps, but try 1 bar (notesPerBeat * beatsPerBar)
+    int beatsPerBar = 4;  // Assume 4/4
+    int stepsPerBar = notesPerBeat * beatsPerBar;
+    int patternLength = (numSteps >= stepsPerBar) ? stepsPerBar : numSteps;
+
+    // Build GrooveTemplate
+    auto* engine = TrackManager::getInstance().getAudioEngine();
+    auto* teWrapper = dynamic_cast<TracktionEngineWrapper*>(engine);
+    if (!teWrapper || !teWrapper->getEngine()) {
+        ctx_.setError("Audio engine not available");
+        return false;
+    }
+
+    tracktion::GrooveTemplate groove;
+    groove.setName(juce::String(name));
+    groove.setNumberOfNotes(patternLength);
+    groove.setNotesPerBeat(notesPerBeat);
+    groove.setParameterized(true);
+
+    for (int i = 0; i < patternLength; ++i) {
+        groove.setLatenessProportion(i, latenesses[static_cast<size_t>(i)], 1.0f);
+    }
+
+    // Register
+    auto& gtm = teWrapper->getEngine()->getGrooveTemplateManager();
+    gtm.useParameterizedGrooves(true);
+    gtm.updateTemplate(-1, groove);
+
+    // Build result summary
+    int transientCount = 0;
+    for (size_t i = 0; i < static_cast<size_t>(patternLength); ++i)
+        if (hasTransient[i])
+            transientCount++;
+
+    ctx_.addResult("Extracted groove '" + juce::String(name) + "' from " +
+                   juce::String(transientCount) + " transients (" + juce::String(patternLength) +
+                   " steps, " + juce::String(notesPerBeat) + " per beat)");
+
+    // Refresh clip inspector so new template appears in dropdown immediately
+    auto selClipId = getSelectedClipId();
+    if (selClipId != INVALID_CLIP_ID) {
+        auto* selClip = ClipManager::getInstance().getClip(selClipId);
+        if (selClip && selClip->type == ClipType::MIDI)
+            ClipManager::getInstance().setGrooveTemplate(selClipId, selClip->grooveTemplate);
+    }
+    return true;
+}
+
+// groove.set(template="Basic 8th Swing", strength=0.8)
+// Applies to current clip context, or clip=0 param
+bool Interpreter::executeGrooveSet(const Params& params) {
+    auto templateName = params.get("template");
+    // strength is optional — only set if provided
+
+    ClipId clipId = getSelectedClipId();
+    if (clipId == INVALID_CLIP_ID) {
+        ctx_.setError("groove.set: no clip in context");
+        return false;
+    }
+
+    const auto* clip = ClipManager::getInstance().getClip(clipId);
+    if (!clip || clip->type != ClipType::MIDI) {
+        ctx_.setError("groove.set: clip must be a MIDI clip");
+        return false;
+    }
+
+    if (params.has("template")) {
+        UndoManager::getInstance().executeCommand(
+            std::make_unique<SetClipGrooveTemplateCommand>(clipId, juce::String(templateName)));
+    }
+
+    if (params.has("strength")) {
+        float strength = static_cast<float>(params.getFloat("strength", 0.5));
+        UndoManager::getInstance().executeCommand(
+            std::make_unique<SetClipGrooveStrengthCommand>(clipId, strength));
+    }
+
+    ctx_.addResult(
+        "Set groove on clip: template=\"" + juce::String(templateName) +
+        "\", strength=" + juce::String(params.getFloat("strength", clip->grooveStrength), 2));
+    return true;
+}
+
+// groove.list() — show all available groove templates
+bool Interpreter::executeGrooveList() {
+    auto* engine = TrackManager::getInstance().getAudioEngine();
+    auto* teWrapper = dynamic_cast<TracktionEngineWrapper*>(engine);
+    if (!teWrapper || !teWrapper->getEngine()) {
+        ctx_.setError("Audio engine not available");
+        return false;
+    }
+
+    auto& gtm = teWrapper->getEngine()->getGrooveTemplateManager();
+    auto names = gtm.getTemplateNames();
+
+    if (names.isEmpty()) {
+        ctx_.addResult("No groove templates available");
+    } else {
+        ctx_.addResult("Available groove templates (" + juce::String(names.size()) + "):");
+        for (const auto& n : names)
+            ctx_.addResult("  " + n);
+    }
     return true;
 }
 

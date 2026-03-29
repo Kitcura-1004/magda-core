@@ -58,8 +58,11 @@ nav:
       - Plugin & Media Browser: panels/browsers.md
       - AI Assistant: panels/ai-assistant.md
       - Editors: panels/editors.md
+      - Chord Panel: panels/chord-panel.md
   - Devices:
       - Built-in Devices: devices/built-in.md
+      - 4OSC Synth: devices/4osc.md
+      - Chord Engine: devices/chord-engine.md
       - Drum Grid: devices/drum-grid.md
       - Sampler: devices/sampler.md
   - Modulation:
@@ -69,6 +72,7 @@ nav:
       - Linking Parameters: modulation/linking.md
   - Transport: transport.md
   - Reference:
+      - DSL Reference: reference/dsl.md
       - Keyboard Shortcuts: reference/keyboard-shortcuts.md
       - File Formats: reference/file-formats.md
       - Troubleshooting: reference/troubleshooting.md
@@ -88,7 +92,11 @@ extra_css:
 markdown_extensions:
   - admonition
   - pymdownx.details
-  - pymdownx.superfences
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
   - pymdownx.tabbed:
       alternate_style: true
   - pymdownx.keys

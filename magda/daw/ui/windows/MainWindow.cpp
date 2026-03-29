@@ -731,10 +731,19 @@ void MainWindow::MainComponent::setupAudioEngineCallbacks(AudioEngine* engine) {
         mainView->getTimelineController().dispatch(SetTempoEvent{bpm});
     };
 
+    transportPanel->onTimeSignatureChange = [this](int numerator, int denominator) {
+        mainView->getTimelineController().dispatch(SetTimeSignatureEvent{numerator, denominator});
+    };
+
     transportPanel->onMetronomeToggle = [engine](bool enabled) {
         // Metronome is audio-engine only, not part of timeline state
         engine->setMetronomeEnabled(enabled);
     };
+
+    transportPanel->onCountInModeChange = [engine](int mode) { engine->setCountInMode(mode); };
+
+    // Initialize count-in UI from engine state
+    transportPanel->setCountInMode(engine->getCountInMode());
 
     transportPanel->onSnapToggle = [this](bool enabled) {
         mainView->getTimelineController().dispatch(SetSnapEnabledEvent{enabled});
@@ -880,20 +889,24 @@ MainWindow::MainComponent::~MainComponent() {
     DBG("    [5h] Destroying loadingOverlay_...");
     loadingOverlay_.reset();
 
-    DBG("    [5i] Destroying mainView...");
+    // Destroy bottomPanel before mainView — BottomPanel has a ScopedListener
+    // on TimelineController (owned by MainView), so it must unregister first.
+    DBG("    [5i] Destroying bottomPanel...");
+    bottomPanel.reset();
+
+    DBG("    [5j] Destroying mainView...");
     mainView.reset();
 
-    DBG("    [5j] Destroying sessionView...");
+    DBG("    [5k] Destroying sessionView...");
     sessionView.reset();
 
-    DBG("    [5k] Destroying mixerView...");
+    DBG("    [5l] Destroying mixerView...");
     mixerView.reset();
 
-    DBG("    [5l] Destroying panels...");
+    DBG("    [5m] Destroying panels...");
     transportPanel.reset();
     leftPanel.reset();
     rightPanel.reset();
-    bottomPanel.reset();
     footerBar.reset();
 
     DBG("    [5m] Destroying resize handles...");

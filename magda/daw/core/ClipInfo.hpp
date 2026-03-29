@@ -32,6 +32,7 @@ struct MidiNote {
     int velocity = 100;        // Note velocity (0-127)
     double startBeat = 0.0;    // Start position in beats within clip
     double lengthBeats = 1.0;  // Duration in beats
+    int chordGroup = 0;        // 0 = unlinked, >0 = linked to ChordAnnotation with same ID
 };
 
 /**
@@ -206,8 +207,22 @@ struct ClipInfo {
     std::vector<MidiNote> midiNotes;
     std::vector<MidiCCData> midiCCData;
     std::vector<MidiPitchBendData> midiPitchBendData;
-    double midiOffset = 0.0;  // User-controlled start offset in beats (playback / offset marker)
+
+    // Chord annotations (displayed in piano roll chord row)
+    struct ChordAnnotation {
+        double beatPosition = 0.0;  // Position within clip (beats)
+        double lengthBeats = 4.0;   // Display width (beats)
+        juce::String chordName;     // Display name, e.g. "Cmaj7", "Am/E"
+        int chordGroup = 0;         // 0 = unlinked, >0 = linked to notes with same ID
+    };
+    std::vector<ChordAnnotation> chordAnnotations;
+    int nextChordGroupId = 1;  // Counter for generating unique chord group IDs
+    double midiOffset = 0.0;   // User-controlled start offset in beats (playback / offset marker)
     double midiTrimOffset = 0.0;  // Left-resize trim offset in beats (content origin on timeline)
+
+    // Groove/Shuffle/Swing (MIDI clips)
+    juce::String grooveTemplate;  // TE groove template name (empty = none)
+    float grooveStrength = 0.0f;  // 0.0–1.0, amount of groove to apply
 
     // Session view properties
     int sceneIndex = -1;  // -1 = not in session view (arrangement only)

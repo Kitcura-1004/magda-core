@@ -1,12 +1,16 @@
 # AI Assistant
 
-MAGDA includes a built-in AI chat assistant that lets you control the DAW using natural language.
+MAGDA includes a built-in AI chat assistant that lets you control the DAW using natural language, and a DSL console for direct scripting.
 
 ![AI Assistant](../assets/images/panels/ai-assistant.png){ width="400" }
 
 ## Overview
 
-The AI Assistant panel is located in the left panel. Type a request in natural language and the assistant translates it into actions:
+The AI Assistant panel is located in the left panel. It has two tabs at the bottom: **AI** for natural-language interaction and **DSL** for direct script execution.
+
+## AI Tab
+
+Type a request in natural language and the assistant translates it into actions:
 
 - "Add a MIDI track with a bass clip"
 - "Transpose the selected notes up an octave"
@@ -15,119 +19,109 @@ The AI Assistant panel is located in the left panel. Type a request in natural l
 
 The assistant is **context-aware** — it knows which tracks, clips, and devices exist in your project and what is currently selected.
 
-## How It Works
+### How It Works
 
 1. You type a natural-language request in the chat
 2. The assistant translates your request into MAGDA's internal DSL (domain-specific language)
 3. The DSL commands are executed as actions in the project
 4. The assistant confirms what was done
 
-## Setup
+### Setup
 
-The AI Assistant uses the OpenAI API. You'll need an API key to get started.
+![AI Settings](../assets/images/panels/ai-settings.png){ width="400" }
 
-1. Go to **Settings > Preferences > AI**
-2. Enter your OpenAI API key
+The AI Assistant supports multiple LLM providers. Open the AI Settings dialog from **Settings > AI Settings** to configure your providers.
 
-If you don't have an API key, you can generate one at [platform.openai.com/api-keys](https://platform.openai.com/api-keys).
+The settings dialog has three tabs:
 
-## Usage Tips
+| Tab | Description |
+|-----|-------------|
+| **Cloud** | Configure cloud API providers (Anthropic, OpenAI, DeepSeek, Gemini, OpenRouter) |
+| **Local** | Configure the embedded llama.cpp engine with a local GGUF model |
+| **Config** | Mode selection (Local / Cloud / Hybrid), provider, and optimization strategy |
+
+To add a cloud provider:
+
+1. Select the **Provider** from the dropdown
+2. Enter your **API Key**
+3. Click **Add** (or **Test** to verify the key first)
+
+Registered providers appear in the list below. You can add multiple providers and switch between them. Click **X** to remove a provider.
+
+#### Local Tab
+
+The Local tab configures the embedded **llama.cpp** inference engine for fully offline AI. MAGDA includes a one-click downloader for the custom **magda-v0.3.0** GGUF model, fine-tuned for DAW operations.
+
+- **Download Model** — Downloads the MAGDA model from HuggingFace with a progress indicator
+- **Model Path** — Path to any `.gguf` model file (use the file browser to select a custom model)
+- **GPU Layers** — Number of layers to offload to the GPU (-1 = all layers, for Metal/CUDA acceleration)
+- **Context Size** — Context window size (default 4096)
+- **Load / Unload** — Load the model into memory or unload it to free resources
+
+#### Config Tab
+
+The Config tab selects which providers the AI agents use:
+
+| Setting | Description |
+|---------|-------------|
+| **Mode** | **Local** (all agents use embedded llama), **Cloud** (all agents use a cloud provider), or **Hybrid** (mix of local and cloud) |
+| **Provider** | Which cloud provider to use (from the registered providers in the Cloud tab) |
+| **Optimize** | **Cost** (prefer local where possible), **Speed** (prefer fastest), or **Quality** (prefer most capable model) |
+
+### Usage Tips
 
 - Be specific: "Add a reverb to Track 2" works better than "make it sound spacey"
 - The assistant can handle multi-step requests: "Create 4 MIDI tracks and name them Kick, Snare, HiHat, Bass"
 - Use it for repetitive tasks: "Set all tracks to -6 dB"
+- Prefix a message with `/dsl` to execute DSL directly from the AI chat without making an AI call
 
-## MAGDA DSL Reference
+## DSL Tab
 
-The AI assistant translates natural language into MAGDA's domain-specific language (DSL). While you don't need to write DSL directly, understanding it can help you phrase better requests.
+![DSL Console](../assets/images/panels/dsl-repl.png){ width="300" }
 
-### Tracks
+The DSL tab provides a code editor with **syntax highlighting** for the MAGDA DSL. It's designed for users who want to script DAW operations directly without going through the AI.
 
-```
-track(name="Bass", type="midi")           // Create a new track
-track(id=1)                               // Reference existing track by index
-track(name="Bass").track.set(volume_db=-3, pan=0.5, mute=true, solo=true)
-track(name="Bass").select()               // Select track in UI
-track(name="Bass").delete()               // Delete track
-```
+### Editor Features
 
-### Clips
+- **Syntax highlighting** — keywords (blue), methods (yellow), parameters (light blue), strings (orange), numbers (green), note names (teal), comments (green)
+- **Direct execution** — commands run immediately against the DAW with no network calls
+- **Command history** — results appear in the output area above the editor
+- **Keyboard shortcuts**:
 
-```
-track(name="Bass").clip.new(bar=1, length_bars=4)     // Create MIDI clip
-track(name="Bass").clip.rename(index=0, name="Intro") // Rename clip
-track(name="Bass").clip.delete(index=0)                // Delete clip
-```
+| Shortcut | Action |
+|----------|--------|
+| ++cmd+enter++ (Mac) / ++ctrl+enter++ (Win) | Execute code |
+| ++cmd+l++ (Mac) / ++ctrl+l++ (Win) | Clear output |
 
-### Notes
+### Quick Start
 
-```
-.notes.add(pitch=C4, beat=0, length=1, velocity=100)
-.notes.delete()
-.notes.transpose(semitones=5)
-.notes.set_pitch(pitch=F1)
-.notes.set_velocity(value=80)
-.notes.quantize(grid=0.25)       // 0.25=16th, 0.5=8th, 1.0=quarter
-.notes.resize(length=0.5)
-```
-
-### Chords
+Switch to the DSL tab, type a command, and press ++cmd+enter++:
 
 ```
-.notes.add_chord(root=C4, quality=major, beat=0, length=1, velocity=100, inversion=0)
+track(name="Bass", new=true).clip.new(bar=1, length_bars=4)
 ```
 
-Supported qualities: `major`, `minor`, `dim`, `aug`, `sus2`, `sus4`, `dom7`, `maj7`, `min7`, `dim7`, `dom9`, `maj9`, `min9`, `dom11`, `min11`, `dom13`, `min13`, `add9`, `add11`, `add13`, `6`, `min6`, `7b5`, `7sharp5`, `7b9`, `7sharp9`, `min7b5`, `power`
+Type `help` and execute to see available commands.
 
-### Arpeggios
+## DSL Quick Reference
 
-```
-.notes.add_arpeggio(root=C4, quality=minor, beat=0, step=0.5,
-                    note_length=0.5, velocity=100, pattern=up, fill=true)
-```
-
-Patterns: `up`, `down`, `updown`. Set `fill=true` to repeat the pattern to fill the entire clip, or `beats=N` to fill a specific number of beats.
-
-### Effects
+A few common commands to get started. For the full language reference, see **[DSL Reference](../reference/dsl.md)**.
 
 ```
-track(name="Vocals").fx.add(name="reverb")
-track(name="Vocals").fx.add(name="Pro-Q 3", format="VST3")
-```
-
-Built-in effects: `eq`, `compressor`, `reverb`, `delay`, `chorus`, `phaser`, `filter`, `utility`, `pitch shift`, `ir reverb`
-
-### Selection and Filtering
-
-```
-// Select notes by condition
-.notes.select(note.pitch == C4)
-.notes.select(note.velocity > 100)
-
-// Select clips by condition
-.clips.select(clip.length_bars >= 2)
-
-// Bulk operations on matching tracks
-filter(tracks, track.name == "Drums").track.set(mute=true)
-filter(tracks, track.name == "Drums").for_each(.fx.add(name="compressor"))
-```
-
-### Example: Full Workflow
-
-```
-// Create a synth track with a 4-bar chord progression
-track(name="Synth", type="midi")
-  .clip.new(bar=1, length_bars=4)
+track(name="Bass", new=true).clip.new(bar=1, length_bars=4)
   .notes.add_chord(root=C4, quality=major, beat=0, length=4)
-  .notes.add_chord(root=F4, quality=major, beat=4, length=4)
-  .notes.add_chord(root=G4, quality=major, beat=8, length=4)
-  .notes.add_chord(root=Am3, quality=minor, beat=12, length=4)
-
-// Add an arpeggiated lead
-track(name="Lead", type="midi")
-  .clip.new(bar=1, length_bars=4)
-  .notes.add_arpeggio(root=C4, quality=major, step=0.25, pattern=updown, fill=true)
-
-// Add reverb and set volume
-track(name="Lead").fx.add(name="reverb").track.set(volume_db=-6)
+  .notes.add(pitch=E2, beat=0, length=1, velocity=100)
+track(name="Bass").fx.add(name="compressor")
+track(name="Bass").track.set(volume_db=-6)
+groove.set(template="Basic 8th Swing", strength=0.5)
 ```
+
+### Slash Commands
+
+Prefix your message with a slash command to constrain the AI to a specific domain:
+
+| Command | Description |
+|---------|-------------|
+| `/groove <request>` | Create or apply swing/groove timing templates |
+
+Typing `/` shows an autocomplete popup with available commands.

@@ -2,6 +2,7 @@
 
 #include <memory>
 
+#include "../../magda/agents/llama_model_manager.hpp"
 #include "engine/TracktionEngineWrapper.hpp"
 
 // Global engine instance
@@ -43,10 +44,8 @@ void magda_shutdown() {
             g_engine.reset();
         }
 
-        // TODO: Cleanup additional systems
-        // - Stop WebSocket server
-        // - Cleanup resources
-        // - Unload plugins
+        // Unload embedded model if loaded
+        magda::LlamaModelManager::getInstance().unloadModel();
 
         DBG("MAGDA shutdown complete.");
 

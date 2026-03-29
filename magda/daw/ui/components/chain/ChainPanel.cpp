@@ -5,11 +5,14 @@
 #include "RackComponent.hpp"
 #include "audio/DrumGridPlugin.hpp"
 #include "audio/MagdaSamplerPlugin.hpp"
+#include "audio/MidiChordEnginePlugin.hpp"
+#include "core/DeviceInfo.hpp"
 #include "core/MacroInfo.hpp"
 #include "core/ModInfo.hpp"
 #include "core/SelectionManager.hpp"
 #include "engine/TracktionEngineWrapper.hpp"
 #include "ui/debug/DebugSettings.hpp"
+#include "ui/panels/content/PluginBrowserContent.hpp"
 #include "ui/themes/DarkTheme.hpp"
 #include "ui/themes/SmallButtonLookAndFeel.hpp"
 
@@ -155,6 +158,10 @@ class ChainPanel::ElementSlotsContainer : public juce::Component, public juce::D
                                                     : obj->getProperty("name").toString() + "_" +
                                                           obj->getProperty("format").toString();
             device.isInstrument = static_cast<bool>(obj->getProperty("isInstrument"));
+            if (obj->getProperty("subcategory").toString() == "MIDI")
+                device.deviceType = magda::DeviceType::MIDI;
+            else if (device.isInstrument)
+                device.deviceType = magda::DeviceType::Instrument;
             device.uniqueId = obj->getProperty("uniqueId").toString();
             device.fileOrIdentifier = obj->getProperty("fileOrIdentifier").toString();
 
@@ -348,9 +355,6 @@ void ChainPanel::mouseEnter(const juce::MouseEvent&) {
 
 void ChainPanel::mouseWheelMove(const juce::MouseEvent& event,
                                 const juce::MouseWheelDetails& wheel) {
-    DBG("ChainPanel::mouseWheelMove - deltaY=" << wheel.deltaY << " isAltDown="
-                                               << (event.mods.isAltDown() ? "yes" : "no"));
-
     // Option/Alt + scroll wheel = zoom (Cmd+scroll is intercepted by macOS)
     if (event.mods.isAltDown()) {
         float delta = wheel.deltaY > 0 ? ZOOM_STEP : -ZOOM_STEP;
@@ -643,31 +647,9 @@ void ChainPanel::onAddDeviceClicked() {
 
     juce::PopupMenu menu;
 
-    // --- Internal (built-in) plugins ---
+    // --- Internal (built-in) plugins from shared list ---
+    auto internals = magda::daw::ui::PluginBrowserContent::getInternalPlugins();
     juce::PopupMenu internalMenu;
-    struct InternalEntry {
-        juce::String name;
-        juce::String pluginId;
-        bool isInstrument;
-    };
-    const InternalEntry internals[] = {
-        {"4OSC Synth", "4osc", true},
-        {"Sampler", magda::daw::audio::MagdaSamplerPlugin::xmlTypeName, true},
-        {"Drum Grid", magda::daw::audio::DrumGridPlugin::xmlTypeName, true},
-        {"Test Tone", "tone", false},
-        {"Equaliser", "eq", false},
-        {"Compressor", "compressor", false},
-        {"Reverb", "reverb", false},
-        {"Delay", "delay", false},
-        {"Chorus", "chorus", false},
-        {"Phaser", "phaser", false},
-        {"Filter", "lowpass", false},
-        {"Pitch Shift", "pitchshift", false},
-        {"IR Reverb", "impulseresponse", false},
-        {"Utility", "utility", false},
-    };
-
-    // Item IDs: 1..N for internals, 1000+ for externals, 10000 for rack
     int itemId = 1;
     for (const auto& entry : internals) {
         internalMenu.addItem(itemId++, entry.name);
@@ -698,16 +680,13 @@ void ChainPanel::onAddDeviceClicked() {
     menu.addSeparator();
     menu.addItem(10000, "Create Rack");
 
-    // Use SafePointer to handle case where this component is destroyed before callback
     auto safeThis = juce::Component::SafePointer<ChainPanel>(this);
-    auto chainPath = chainPath_;  // Capture by value for async safety
+    auto chainPath = chainPath_;
 
-    // Capture external plugins for the async callback
     auto capturedPlugins =
         std::make_shared<juce::Array<juce::PluginDescription>>(std::move(externalPlugins));
-    // Capture internals array as a vector
     auto capturedInternals =
-        std::make_shared<std::vector<InternalEntry>>(std::begin(internals), std::end(internals));
+        std::make_shared<std::vector<magda::daw::ui::PluginBrowserInfo>>(std::move(internals));
 
     menu.showMenuAsync(juce::PopupMenu::Options(), [safeThis, chainPath, capturedPlugins,
                                                     capturedInternals](int result) {
@@ -728,11 +707,15 @@ void ChainPanel::onAddDeviceClicked() {
 
         if (result >= 1 && result <= static_cast<int>(capturedInternals->size())) {
             // Internal plugin
-            const auto& entry = (*capturedInternals)[result - 1];
+            const auto& entry = (*capturedInternals)[static_cast<size_t>(result - 1)];
             device.name = entry.name;
             device.manufacturer = "MAGDA";
-            device.pluginId = entry.pluginId;
-            device.isInstrument = entry.isInstrument;
+            device.pluginId = entry.uniqueId;
+            device.isInstrument = entry.category == "Instrument";
+            if (entry.subcategory == "MIDI")
+                device.deviceType = magda::DeviceType::MIDI;
+            else if (entry.category == "Instrument")
+                device.deviceType = magda::DeviceType::Instrument;
             device.format = magda::PluginFormat::Internal;
         } else if (result >= 1000) {
             // External plugin

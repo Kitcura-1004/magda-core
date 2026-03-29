@@ -26,7 +26,9 @@ class TransportPanel : public juce::Component {
     std::function<void(bool)> onLoop;
     std::function<void(double)> onTempoChange;
     std::function<void(bool)> onMetronomeToggle;
+    std::function<void(int)> onCountInModeChange;  // 0=none, 1=1bar, 2=2bars, 3=2beats, 4=1beat
     std::function<void(bool)> onSnapToggle;
+    std::function<void(int, int)> onTimeSignatureChange;
     std::function<void(bool, int, int)> onGridQuantizeChange;  // (autoGrid, numerator, denominator)
 
     // Navigation callbacks
@@ -50,9 +52,12 @@ class TransportPanel : public juce::Component {
     void setTempo(double bpm);
     void setTimeSignature(int numerator, int denominator);
     void setSnapEnabled(bool enabled);
+    void setCountInMode(int mode);
     void setGridQuantize(bool autoGrid, int numerator, int denominator, bool isBars = false);
     void setPunchRegion(double startTime, double endTime, bool punchInEnabled,
                         bool punchOutEnabled);
+
+    void mouseDown(const juce::MouseEvent& e) override;
 
     // Enable/disable transport controls (e.g., during device loading)
     void setTransportEnabled(bool enabled);
@@ -69,6 +74,8 @@ class TransportPanel : public juce::Component {
     void setAudioDeviceInfo(const juce::String& deviceName, double sampleRate, int bufferSize);
 
   private:
+    void showCountInMenu();
+
     // Transport controls (left section)
     std::unique_ptr<SvgButton> playButton;
     std::unique_ptr<SvgButton> stopButton;
@@ -120,7 +127,8 @@ class TransportPanel : public juce::Component {
     // Metronome, snap, time signature
     std::unique_ptr<SvgButton> metronomeButton;
     std::unique_ptr<juce::TextButton> snapButton;
-    std::unique_ptr<juce::Label> timeSignatureLabel;
+    std::unique_ptr<DraggableValueLabel> timeSigNumeratorLabel;
+    std::unique_ptr<DraggableValueLabel> timeSigDenominatorLabel;
 
     // Layout sections
     juce::Rectangle<int> getTransportControlsArea() const;
@@ -153,6 +161,7 @@ class TransportPanel : public juce::Component {
     double currentTempo = 120.0;
     int timeSignatureNumerator = 4;
     int timeSignatureDenominator = 4;
+    int countInMode_ = 0;  // 0=none, 1=1bar, 2=2bars, 3=2beats, 4=1beat
 
     // Cached state for display updates
     double cachedPlayheadPosition = 0.0;

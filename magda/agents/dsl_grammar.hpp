@@ -20,12 +20,21 @@ start: statement+
 
 statement: track_statement
          | filter_statement
+         | groove_statement
 
 // Track statements
 track_statement: "track" "(" params? ")" chain?
 
 // Filter statements (for bulk operations)
 filter_statement: "filter" "(" "tracks" "," condition ")" chain?
+
+// Groove statements (swing/shuffle templates)
+groove_statement: "groove" "." groove_method
+
+groove_method: "new" "(" params ")"
+             | "extract" "(" params ")"
+             | "set" "(" params ")"
+             | "list" "(" ")"
 
 condition: "track" "." IDENTIFIER "==" value
 
@@ -69,7 +78,10 @@ value: STRING
      | NUMBER
      | BOOLEAN
      | IDENTIFIER
+     | function_call
      | array
+
+function_call: IDENTIFIER "(" value ("," value)* ")"
 
 // Array for progression chords
 array: "[" array_items? "]"
@@ -109,7 +121,8 @@ METHOD CHAINING:
 - .clip.new(length_bars=4) - Create MIDI clip after the last clip on the track (omit bar to auto-place)
 - .track.set(name="X", volume_db=-3, pan=0.5, mute=true, solo=true)
 - .fx.add(name="eq") - Add internal FX (eq, compressor, reverb, delay, chorus, phaser, filter, utility, pitch shift, ir reverb)
-- .fx.add(name="Pro-Q 3") - Add scanned third-party plugin by name
+- .fx.add(name="<plugin_alias>") - Add third-party plugin using alias token (e.g. <serum_2>, <pro_q_3>, <surge_xt>)
+- .fx.add(name="Pro-Q 3") - Add plugin by exact display name (prefer alias tokens when available)
 - .fx.add(name="Pro-Q 3", format="VST3") - Add plugin with format hint (VST3, AU, VST)
 - .delete() - Delete track
 - .clip.rename(index=0, name="Intro") - Rename clip at index on track
@@ -117,7 +130,7 @@ METHOD CHAINING:
 - .clip.rename(name="Clip {i}") - Rename selected clips with auto-numbering: Clip 1, Clip 2, etc.
 - .clip.delete(index=0) - Delete clip at index on track
 - .select() - Select track in the UI
-- .clips.select(clip.length_bars >= 2) - Select clips matching predicate (fields: length_bars, start_bar; ops: ==, !=, >, >=, <, <=)
+- .clips.select(clip.length_bars >= 2) - Select clips matching predicate (numeric fields: length_bars, start_bar, length, start, start_beats, id, track_id; string fields: name, type; ops: ==, !=, >, >=, <, <=; string fields support == and != only)
 
 FILTER OPERATIONS (bulk):
 - filter(tracks, track.name == "X").delete() - Delete all tracks named X
@@ -135,8 +148,8 @@ EXAMPLES:
   track(name="Lead").clip.new(bar=1, length_bars=4)
 - "set volume of track 2 to -6 dB" -> track(id=2).track.set(volume_db=-6)
 - "add an EQ to the Bass track" -> track(name="Bass").fx.add(name="eq")
-- "add Pro-Q 3 to track 1" -> track(id=1).fx.add(name="Pro-Q 3")
-- "create a track with Surge XT" -> track(name="Surge XT", new=true).fx.add(name="Surge XT")
+- "add <pro_q_3> to track 1" -> track(id=1).fx.add(name="<pro_q_3>")
+- "create a track with <surge_xt>" -> track(name="Surge XT", new=true).fx.add(name="<surge_xt>")
 - "add reverb and delay to the Vocals track" ->
   track(name="Vocals").fx.add(name="reverb")
   track(name="Vocals").fx.add(name="delay")
@@ -145,6 +158,7 @@ EXAMPLES:
 - "select track 1" -> track(id=1).select()
 - "select all clips longer than 2 bars on track 1" -> track(id=1).clips.select(clip.length_bars > 2)
 - "select all clips shorter than or equal to 1 bar on track 2" -> track(id=2).clips.select(clip.length_bars <= 1)
+- "select the clip named Intro" -> track(id=1).clips.select(clip.name == "Intro")
 
 NOTE OPERATIONS (require a selected clip):
 - .notes.select(note.pitch == C4) - Select notes matching predicate (fields: pitch, velocity, start_beat, length_beats; pitch accepts MIDI numbers or note names like C4, C#4, Bb3; C4=60)
@@ -181,6 +195,26 @@ EXAMPLES (note operations):
   track(id=1).clip.new(length_bars=4).notes.add(pitch=E4, beat=0, length=0.5, velocity=100).notes.add(pitch=G4, beat=0.5, length=0.5, velocity=98).notes.add(pitch=B4, beat=1.0, length=1.0, velocity=102).notes.add(pitch=A4, beat=2.0, length=0.5, velocity=96).notes.add(pitch=G4, beat=2.5, length=0.5, velocity=95).notes.add(pitch=F#4, beat=3.0, length=0.5, velocity=94).notes.add(pitch=E4, beat=3.5, length=0.5, velocity=100)
 
 IMPORTANT: To add multiple notes to the SAME clip, chain .notes.add() calls on a SINGLE statement. Do NOT create a separate clip.new() for each note.
+
+GROOVE/SWING OPERATIONS (timing feel, NOT drum patterns):
+These commands control swing/shuffle timing applied at playback. They do NOT create notes or clips.
+- groove.new(name="My Swing", notesPerBeat=4, shifts="0.0,0.15,-0.05,0.4") - Create a custom groove template. shifts = comma-separated lateness values (-1.0 to 1.0, 0=on grid, positive=late/behind beat, negative=early/ahead). notesPerBeat: 2=8th notes, 4=16th notes.
+- groove.extract(clip=0, resolution=16, name="Loop Feel") - Extract groove from audio clip transients. clip=index on track, resolution=8 or 16.
+- groove.set(template="Basic 8th Swing", strength=0.7) - Apply groove template to current MIDI clip. strength=0.0-1.0.
+- groove.list() - List all available groove templates.
+
+EXAMPLES (groove):
+- "add swing to this clip" -> groove.set(template="Basic 8th Swing", strength=0.5)
+- "create a funky 16th groove" -> groove.new(name="Funky 16ths", notesPerBeat=4, shifts="0.0,0.2,-0.05,0.35,0.0,0.15,-0.1,0.3")
+- "extract the groove from this audio clip" -> groove.extract(clip=0, resolution=16, name="Extracted Feel")
+- "what grooves are available" -> groove.list()
+
+IMPORTANT: "groove" means TIMING/SWING, not a drum pattern. If the user asks for a "drum groove" or "beat", create notes with .notes.add(). If they ask to "add groove/swing/shuffle" to a clip, use groove.set().
+
+BUILT-IN FUNCTIONS:
+- random(min, max) - Returns a random value between min and max (inclusive). Integer if both args are integers, float otherwise.
+  Example: .clip.new(length_bars=random(1, 4)) - Create a clip with random length between 1 and 4 bars
+  Example: .notes.add(pitch=C4, beat=0, velocity=random(80, 127)) - Add a note with random velocity
 
 NOTE: The DAW state JSON includes "selected_track_id" when a track is selected, and "selected_clip_index" / "selected_clip_track_id" when a clip is selected.
 Use track(id=N) to reference any track. When the user says "this track" or implies the current selection, use the selected_track_id from the state.

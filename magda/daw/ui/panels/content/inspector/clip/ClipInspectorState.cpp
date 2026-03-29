@@ -6,6 +6,8 @@
 #include "../../../../utils/TimelineUtils.hpp"
 #include "../ClipInspector.hpp"
 #include "BinaryData.h"
+#include "core/TrackManager.hpp"
+#include "engine/TracktionEngineWrapper.hpp"
 
 namespace magda::daw::ui {
 
@@ -381,6 +383,25 @@ void ClipInspector::updateFromSelectedClip() {
             }
         }
 
+        // Groove section (MIDI clips only)
+        grooveSectionLabel_.setVisible(isMidiClip);
+        grooveTemplateButton_.setVisible(isMidiClip);
+        grooveStrengthLabel_.setVisible(isMidiClip);
+        grooveStrengthValue_->setVisible(isMidiClip);
+        if (isMidiClip) {
+            // Update button text to show current template
+            grooveTemplateButton_.setButtonText(
+                clip->grooveTemplate.isNotEmpty() ? clip->grooveTemplate : "None");
+
+            grooveStrengthValue_->setValue(clip->grooveStrength, juce::dontSendNotification);
+
+            // Dim strength when no template selected
+            bool hasGroove = clip->grooveTemplate.isNotEmpty();
+            grooveStrengthValue_->setEnabled(hasGroove);
+            grooveStrengthValue_->setAlpha(hasGroove ? 1.0f : 0.4f);
+            grooveStrengthLabel_.setAlpha(hasGroove ? 1.0f : 0.4f);
+        }
+
         // Mix section (audio clips only) — includes Volume/Pan/Gain + Reverse/L/R
         clipMixSectionLabel_.setVisible(showAudioProps);
         clipVolumeValue_->setVisible(showAudioProps);
@@ -530,6 +551,10 @@ void ClipInspector::showClipControls(bool show) {
         midiTransposeUpBtn_.setVisible(false);
         midiTransposeDownBtn_.setVisible(false);
         midiTransposeLabel_.setVisible(false);
+        grooveSectionLabel_.setVisible(false);
+        grooveTemplateButton_.setVisible(false);
+        grooveStrengthLabel_.setVisible(false);
+        grooveStrengthValue_->setVisible(false);
         clipMixSectionLabel_.setVisible(false);
         clipVolumeValue_->setVisible(false);
         clipPanValue_->setVisible(false);

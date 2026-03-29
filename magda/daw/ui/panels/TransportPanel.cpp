@@ -78,7 +78,8 @@ void TransportPanel::paint(juce::Graphics& g) {
                          .getUnion(punchEndLabel->getBounds()),
                      "", DarkTheme::getColour(DarkTheme::ACCENT_PURPLE));
     drawGroupWrapper(tempoLabel->getBounds()
-                         .getUnion(timeSignatureLabel->getBounds())
+                         .getUnion(timeSigNumeratorLabel->getBounds())
+                         .getUnion(timeSigDenominatorLabel->getBounds())
                          .getUnion(metronomeButton->getBounds()),
                      "", DarkTheme::getColour(DarkTheme::ACCENT_ORANGE));
     drawGroupWrapper(gridNumeratorLabel->getBounds().getUnion(gridDenominatorLabel->getBounds()),
@@ -221,7 +222,16 @@ void TransportPanel::resized() {
     int metroIconSize = rowHeight;
 
     tempoLabel->setBounds(metroX, rowY1, metroBoxWidth, rowHeight);
-    timeSignatureLabel->setBounds(metroX, rowY2, metroBoxWidth, rowHeight);
+
+    // Time signature: [num/][den] in bottom row
+    // Overlap by 4px to eliminate the internal padding gap (2px each side)
+    int tsNumWidth = 24;
+    int tsDenWidth = 18;
+    int tsOverlap = 4;
+    int tsTotal = tsNumWidth + tsDenWidth - tsOverlap;
+    int tsX = metroX + (metroBoxWidth - tsTotal) / 2;
+    timeSigNumeratorLabel->setBounds(tsX, rowY2, tsNumWidth, rowHeight);
+    timeSigDenominatorLabel->setBounds(tsX + tsNumWidth - tsOverlap, rowY2, tsDenWidth, rowHeight);
 
     int metroBtnX = metroX + metroBoxWidth - metroIconSize;
     metronomeButton->setBounds(metroBtnX, rowY2 + (rowHeight - metroIconSize) / 2, metroIconSize,
@@ -568,15 +578,48 @@ void TransportPanel::setupTempoAndQuantize() {
     };
     addAndMakeVisible(*tempoLabel);
 
-    // Time signature label
-    timeSignatureLabel = std::make_unique<juce::Label>();
-    timeSignatureLabel->setText("4/4", juce::dontSendNotification);
-    timeSignatureLabel->setFont(FontManager::getInstance().getUIFont(14.0f));
-    timeSignatureLabel->setColour(juce::Label::textColourId,
-                                  DarkTheme::getColour(DarkTheme::TEXT_PRIMARY));
-    timeSignatureLabel->setColour(juce::Label::backgroundColourId, juce::Colours::transparentBlack);
-    timeSignatureLabel->setJustificationType(juce::Justification::centred);
-    addAndMakeVisible(*timeSignatureLabel);
+    // Time signature — numerator / denominator draggable labels
+    timeSigNumeratorLabel =
+        std::make_unique<DraggableValueLabel>(DraggableValueLabel::Format::Integer);
+    timeSigNumeratorLabel->setRange(1.0, 32.0, 4.0);
+    timeSigNumeratorLabel->setValue(static_cast<double>(timeSignatureNumerator),
+                                    juce::dontSendNotification);
+    timeSigNumeratorLabel->setTextColour(DarkTheme::getColour(DarkTheme::TEXT_PRIMARY));
+    timeSigNumeratorLabel->setShowFillIndicator(false);
+    timeSigNumeratorLabel->setFontSize(14.0f);
+    timeSigNumeratorLabel->setDoubleClickResetsValue(true);
+    timeSigNumeratorLabel->setDrawBorder(false);
+    timeSigNumeratorLabel->setDrawBackground(false);
+    timeSigNumeratorLabel->setSnapToInteger(true);
+    timeSigNumeratorLabel->setSuffix("/");
+    timeSigNumeratorLabel->setJustification(juce::Justification::centredRight);
+    timeSigNumeratorLabel->onValueChange = [this]() {
+        timeSignatureNumerator = static_cast<int>(std::round(timeSigNumeratorLabel->getValue()));
+        if (onTimeSignatureChange)
+            onTimeSignatureChange(timeSignatureNumerator, timeSignatureDenominator);
+    };
+    addAndMakeVisible(*timeSigNumeratorLabel);
+
+    timeSigDenominatorLabel =
+        std::make_unique<DraggableValueLabel>(DraggableValueLabel::Format::Integer);
+    timeSigDenominatorLabel->setRange(1.0, 32.0, 4.0);
+    timeSigDenominatorLabel->setValue(static_cast<double>(timeSignatureDenominator),
+                                      juce::dontSendNotification);
+    timeSigDenominatorLabel->setTextColour(DarkTheme::getColour(DarkTheme::TEXT_PRIMARY));
+    timeSigDenominatorLabel->setShowFillIndicator(false);
+    timeSigDenominatorLabel->setFontSize(14.0f);
+    timeSigDenominatorLabel->setDoubleClickResetsValue(true);
+    timeSigDenominatorLabel->setDrawBorder(false);
+    timeSigDenominatorLabel->setDrawBackground(false);
+    timeSigDenominatorLabel->setSnapToInteger(true);
+    timeSigDenominatorLabel->setJustification(juce::Justification::centredLeft);
+    timeSigDenominatorLabel->onValueChange = [this]() {
+        timeSignatureDenominator =
+            static_cast<int>(std::round(timeSigDenominatorLabel->getValue()));
+        if (onTimeSignatureChange)
+            onTimeSignatureChange(timeSignatureNumerator, timeSignatureDenominator);
+    };
+    addAndMakeVisible(*timeSigDenominatorLabel);
 
     // Auto grid toggle button (like SNAP button)
     autoGridButton = std::make_unique<juce::TextButton>("AUTO");
@@ -699,6 +742,7 @@ void TransportPanel::setupTempoAndQuantize() {
         if (onMetronomeToggle)
             onMetronomeToggle(newState);
     };
+    metronomeButton->addMouseListener(this, false);
     addAndMakeVisible(*metronomeButton);
 
     // Snap button (text-based toggle)
@@ -860,8 +904,8 @@ void TransportPanel::setTimeSignature(int numerator, int denominator) {
     timeSignatureDenominator = denominator;
 
     // Update time signature display
-    timeSignatureLabel->setText(juce::String(numerator) + "/" + juce::String(denominator),
-                                juce::dontSendNotification);
+    timeSigNumeratorLabel->setValue(static_cast<double>(numerator), juce::dontSendNotification);
+    timeSigDenominatorLabel->setValue(static_cast<double>(denominator), juce::dontSendNotification);
 
     // Update beats per bar on BarsBeatsTicksLabels
     playheadPositionLabel->setBeatsPerBar(numerator);
@@ -1024,6 +1068,37 @@ void TransportPanel::updateCpuTooltip() {
         cpuTitleLabel->setTooltip(tip);
     if (cpuValueLabel)
         cpuValueLabel->setTooltip(tip);
+}
+
+void TransportPanel::mouseDown(const juce::MouseEvent& e) {
+    if (e.originalComponent == metronomeButton.get() && e.mods.isRightButtonDown()) {
+        showCountInMenu();
+    }
+}
+
+void TransportPanel::showCountInMenu() {
+    juce::PopupMenu menu;
+    menu.addItem(1, "Off", true, countInMode_ == 0);
+    menu.addItem(5, "1 Beat", true, countInMode_ == 4);
+    menu.addItem(4, "2 Beats", true, countInMode_ == 3);
+    menu.addItem(2, "1 Bar", true, countInMode_ == 1);
+    menu.addItem(3, "2 Bars", true, countInMode_ == 2);
+
+    menu.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(metronomeButton.get()),
+                       [this](int result) {
+                           if (result <= 0)
+                               return;
+                           // Map menu item IDs to CountIn enum values
+                           static constexpr int idToMode[] = {0, 0, 1, 2, 3, 4};
+                           int mode = idToMode[result];
+                           countInMode_ = mode;
+                           if (onCountInModeChange)
+                               onCountInModeChange(mode);
+                       });
+}
+
+void TransportPanel::setCountInMode(int mode) {
+    countInMode_ = mode;
 }
 
 }  // namespace magda

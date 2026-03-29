@@ -24,6 +24,7 @@
 #include "ui/components/common/SvgButton.hpp"
 #include "ui/components/common/TextSlider.hpp"
 #include "ui/components/mixer/LevelMeter.hpp"
+#include "ui/panels/content/ChordPanelContent.hpp"  // relative to magda/daw/
 
 namespace magda::daw::ui {
 
@@ -102,13 +103,14 @@ class DeviceSlotComponent : public NodeComponent,
         return 0;  // Meter is positioned in content area only, not the full height
     }
     int getCollapsedMeterWidth() const override {
-        return METER_STRIP_WIDTH;
+        return isChordEngine_ ? 0 : METER_STRIP_WIDTH;
     }
 
     // Mod/macro data providers
     const magda::ModArray* getModsData() const override;
     const magda::MacroArray* getMacrosData() const override;
     std::vector<std::pair<magda::DeviceId, juce::String>> getAvailableDevices() const override;
+    std::map<magda::DeviceId, std::vector<juce::String>> getDeviceParamNames() const override;
 
     // Mod/macro callbacks
     void onModAmountChangedInternal(int modIndex, float amount) override;
@@ -127,6 +129,7 @@ class DeviceSlotComponent : public NodeComponent,
     void onMacroValueChangedInternal(int macroIndex, float value) override;
     void onMacroTargetChangedInternal(int macroIndex, magda::MacroTarget target) override;
     void onMacroNameChangedInternal(int macroIndex, const juce::String& name) override;
+    void onMacroAllLinksClearedInternal(int macroIndex) override;
     // Contextual link callbacks for macros (similar to mods)
     void onMacroLinkAmountChangedInternal(int macroIndex, magda::MacroTarget target,
                                           float amount) override;
@@ -167,7 +170,8 @@ class DeviceSlotComponent : public NodeComponent,
 
   private:
     magda::DeviceInfo device_;
-    bool isDrumGrid_ = false;  // Track if this is a drum grid for custom header painting
+    bool isDrumGrid_ = false;
+    bool isChordEngine_ = false;
     bool isTracktionDevice_ = false;
     std::unique_ptr<juce::Drawable> tracktionLogo_;
 
@@ -207,6 +211,7 @@ class DeviceSlotComponent : public NodeComponent,
     std::unique_ptr<PitchShiftUI> pitchShiftUI_;
     std::unique_ptr<ImpulseResponseUI> impulseResponseUI_;
     std::unique_ptr<UtilityUI> utilityUI_;
+    std::unique_ptr<ChordPanelContent> chordEngineUI_;
 
     static constexpr int METER_STRIP_WIDTH = 10;
     magda::LevelMeter levelMeter_;
@@ -230,6 +235,7 @@ class DeviceSlotComponent : public NodeComponent,
     // Helper to create custom UI for internal devices
     void createCustomUI();
     void updateCustomUI();
+    void readAndPushModMatrix();  // Read FourOsc mod matrix and push to UI
     void setupCustomUILinking();
 
     // Dynamic layout helpers

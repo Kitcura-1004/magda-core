@@ -319,6 +319,7 @@ void ClipManager::resizeClip(ClipId clipId, double newLength, bool fromStart, do
                 }
             }
         }
+        resolveOverlaps(clipId);
         notifyClipPropertyChanged(clipId);
     }
 }
@@ -877,6 +878,28 @@ void ClipManager::setIsReversed(ClipId clipId, bool reversed) {
 }
 
 // ============================================================================
+// Groove/Shuffle/Swing
+// ============================================================================
+
+void ClipManager::setGrooveTemplate(ClipId clipId, const juce::String& templateName) {
+    if (auto* clip = getClip(clipId)) {
+        if (clip->type == ClipType::MIDI) {
+            clip->grooveTemplate = templateName;
+            notifyClipPropertyChanged(clipId);
+        }
+    }
+}
+
+void ClipManager::setGrooveStrength(ClipId clipId, float strength) {
+    if (auto* clip = getClip(clipId)) {
+        if (clip->type == ClipType::MIDI) {
+            clip->grooveStrength = juce::jlimit(0.0f, 1.0f, strength);
+            notifyClipPropertyChanged(clipId);
+        }
+    }
+}
+
+// ============================================================================
 // Per-Clip Mix
 // ============================================================================
 
@@ -1090,6 +1113,34 @@ void ClipManager::clearMidiNotes(ClipId clipId) {
     if (auto* clip = getClip(clipId)) {
         if (clip->type == ClipType::MIDI) {
             clip->midiNotes.clear();
+            notifyClipPropertyChanged(clipId);
+        }
+    }
+}
+
+void ClipManager::addChordAnnotation(ClipId clipId, const ClipInfo::ChordAnnotation& annotation) {
+    if (auto* clip = getClip(clipId)) {
+        if (clip->type == ClipType::MIDI) {
+            clip->chordAnnotations.push_back(annotation);
+            notifyClipPropertyChanged(clipId);
+        }
+    }
+}
+
+void ClipManager::removeChordAnnotation(ClipId clipId, size_t index) {
+    if (auto* clip = getClip(clipId)) {
+        if (clip->type == ClipType::MIDI && index < clip->chordAnnotations.size()) {
+            clip->chordAnnotations.erase(clip->chordAnnotations.begin() +
+                                         static_cast<ptrdiff_t>(index));
+            notifyClipPropertyChanged(clipId);
+        }
+    }
+}
+
+void ClipManager::clearChordAnnotations(ClipId clipId) {
+    if (auto* clip = getClip(clipId)) {
+        if (clip->type == ClipType::MIDI) {
+            clip->chordAnnotations.clear();
             notifyClipPropertyChanged(clipId);
         }
     }

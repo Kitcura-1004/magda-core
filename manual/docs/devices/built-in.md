@@ -6,6 +6,7 @@ MAGDA includes its own custom devices as well as processors from the Tracktion E
 
 | Device | Description |
 |--------|-------------|
+| **Chord Engine** | Real-time chord detection, suggestion, and AI progression generator. See [Chord Engine](chord-engine.md). |
 | **Drum Grid** | Chain-based drum machine with per-pad FX. See [Drum Grid](drum-grid.md). |
 
 ## Tracktion Engine Devices
@@ -15,7 +16,7 @@ These processors are provided by the Tracktion Engine and are available in every
 | Device | Description |
 |--------|-------------|
 | **Sampler** | 8-voice sample player with ADSR and pitch controls. See [Sampler](sampler.md). |
-| **4OSC Synth** | Four-oscillator subtractive synthesizer |
+| **4OSC Synth** | Four-oscillator subtractive synthesizer with internal mod matrix. See [4OSC Synth](4osc.md). |
 | **EQ** | Parametric equalizer |
 | **Compressor** | Dynamics compressor |
 | **Reverb** | Algorithmic reverb |

@@ -25,6 +25,8 @@ namespace magda {
  * - Coordinate conversion (beat <-> pixel, noteNumber <-> y)
  */
 class PianoRollGridComponent : public juce::Component,
+                               public juce::DragAndDropTarget,
+                               public juce::Timer,
                                public ClipManagerListener,
                                public NoteGridHost {
   public:
@@ -34,6 +36,9 @@ class PianoRollGridComponent : public juce::Component,
     // Component overrides
     void paint(juce::Graphics& g) override;
     void resized() override;
+
+    // Timer (for pending chord blink)
+    void timerCallback() override;
 
     // Mouse handling
     void mouseDown(const juce::MouseEvent& e) override;
@@ -197,7 +202,8 @@ class PianoRollGridComponent : public juce::Component,
         onLeftResizeMultipleNotes;  // compound move+resize for left-edge resize
 
     // Callbacks for edit operations from context menu
-    std::function<void(ClipId, std::vector<size_t>, QuantizeMode)> onQuantizeNotes;
+    std::function<void(ClipId, std::vector<size_t>, QuantizeMode, double gridBeats)>
+        onQuantizeNotes;
     std::function<void(ClipId, std::vector<size_t>)> onCopyNotes;
     std::function<void(ClipId)> onPasteNotes;
     std::function<void(ClipId, std::vector<size_t>)> onDuplicateNotes;
@@ -205,6 +211,18 @@ class PianoRollGridComponent : public juce::Component,
 
     // Edit cursor click on grid (Alt+click) — position in seconds
     std::function<void(double)> onEditCursorSet;
+
+    // Chord block drop — clipId, beat position, notes (noteNumber + velocity pairs), chord name,
+    // length
+    std::function<void(ClipId, double, double, std::vector<std::pair<int, int>>, juce::String)>
+        onChordDropped;
+
+    // DragAndDropTarget
+    bool isInterestedInDragSource(const SourceDetails& details) override;
+    void itemDragEnter(const SourceDetails& details) override;
+    void itemDragMove(const SourceDetails& details) override;
+    void itemDragExit(const SourceDetails& details) override;
+    void itemDropped(const SourceDetails& details) override;
 
   private:
     ClipId clipId_ = INVALID_CLIP_ID;      // Primary selected clip (for backward compatibility)
@@ -289,6 +307,24 @@ class PianoRollGridComponent : public juce::Component,
         juce::Colour colour;
     };
     std::vector<CopyDragGhost> copyDragGhosts_;
+
+    // Chord drop preview state (during DnD drag)
+    bool chordDropActive_ = false;
+    double chordDropBeat_ = 0.0;  // Snapped beat position during drag
+
+    // Pending chord placement (two-step: drop sets position, click/Enter sets length)
+    struct PendingChordDrop {
+        ClipId clipId = INVALID_CLIP_ID;
+        double startBeat = 0.0;
+        double previewEndBeat = 0.0;  // Current mouse position for length preview
+        std::vector<std::pair<int, int>> notes;
+        juce::String chordName;
+        bool active = false;
+        bool blinkOn = true;  // Blink state for visual feedback
+    };
+    PendingChordDrop pendingChord_;
+    void confirmPendingChord(double endBeat);
+    void cancelPendingChord();
 
     // Painting helpers
     void paintGrid(juce::Graphics& g, juce::Rectangle<int> area);
