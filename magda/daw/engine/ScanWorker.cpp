@@ -48,7 +48,10 @@ bool ScanWorker::launchSubprocess() {
 
     // The unique ID is just a command-line marker prefix; each launch creates its
     // own random pipe, so the same ID is safe for parallel workers.
-    return launchWorkerProcess(scannerExe_, "magda-plugin-scanner", 10000, 5000);
+    // streamFlags = 0: do NOT capture stdout/stderr — the scanner writes log lines
+    // to stdout, and if the pipe buffer fills up the subprocess blocks, deadlocking
+    // both processes (same fix as Tracktion Engine's own scanner).
+    return launchWorkerProcess(scannerExe_, "magda-plugin-scanner", 10000, 0);
 }
 
 void ScanWorker::sendScanOneCommand(const juce::String& formatName,

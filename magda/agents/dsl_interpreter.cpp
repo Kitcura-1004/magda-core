@@ -981,22 +981,43 @@ bool Interpreter::executeAddFx(const Params& params) {
         fxName = fxName.substring(1, fxName.length() - 1);
 
     // --- Internal plugin lookup (case-insensitive alias map) ---
-    static const std::map<juce::String, juce::String> internalAliases = {
-        {"eq", "eq"},
-        {"equaliser", "eq"},
-        {"equalizer", "eq"},
-        {"compressor", "compressor"},
-        {"reverb", "reverb"},
-        {"delay", "delay"},
-        {"chorus", "chorus"},
-        {"phaser", "phaser"},
-        {"filter", "lowpass"},
-        {"lowpass", "lowpass"},
-        {"utility", "utility"},
-        {"pitch shift", "pitchshift"},
-        {"pitchshift", "pitchshift"},
-        {"ir reverb", "impulseresponse"},
-        {"impulse response", "impulseresponse"},
+    struct InternalAlias {
+        juce::String pluginId;
+        bool isInstrument;
+    };
+    static const std::map<juce::String, InternalAlias> internalAliases = {
+        // Effects
+        {"eq", {"eq", false}},
+        {"equaliser", {"eq", false}},
+        {"equalizer", {"eq", false}},
+        {"compressor", {"compressor", false}},
+        {"reverb", {"reverb", false}},
+        {"delay", {"delay", false}},
+        {"chorus", {"chorus", false}},
+        {"phaser", {"phaser", false}},
+        {"filter", {"lowpass", false}},
+        {"lowpass", {"lowpass", false}},
+        {"utility", {"utility", false}},
+        {"pitch shift", {"pitchshift", false}},
+        {"pitchshift", {"pitchshift", false}},
+        {"ir reverb", {"impulseresponse", false}},
+        {"impulse response", {"impulseresponse", false}},
+        // Instruments
+        {"4osc", {"4osc", true}},
+        {"4osc synth", {"4osc", true}},
+        {"fourosc", {"4osc", true}},
+        {"sampler", {"magdasampler", true}},
+        {"magda sampler", {"magdasampler", true}},
+        {"drum grid", {"drumgrid", true}},
+        {"drumgrid", {"drumgrid", true}},
+        {"drum machine", {"drumgrid", true}},
+        // MIDI devices
+        {"chord engine", {"midichordengine", false}},
+        {"chord", {"midichordengine", false}},
+        {"midichordengine", {"midichordengine", false}},
+        // Tone generator
+        {"test tone", {"tone", false}},
+        {"tone", {"tone", false}},
     };
 
     auto lowerName = fxName.toLowerCase();
@@ -1004,9 +1025,9 @@ bool Interpreter::executeAddFx(const Params& params) {
     if (aliasIt != internalAliases.end()) {
         DeviceInfo device;
         device.name = fxName;
-        device.pluginId = aliasIt->second;
+        device.pluginId = aliasIt->second.pluginId;
         device.format = PluginFormat::Internal;
-        device.isInstrument = false;
+        device.isInstrument = aliasIt->second.isInstrument;
 
         auto deviceId = TrackManager::getInstance().addDeviceToTrack(ctx_.currentTrackId, device);
         if (deviceId == INVALID_DEVICE_ID) {
