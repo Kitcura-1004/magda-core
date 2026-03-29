@@ -738,6 +738,48 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#groove-swing" class="md-nav__link">
+    <span class="md-ellipsis">
+      Groove &amp; Swing
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Groove &amp; Swing">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#applying-a-groove" class="md-nav__link">
+    <span class="md-ellipsis">
+      Applying a Groove
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#creating-grooves-with-ai" class="md-nav__link">
+    <span class="md-ellipsis">
+      Creating Grooves with AI
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#groove-via-dsl" class="md-nav__link">
+    <span class="md-ellipsis">
+      Groove via DSL
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#freeze-bounce-and-render" class="md-nav__link">
     <span class="md-ellipsis">
       Freeze, Bounce, and Render
@@ -967,6 +1009,28 @@
 
               
             
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../panels/chord-panel/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Chord Panel
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
           </ul>
         </nav>
       
@@ -1027,6 +1091,50 @@
   
   <span class="md-ellipsis">
     Built-in Devices
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../devices/4osc/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    4OSC Synth
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../devices/chord-engine/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Chord Engine
     
   </span>
   
@@ -1293,6 +1401,28 @@
   
   
     <li class="md-nav__item">
+      <a href="../reference/dsl/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    DSL Reference
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../reference/keyboard-shortcuts/" class="md-nav__link">
         
   
@@ -1516,6 +1646,48 @@
   <a href="#time-stretch-algorithm" class="md-nav__link">
     <span class="md-ellipsis">
       Time-Stretch Algorithm
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#groove-swing" class="md-nav__link">
+    <span class="md-ellipsis">
+      Groove &amp; Swing
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Groove &amp; Swing">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#applying-a-groove" class="md-nav__link">
+    <span class="md-ellipsis">
+      Applying a Groove
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#creating-grooves-with-ai" class="md-nav__link">
+    <span class="md-ellipsis">
+      Creating Grooves with AI
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#groove-via-dsl" class="md-nav__link">
+    <span class="md-ellipsis">
+      Groove via DSL
     </span>
   </a>
   
@@ -1773,6 +1945,28 @@
 </ul>
 <h3 id="time-stretch-algorithm">Time-Stretch Algorithm<a class="headerlink" href="#time-stretch-algorithm" title="Permanent link">&para;</a></h3>
 <p>When Beat or Warp mode is active, MAGDA uses the <strong>SoundTouch</strong> algorithm for time-stretching.</p>
+<h2 id="groove-swing">Groove &amp; Swing<a class="headerlink" href="#groove-swing" title="Permanent link">&para;</a></h2>
+<p>Groove templates add a human feel to MIDI clips by shifting note timing away from the strict grid.</p>
+<p><img alt="Groove Inspector" src="../assets/images/panels/groove-inspector.png" width="300" /></p>
+<h3 id="applying-a-groove">Applying a Groove<a class="headerlink" href="#applying-a-groove" title="Permanent link">&para;</a></h3>
+<ol>
+<li>Select a MIDI clip</li>
+<li>In the <strong>Inspector</strong>, find the <strong>Groove</strong> section</li>
+<li>Click the dropdown to open the groove picker</li>
+<li>Select a category (Swing, Push Swing, Pull Swing, Push Snare, Pull Snare, Timing, Custom) and a template</li>
+</ol>
+<p>The groove picker shows categories on the left and templates on the right. Templates include standard swing amounts (e.g. "PushSwing 1/4 05%" through "PushSwing 1/4 50%").</p>
+<h3 id="creating-grooves-with-ai">Creating Grooves with AI<a class="headerlink" href="#creating-grooves-with-ai" title="Permanent link">&para;</a></h3>
+<p>You can create custom groove templates using the <code>/groove</code> slash command in the AI Assistant:</p>
+<p><img alt="Groove via AI" src="../assets/images/panels/groove-ai.png" width="400" /></p>
+<div class="highlight"><pre><span></span><code>/groove funky 16th
+</code></pre></div>
+<p>The AI generates a groove template based on your description. Created templates appear in the <strong>Custom</strong> category of the groove picker.</p>
+<h3 id="groove-via-dsl">Groove via DSL<a class="headerlink" href="#groove-via-dsl" title="Permanent link">&para;</a></h3>
+<p>You can also list and apply grooves using the DSL console:</p>
+<div class="highlight"><pre><span></span><code>groove.list()
+groove.set(template=&quot;Basic 8th Swing&quot;, strength=0.5)
+</code></pre></div>
 <h2 id="freeze-bounce-and-render">Freeze, Bounce, and Render<a class="headerlink" href="#freeze-bounce-and-render" title="Permanent link">&para;</a></h2>
 <p>These operations render a track or clip's output to audio, useful for reducing CPU load or committing effects.</p>
 <ul>

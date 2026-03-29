@@ -10,13 +10,13 @@
       
       
       
-        <link rel="canonical" href="https://Conceptual-Machines.github.io/magda-core/panels/inspector/">
+        <link rel="canonical" href="https://Conceptual-Machines.github.io/magda-core/panels/chord-panel/">
       
       
-        <link rel="prev" href="../../mixer-view/">
+        <link rel="prev" href="../editors/">
       
       
-        <link rel="next" href="../browsers/">
+        <link rel="next" href="../../devices/built-in/">
       
       
       <link rel="icon" href="../../assets/images/magda-lisa.svg">
@@ -24,7 +24,7 @@
     
     
       
-        <title>Inspector - MAGDA Manual</title>
+        <title>Chord Panel - MAGDA Manual</title>
       
     
     
@@ -78,7 +78,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#inspector" class="md-skip">
+        <a href="#chord-panel" class="md-skip">
           Skip to content
         </a>
       
@@ -113,7 +113,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              Inspector
+              Chord Panel
             
           </span>
         </div>
@@ -694,31 +694,10 @@
                 
   
   
-    
   
   
-  
-    <li class="md-nav__item md-nav__item--active">
-      
-      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
-      
-      
-        
-      
-      
-        <label class="md-nav__link md-nav__link--active" for="__toc">
-          
-  
-  <span class="md-ellipsis">
-    Inspector
-    
-  </span>
-  
-
-          <span class="md-nav__icon md-icon"></span>
-        </label>
-      
-      <a href="./" class="md-nav__link md-nav__link--active">
+    <li class="md-nav__item">
+      <a href="../inspector/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -728,77 +707,6 @@
   
 
       </a>
-      
-        
-
-<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
-  
-  
-  
-    
-  
-  
-    <label class="md-nav__title" for="__toc">
-      <span class="md-nav__icon md-icon"></span>
-      Table of contents
-    </label>
-    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
-      
-        <li class="md-nav__item">
-  <a href="#track-inspector" class="md-nav__link">
-    <span class="md-ellipsis">
-      Track Inspector
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#clip-inspector" class="md-nav__link">
-    <span class="md-ellipsis">
-      Clip Inspector
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Clip Inspector">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#audio-properties" class="md-nav__link">
-    <span class="md-ellipsis">
-      Audio Properties
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#note-inspector" class="md-nav__link">
-    <span class="md-ellipsis">
-      Note Inspector
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#device-inspector" class="md-nav__link">
-    <span class="md-ellipsis">
-      Device Inspector
-    </span>
-  </a>
-  
-</li>
-      
-    </ul>
-  
-</nav>
-      
     </li>
   
 
@@ -874,10 +782,31 @@
                 
   
   
+    
   
   
-    <li class="md-nav__item">
-      <a href="../chord-panel/" class="md-nav__link">
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  <span class="md-ellipsis">
+    Chord Panel
+    
+  </span>
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
         
   
   <span class="md-ellipsis">
@@ -887,6 +816,98 @@
   
 
       </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#layout" class="md-nav__link">
+    <span class="md-ellipsis">
+      Layout
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#chord-detection" class="md-nav__link">
+    <span class="md-ellipsis">
+      Chord Detection
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#key-detection" class="md-nav__link">
+    <span class="md-ellipsis">
+      Key Detection
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#scale-detection" class="md-nav__link">
+    <span class="md-ellipsis">
+      Scale Detection
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#suggestions" class="md-nav__link">
+    <span class="md-ellipsis">
+      Suggestions
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#footer-controls" class="md-nav__link">
+    <span class="md-ellipsis">
+      Footer Controls
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#browse" class="md-nav__link">
+    <span class="md-ellipsis">
+      Browse
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#ai-mode" class="md-nav__link">
+    <span class="md-ellipsis">
+      AI Mode
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
     </li>
   
 
@@ -1377,51 +1398,72 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#track-inspector" class="md-nav__link">
+  <a href="#layout" class="md-nav__link">
     <span class="md-ellipsis">
-      Track Inspector
+      Layout
     </span>
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#clip-inspector" class="md-nav__link">
+  <a href="#chord-detection" class="md-nav__link">
     <span class="md-ellipsis">
-      Clip Inspector
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Clip Inspector">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#audio-properties" class="md-nav__link">
-    <span class="md-ellipsis">
-      Audio Properties
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#note-inspector" class="md-nav__link">
-    <span class="md-ellipsis">
-      Note Inspector
+      Chord Detection
     </span>
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#device-inspector" class="md-nav__link">
+  <a href="#key-detection" class="md-nav__link">
     <span class="md-ellipsis">
-      Device Inspector
+      Key Detection
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#scale-detection" class="md-nav__link">
+    <span class="md-ellipsis">
+      Scale Detection
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#suggestions" class="md-nav__link">
+    <span class="md-ellipsis">
+      Suggestions
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#footer-controls" class="md-nav__link">
+    <span class="md-ellipsis">
+      Footer Controls
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#browse" class="md-nav__link">
+    <span class="md-ellipsis">
+      Browse
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#ai-mode" class="md-nav__link">
+    <span class="md-ellipsis">
+      AI Mode
     </span>
   </a>
   
@@ -1446,54 +1488,115 @@
   
 
 
-<h1 id="inspector">Inspector<a class="headerlink" href="#inspector" title="Permanent link">&para;</a></h1>
-<p>The Inspector panel is on the right side of the window. It displays context-sensitive properties for the currently selected item.</p>
-<p><img alt="Inspector — Audio Clip" src="../../assets/images/panels/inspector-audio.png" /></p>
-<h2 id="track-inspector">Track Inspector<a class="headerlink" href="#track-inspector" title="Permanent link">&para;</a></h2>
-<p>Displayed when a track is selected. Shows:</p>
+<h1 id="chord-panel">Chord Panel<a class="headerlink" href="#chord-panel" title="Permanent link">&para;</a></h1>
+<div class="admonition note">
+<p class="admonition-title">Chord Engine device</p>
+<p>The Chord Panel documents the standalone bottom-panel view. The same functionality is also available as a device on any instrument track — see <a href="../../devices/chord-engine/">Chord Engine</a>.</p>
+</div>
+<p><img alt="Chord Panel — K&amp;S Mode" src="../../assets/images/devices/chord-engine-ks.png" /></p>
+<p>The Chord Panel is a real-time chord analysis and suggestion tool. It detects chords as you play, identifies the musical key, lists matching scales, and suggests what chord to play next.</p>
+<h2 id="layout">Layout<a class="headerlink" href="#layout" title="Permanent link">&para;</a></h2>
+<p>The panel is divided into three columns:</p>
+<table>
+<thead>
+<tr>
+<th>Column</th>
+<th>Content</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Chord</strong> (left)</td>
+<td>Currently detected chord and recent history</td>
+</tr>
+<tr>
+<td><strong>Suggestions</strong> (centre)</td>
+<td>Context-aware chord suggestions with Roman numeral degrees</td>
+</tr>
+<tr>
+<td><strong>Key / Scale</strong> (right)</td>
+<td>Detected key, matching scales, and scale browser</td>
+</tr>
+</tbody>
+</table>
+<p>A <strong>footer toolbar</strong> spans the bottom with controls that shape the suggestions.</p>
+<h2 id="chord-detection">Chord Detection<a class="headerlink" href="#chord-detection" title="Permanent link">&para;</a></h2>
+<p>Play notes on a MIDI instrument track and the panel displays the detected chord name in real time. Recent chords appear in the <strong>History</strong> section below.</p>
+<p>Detection uses pitch-class set matching — it compares held notes against a library of known chord shapes (triads, sevenths, ninths, elevenths, thirteenths, augmented, diminished, suspended, and slash voicings).</p>
+<h2 id="key-detection">Key Detection<a class="headerlink" href="#key-detection" title="Permanent link">&para;</a></h2>
+<p>The detected key (e.g. "C minor") is shown at the top of the right column. It uses the <strong>Krumhansl-Schmuckler key-finding algorithm</strong>:</p>
+<ol>
+<li>A <strong>pitch-class histogram</strong> accumulates every note you play, weighted by an exponential decay (recent notes matter more than old ones; the decay time constant is 5 seconds).</li>
+<li>The histogram is correlated against <strong>Krumhansl major and minor profiles</strong> — empirically derived distributions of how often each pitch class appears in music of a given key.</li>
+<li>All 24 possible keys (12 roots x major/minor) are scored. A small bias toward the third of each candidate key helps disambiguate major vs minor.</li>
+<li>The highest-scoring key wins.</li>
+</ol>
+<div class="admonition info">
+<p class="admonition-title">Why the detected key might not match any chord you played</p>
+<p>The algorithm detects the <em>tonal centre</em> from the aggregate pitch content, not from specific chord names. For example, playing G minor and Bb major together contributes pitch classes (G, Bb, D, Bb, D, F) which can correlate strongly with C minor's profile — even though you never played a C minor chord. This is musically correct: G minor and Bb major are the v and VII chords of C minor.</p>
+</div>
+<h2 id="scale-detection">Scale Detection<a class="headerlink" href="#scale-detection" title="Permanent link">&para;</a></h2>
+<p>Below the key, the panel lists the top matching scales (Ionian, Aeolian, Dorian, Pentatonic, etc.). These are ranked by how well the pitch classes you've played match each scale's note set, with a preference for:</p>
 <ul>
-<li><strong>Track name</strong> — Click to rename</li>
-<li><strong>Track color</strong> — Click the color swatch to choose a custom color, or leave as auto-assigned</li>
-<li><strong>Volume and pan</strong> — Numeric readouts and controls</li>
-<li><strong>Input routing</strong> — Select audio/MIDI input source</li>
-<li><strong>Output routing</strong> — Select audio/MIDI output destination</li>
-<li><strong>Sends</strong> — List of send slots with level controls</li>
+<li>Scales rooted on the detected key</li>
+<li>Seven-note diatonic scales over five-note pentatonic scales</li>
+<li>Common modes (Ionian, Aeolian) over exotic ones</li>
 </ul>
-<h2 id="clip-inspector">Clip Inspector<a class="headerlink" href="#clip-inspector" title="Permanent link">&para;</a></h2>
-<p>Displayed when a clip is selected. Shows:</p>
+<p><strong>Shift-click</strong> a scale to select it for filtering (it highlights green). You can select multiple scales — their pitch classes are merged and used to filter chord suggestions. This lets you constrain suggestions to specific tonalities.</p>
+<p><strong>Click</strong> a scale (without Shift) to open a popup showing all diatonic chords built from that scale.</p>
+<h2 id="suggestions">Suggestions<a class="headerlink" href="#suggestions" title="Permanent link">&para;</a></h2>
+<p>The centre column shows chord suggestions ranked by musical relevance. Suggestions are generated from:</p>
 <ul>
-<li><strong>Clip name</strong> — Click to rename</li>
-<li><strong>Clip color</strong> — Click the color swatch to choose a custom color</li>
-<li><strong>Position</strong> — Start time, end time, and phase offset on the timeline</li>
-<li><strong>Loop settings</strong> — Loop on/off, loop start, loop length</li>
+<li><strong>Diatonic candidates</strong> — chords built from the detected key's scale degrees (I through VII), with optional extensions (7ths, 9ths, 11ths, 13ths)</li>
+<li><strong>Non-diatonic candidates</strong> — borrowed chords, secondary dominants, and alterations that add colour outside the key</li>
+<li><strong>Voice leading</strong> — suggestions are voiced to minimise movement from the last chord you played</li>
 </ul>
-<h3 id="audio-properties">Audio Properties<a class="headerlink" href="#audio-properties" title="Permanent link">&para;</a></h3>
-<p>For audio clips, the inspector shows additional controls:</p>
-<ul>
-<li><strong>Warp / Beat</strong> — Toggle time-stretch mode; select algorithm (e.g. SoundTouch HQ)</li>
-<li><strong>Tempo</strong> — Source BPM and beat length detection</li>
-<li><strong>Transient Detection</strong> — Sensitivity slider for transient markers</li>
-<li><strong>Pitch</strong> — Transpose in semitones</li>
-<li><strong>Mix</strong> — Volume, pan, and gain controls</li>
-<li><strong>Reverse</strong> — Reverse the clip audio</li>
-<li><strong>Launch Quantize</strong> — Quantize setting for Session View clip launching</li>
-</ul>
-<h2 id="note-inspector">Note Inspector<a class="headerlink" href="#note-inspector" title="Permanent link">&para;</a></h2>
-<p>Displayed when one or more MIDI notes are selected in the Piano Roll. Shows:</p>
-<ul>
-<li><strong>Pitch</strong> — MIDI note number and name</li>
-<li><strong>Velocity</strong> — Note velocity (0–127)</li>
-<li><strong>Start</strong> — Note start position</li>
-<li><strong>Length</strong> — Note duration</li>
-</ul>
-<p>When multiple notes are selected, the inspector shows ranges (e.g., "C3–G5") and allows batch editing.</p>
-<h2 id="device-inspector">Device Inspector<a class="headerlink" href="#device-inspector" title="Permanent link">&para;</a></h2>
-<p>Displayed when a device (plugin or built-in) is selected in the track chain. Shows:</p>
-<ul>
-<li><strong>Device name</strong> — Click to rename the instance</li>
-<li><strong>Device type</strong> — Plugin format and category</li>
-<li><strong>Parameters</strong> — All exposed parameters with knobs/sliders</li>
-</ul>
+<p>Recently played chords are filtered out so suggestions always point forward.</p>
+<h2 id="footer-controls">Footer Controls<a class="headerlink" href="#footer-controls" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Control</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Nov</strong> (Novelty)</td>
+<td>Drag to adjust the balance between safe diatonic suggestions (0%) and adventurous non-diatonic ones (100%). At 0%, only scale-degree chords appear. Above 80%, scale filtering is relaxed.</td>
+</tr>
+<tr>
+<td><strong>7th</strong></td>
+<td>Toggle seventh chord suggestions (Maj7, min7, dom7, dim7)</td>
+</tr>
+<tr>
+<td><strong>9th</strong></td>
+<td>Toggle ninth chord suggestions (Maj9, min9, dom9)</td>
+</tr>
+<tr>
+<td><strong>11th</strong></td>
+<td>Toggle eleventh chord suggestions (dom11, min11)</td>
+</tr>
+<tr>
+<td><strong>13th</strong></td>
+<td>Toggle thirteenth chord suggestions (dom13, min13)</td>
+</tr>
+<tr>
+<td><strong>Alt</strong></td>
+<td>Toggle altered/non-diatonic chord suggestions (borrowed chords, tritone subs)</td>
+</tr>
+<tr>
+<td><strong>Funnel icon</strong></td>
+<td>Toggle scale-based filtering of suggestions on/off</td>
+</tr>
+</tbody>
+</table>
+<h2 id="browse">Browse<a class="headerlink" href="#browse" title="Permanent link">&para;</a></h2>
+<p>The <strong>Browse</strong> button at the bottom of the Key/Scale column opens the scale explorer, where you can browse all available scales and their diatonic chords.</p>
+<h2 id="ai-mode">AI Mode<a class="headerlink" href="#ai-mode" title="Permanent link">&para;</a></h2>
+<p><img alt="Chord Panel — AI Mode" src="../../assets/images/devices/chord-engine-ai.png" /></p>
+<p>Switch to the <strong>AI</strong> tab to generate chord progressions from text descriptions. Type a prompt describing the style or mood (e.g. "Soulful I-iv-V7", "Jazzy backdoor voicing") and the AI returns labelled progressions as clickable chord buttons. Chords can be auditioned by clicking or dragged onto the Piano Roll.</p>
+<p>See <a href="../../devices/chord-engine/#ai-tab">Chord Engine — AI Tab</a> for full details.</p>
 
 
 
