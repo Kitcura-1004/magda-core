@@ -893,57 +893,63 @@ void AIChatConsoleContent::appendToChat(const juce::String& text) {
 void AIChatConsoleContent::paint(juce::Graphics& g) {
     g.fillAll(DarkTheme::getPanelBackgroundColour());
 
-    // Draw chat history + status footer as one rounded panel
-    auto chatBounds = chatHistory_.getBounds().toFloat();
-    auto statusBounds = configStatusLabel_.getBounds().toFloat();
-    auto chatPanel = chatBounds.getUnion(statusBounds);
-    g.setColour(DarkTheme::getColour(DarkTheme::BUTTON_NORMAL));
-    g.fillRoundedRectangle(chatPanel, 4.0f);
-    g.setColour(DarkTheme::getBorderColour());
-    g.drawRoundedRectangle(chatPanel, 4.0f, 1.0f);
-
-    // Separator between chat and status footer
     if (activeTab_ == ConsoleTab::AI) {
+        // Draw chat history + status footer as one rounded panel
+        auto chatBounds = chatHistory_.getBounds().toFloat();
+        auto statusBounds = configStatusLabel_.getBounds().toFloat();
+        auto chatPanel = chatBounds.getUnion(statusBounds);
+        g.setColour(DarkTheme::getColour(DarkTheme::BUTTON_NORMAL));
+        g.fillRoundedRectangle(chatPanel, 4.0f);
+        g.setColour(DarkTheme::getBorderColour());
+        g.drawRoundedRectangle(chatPanel, 4.0f, 1.0f);
+
+        // Separator between chat and status footer
         float sepY = chatBounds.getBottom();
         g.drawHorizontalLine(static_cast<int>(sepY), chatPanel.getX() + 1.0f,
                              chatPanel.getRight() - 1.0f);
-    }
 
-    // Draw input box + bottom bar as one unified rounded rectangle
-    auto inputBounds = inputBox_.getBounds();
-    auto barBounds = bottomBarBounds_;
-    auto combined = inputBounds.getUnion(barBounds).toFloat();
+        // Draw input box + bottom bar as one unified rounded rectangle
+        auto inputBounds = inputBox_.getBounds();
+        auto barBounds = bottomBarBounds_;
+        auto combined = inputBounds.getUnion(barBounds).toFloat();
 
-    g.setColour(DarkTheme::getColour(DarkTheme::BUTTON_NORMAL));
-    g.fillRoundedRectangle(combined, 4.0f);
-    g.setColour(DarkTheme::getBorderColour());
-    g.drawRoundedRectangle(combined, 4.0f, 1.0f);
+        g.setColour(DarkTheme::getColour(DarkTheme::BUTTON_NORMAL));
+        g.fillRoundedRectangle(combined, 4.0f);
+        g.setColour(DarkTheme::getBorderColour());
+        g.drawRoundedRectangle(combined, 4.0f, 1.0f);
 
-    // Thin horizontal border between input and bottom bar
-    float separatorY = static_cast<float>(inputBounds.getBottom());
-    g.drawHorizontalLine(static_cast<int>(separatorY), combined.getX() + 1.0f,
-                         combined.getRight() - 1.0f);
+        // Thin horizontal border between input and bottom bar
+        float separatorY = static_cast<float>(inputBounds.getBottom());
+        g.drawHorizontalLine(static_cast<int>(separatorY), combined.getX() + 1.0f,
+                             combined.getRight() - 1.0f);
 
-    // Draw context icon
-    if (contextIcon_ != ContextIcon::None) {
-        juce::Drawable* icon = nullptr;
-        if (contextIcon_ == ContextIcon::Track || contextIcon_ == ContextIcon::Device)
-            icon = trackIconDrawable_.get();
-        else if (contextIcon_ == ContextIcon::Clip)
-            icon = clipIconDrawable_.get();
+        // Draw context icon
+        if (contextIcon_ != ContextIcon::None) {
+            juce::Drawable* icon = nullptr;
+            if (contextIcon_ == ContextIcon::Track || contextIcon_ == ContextIcon::Device)
+                icon = trackIconDrawable_.get();
+            else if (contextIcon_ == ContextIcon::Clip)
+                icon = clipIconDrawable_.get();
 
-        if (icon) {
-            auto iconBounds = contextIconBounds_.toFloat().reduced(6.0f);
-            auto colour = contextEnabled_ ? DarkTheme::getAccentColour()
-                                          : DarkTheme::getSecondaryTextColour().withAlpha(0.3f);
-            // Tint a copy to avoid mutating the stored drawable
-            static const auto svgGrey = juce::Colour(0xFFB3B3B3);
-            static const auto svgWhite = juce::Colours::white;
-            auto iconCopy = icon->createCopy();
-            iconCopy->replaceColour(svgGrey, colour);
-            iconCopy->replaceColour(svgWhite, colour);
-            iconCopy->drawWithin(g, iconBounds, juce::RectanglePlacement::centred, 1.0f);
+            if (icon) {
+                auto iconBounds = contextIconBounds_.toFloat().reduced(6.0f);
+                auto colour = contextEnabled_ ? DarkTheme::getAccentColour()
+                                              : DarkTheme::getSecondaryTextColour().withAlpha(0.3f);
+                static const auto svgGrey = juce::Colour(0xFFB3B3B3);
+                static const auto svgWhite = juce::Colours::white;
+                auto iconCopy = icon->createCopy();
+                iconCopy->replaceColour(svgGrey, colour);
+                iconCopy->replaceColour(svgWhite, colour);
+                iconCopy->drawWithin(g, iconBounds, juce::RectanglePlacement::centred, 1.0f);
+            }
         }
+    } else {
+        // Draw DSL output area as rounded panel
+        auto outputBounds = dslOutput_.getBounds().toFloat();
+        g.setColour(DarkTheme::getColour(DarkTheme::BUTTON_NORMAL));
+        g.fillRoundedRectangle(outputBounds, 4.0f);
+        g.setColour(DarkTheme::getBorderColour());
+        g.drawRoundedRectangle(outputBounds, 4.0f, 1.0f);
     }
 }
 
