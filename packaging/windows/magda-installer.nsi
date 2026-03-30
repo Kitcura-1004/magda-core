@@ -29,6 +29,7 @@ Unicode True
 Section "Install"
     SetOutPath $INSTDIR
     File "MAGDA.exe"
+    File /nonfatal "magda_plugin_scanner.exe"
 
     ; Create uninstaller
     WriteUninstaller "$INSTDIR\Uninstall.exe"
@@ -55,6 +56,7 @@ SectionEnd
 
 Section "Uninstall"
     Delete "$INSTDIR\MAGDA.exe"
+    Delete "$INSTDIR\magda_plugin_scanner.exe"
     Delete "$INSTDIR\Uninstall.exe"
     RMDir "$INSTDIR"
 

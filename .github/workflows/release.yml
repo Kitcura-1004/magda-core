@@ -340,6 +340,16 @@ jobs:
         $stagingDir = "packaging\windows"
         Copy-Item "${{ steps.locate.outputs.exe_path }}" "$stagingDir\MAGDA.exe"
 
+        # Copy plugin scanner executable alongside MAGDA.exe
+        $exeDir = Split-Path "${{ steps.locate.outputs.exe_path }}"
+        $scanner = Join-Path $exeDir "magda_plugin_scanner.exe"
+        if (Test-Path $scanner) {
+          Copy-Item $scanner "$stagingDir\magda_plugin_scanner.exe"
+          Write-Output "Copied plugin scanner to staging"
+        } else {
+          Write-Warning "magda_plugin_scanner.exe not found at $scanner"
+        }
+
         makensis /DVERSION=$env:VERSION "$stagingDir\magda-installer.nsi"
 
         $installerName = "MAGDA-$env:VERSION-Windows-x86_64-Setup.exe"
@@ -465,6 +475,15 @@ jobs:
         fi
         echo "Found binary: $BINARY"
         cp "$BINARY" "$APPDIR/usr/bin/MAGDA"
+
+        # Copy plugin scanner alongside the main binary
+        SCANNER=$(find build -name "magda_plugin_scanner" -type f -executable | head -1)
+        if [ -n "$SCANNER" ]; then
+          echo "Found scanner: $SCANNER"
+          cp "$SCANNER" "$APPDIR/usr/bin/magda_plugin_scanner"
+        else
+          echo "Warning: magda_plugin_scanner not found"
+        fi
 
         # Copy icon
         cp assets/app_icon.png "$APPDIR/usr/share/icons/hicolor/256x256/apps/magda.png"
