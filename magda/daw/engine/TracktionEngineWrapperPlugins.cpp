@@ -1,5 +1,6 @@
 #include "PluginScanCoordinator.hpp"
 #include "TracktionEngineWrapper.hpp"
+#include "core/Config.hpp"
 
 namespace magda {
 
@@ -111,6 +112,12 @@ void TracktionEngineWrapper::startPluginScan(
 
             // Save the updated plugin list to persistent storage
             savePluginList();
+
+            // Persist total plugin count only after a successful scan
+            if (success) {
+                Config::getInstance().setTotalPluginCount(numPlugins);
+                Config::getInstance().save();
+            }
 
             isScanning_ = false;
 
