@@ -166,6 +166,16 @@ void PluginScanCoordinator::startIncrementalScan(juce::AudioPluginFormatManager&
 
 std::vector<PluginScanCoordinator::PluginToScan> PluginScanCoordinator::discoverPluginFiles(
     juce::AudioPluginFormatManager& formatManager) {
+    juce::StringArray excludedPaths;
+    for (const auto& entry : excludedPlugins_)
+        excludedPaths.add(entry.path);
+    return discoverPluginFiles(formatManager, excludedPaths,
+                               Config::getInstance().getCustomPluginPaths());
+}
+
+std::vector<PluginScanCoordinator::PluginToScan> PluginScanCoordinator::discoverPluginFiles(
+    juce::AudioPluginFormatManager& formatManager, const juce::StringArray& excludedPaths,
+    const std::vector<std::string>& customPaths) {
     std::vector<PluginToScan> result;
     for (int i = 0; i < formatManager.getNumFormats(); ++i) {
         auto* format = formatManager.getFormat(i);
@@ -176,15 +186,10 @@ std::vector<PluginScanCoordinator::PluginToScan> PluginScanCoordinator::discover
             continue;
 
         auto searchPath = format->getDefaultLocationsToSearch();
-        for (const auto& p : Config::getInstance().getCustomPluginPaths())
+        for (const auto& p : customPaths)
             searchPath.add(juce::File(p));
 
         auto files = format->searchPathsForPlugins(searchPath, true, false);
-
-        juce::StringArray excludedPaths;
-        for (const auto& entry : excludedPlugins_)
-            excludedPaths.add(entry.path);
-
         for (const auto& file : files) {
             if (!excludedPaths.contains(file))
                 result.push_back({formatName, file});
@@ -412,18 +417,10 @@ void PluginScanCoordinator::finishScan(bool success) {
 }
 
 void PluginScanCoordinator::killOrphanScannerProcesses() {
-#if JUCE_MAC || JUCE_LINUX
-    juce::ChildProcess killProc;
-    if (killProc.start("pkill -f magda_plugin_scanner")) {
-        killProc.waitForProcessToFinish(3000);
-    }
-#elif JUCE_WINDOWS
-    juce::ChildProcess killProc;
-    if (killProc.start("taskkill /F /IM magda_plugin_scanner.exe")) {
-        killProc.waitForProcessToFinish(3000);
-    }
-#endif
-    DBG("[ScanCoordinator] Cleaned up orphan scanner processes");
+    // Workers are already cleaned up via abort() / destructor which kills their
+    // child processes through JUCE's ChildProcessCoordinator. No need to run
+    // pkill/taskkill which could kill scanner processes from other MAGDA instances.
+    DBG("[ScanCoordinator] Scanner processes cleaned up via worker shutdown");
 }
 
 // Exclusion management

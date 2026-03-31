@@ -14,6 +14,18 @@ ScanWorker::~ScanWorker() {
 void ScanWorker::scanPlugin(const juce::String& formatName, const juce::String& pluginPath) {
     jassert(!busy_);
 
+#if !JUCE_WINDOWS
+    // On Mac/Linux, always start a fresh subprocess per plugin to avoid
+    // accumulated state from DLL load/unload and to keep process count clean.
+    // IMPORTANT: Kill BEFORE setting busy_/receivedDone_, because
+    // killWorkerProcess() synchronously triggers handleConnectionLost(),
+    // which would report a false crash if busy_ were already true.
+    if (connected_) {
+        killWorkerProcess();
+        connected_ = false;
+    }
+#endif
+
     busy_ = true;
     receivedDone_ = false;
     currentFormat_ = formatName;
@@ -21,9 +33,14 @@ void ScanWorker::scanPlugin(const juce::String& formatName, const juce::String& 
     currentResult_ = {};
     currentResult_.pluginPath = pluginPath;
 
+#if JUCE_WINDOWS
     // Reuse existing subprocess if still connected; only launch a new one
     // when this is the first scan or after a crash killed the previous process.
+    // On Windows, CreateProcess is expensive so we keep the subprocess alive.
     if (!connected_) {
+#else
+    {
+#endif
         if (!launchSubprocess()) {
             juce::Logger::writeToLog("[ScanWorker " + juce::String(workerIndex_) +
                                      "] Failed to launch subprocess for: " + pluginPath);
@@ -101,9 +118,6 @@ void ScanWorker::handleMessageFromWorker(const juce::MemoryBlock& message) {
         DBG("[ScanWorker " << workerIndex_ << "] Error: " << plugin << " - " << error);
     } else if (msgType == ScannerIPC::MSG_SCAN_COMPLETE) {
         receivedDone_ = true;
-        // Don't send QUIT — keep the subprocess alive so the next plugin can
-        // reuse it without the cost of launching a new process. The subprocess
-        // is only killed on abort, timeout, or when the worker is destroyed.
         bool scanOk = currentResult_.errorMessage.isEmpty();
         // Defer the result callback so we fully exit the ChildProcessCoordinator's
         // IPC callback before the coordinator tries to send the next scan command

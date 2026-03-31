@@ -33,8 +33,9 @@ void TracktionEngineWrapper::initializePluginFormats() {
     // Load saved plugin list from persistent storage
     loadPluginList();
 
-    // Auto-detect newly installed (or removed) plugins
-    detectNewPlugins(onPluginScanStatus);
+    // Auto-detect newly installed (or removed) plugins (if enabled)
+    if (Config::getInstance().getScanPluginsOnStartup())
+        detectNewPlugins(onPluginScanStatus);
 
     // Log registered plugin formats
     auto& formatManager = pluginManager.pluginFormatManager;
@@ -436,6 +437,14 @@ bool TracktionEngineWrapper::initialize() {
 
 void TracktionEngineWrapper::shutdown() {
     DBG("TracktionEngineWrapper::shutdown - starting...");
+
+    // Signal that this object is being destroyed so pending callAsync lambdas
+    // that captured aliveFlag_ can bail out instead of dereferencing `this`.
+    *aliveFlag_ = false;
+
+    // Wait for background plugin discovery to finish before tearing down
+    if (pluginDiscoveryThread_.joinable())
+        pluginDiscoveryThread_.join();
 
     // Release test tone plugin first (before Edit is destroyed)
     testTonePlugin_.reset();

@@ -260,6 +260,13 @@ PluginSettingsDialog::PluginSettingsDialog(TracktionEngineWrapper* engine)
     };
     addAndMakeVisible(viewReportButton_);
 
+    scanOnStartupToggle_.setButtonText("Scan for new plugins on startup");
+    scanOnStartupToggle_.setToggleState(Config::getInstance().getScanPluginsOnStartup(),
+                                        juce::dontSendNotification);
+    scanOnStartupToggle_.setColour(juce::ToggleButton::textColourId,
+                                   DarkTheme::getColour(DarkTheme::TEXT_SECONDARY));
+    addAndMakeVisible(scanOnStartupToggle_);
+
     scanProgressBar_.setPercentageDisplay(true);
     scanProgressBar_.setVisible(false);
     addAndMakeVisible(scanProgressBar_);
@@ -340,7 +347,7 @@ PluginSettingsDialog::PluginSettingsDialog(TracktionEngineWrapper* engine)
     };
     addAndMakeVisible(cancelButton_);
 
-    setSize(550, 650);
+    setSize(550, 680);
 }
 
 PluginSettingsDialog::~PluginSettingsDialog() {
@@ -394,6 +401,8 @@ void PluginSettingsDialog::resized() {
     bounds.removeFromTop(2);
     scanStatusLabel_.setBounds(bounds.removeFromTop(18));
     pluginCountLabel_.setBounds(bounds.removeFromTop(18));
+    bounds.removeFromTop(2);
+    scanOnStartupToggle_.setBounds(bounds.removeFromTop(22));
 
     bounds.removeFromTop(spacing);
 
@@ -436,12 +445,14 @@ void PluginSettingsDialog::setScanningUIEnabled(bool enabled) {
     viewReportButton_.setEnabled(enabled);
     removeSelectedButton_.setEnabled(enabled);
     resetAllButton_.setEnabled(enabled);
+    scanOnStartupToggle_.setEnabled(enabled);
     okButton_.setEnabled(enabled);
     cancelButton_.setEnabled(enabled);
 }
 
 void PluginSettingsDialog::applySettings() {
     Config::getInstance().setCustomPluginPaths(customPaths_);
+    Config::getInstance().setScanPluginsOnStartup(scanOnStartupToggle_.getToggleState());
     Config::getInstance().save();
 
     if (engine_) {
@@ -493,11 +504,16 @@ void PluginSettingsDialog::showDialog(TracktionEngineWrapper* engine, juce::Comp
 
 void PluginSettingsDialog::updatePluginCountLabel() {
     int count = Config::getInstance().getTotalPluginCount();
-    if (count > 0)
-        pluginCountLabel_.setText(juce::String(count) + " plugins available",
-                                  juce::dontSendNotification);
-    else
+    int excluded = static_cast<int>(excludedPlugins_.size());
+
+    if (count > 0) {
+        juce::String text = juce::String(count) + " plugins available";
+        if (excluded > 0)
+            text += ", " + juce::String(excluded) + " excluded";
+        pluginCountLabel_.setText(text, juce::dontSendNotification);
+    } else {
         pluginCountLabel_.setText("No plugins scanned yet", juce::dontSendNotification);
+    }
 }
 
 void PluginSettingsDialog::setupSectionHeader(juce::Label& header, const juce::String& text) {
