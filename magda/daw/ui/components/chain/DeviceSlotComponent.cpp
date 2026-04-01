@@ -5,6 +5,7 @@
 #include "MacroPanelComponent.hpp"
 #include "ModsPanelComponent.hpp"
 #include "ParamSlotComponent.hpp"
+#include "audio/ArpeggiatorPlugin.hpp"
 #include "audio/AudioBridge.hpp"
 #include "audio/DrumGridPlugin.hpp"
 #include "audio/MagdaSamplerPlugin.hpp"
@@ -31,7 +32,8 @@ DeviceSlotComponent::DeviceSlotComponent(const magda::DeviceInfo& device) : devi
     isDrumGrid_ = device.pluginId.containsIgnoreCase(daw::audio::DrumGridPlugin::xmlTypeName);
     isChordEngine_ =
         device.pluginId.containsIgnoreCase(daw::audio::MidiChordEnginePlugin::xmlTypeName);
-    isTracktionDevice_ = isInternalDevice() && !isDrumGrid_ && !isChordEngine_;
+    isArpeggiator_ = device.pluginId.containsIgnoreCase(daw::audio::ArpeggiatorPlugin::xmlTypeName);
+    isTracktionDevice_ = isInternalDevice() && !isDrumGrid_ && !isChordEngine_ && !isArpeggiator_;
     if (isTracktionDevice_) {
         tracktionLogo_ = juce::Drawable::createFromImageData(BinaryData::fadlogotracktion_svg,
                                                              BinaryData::fadlogotracktion_svgSize);
@@ -39,6 +41,7 @@ DeviceSlotComponent::DeviceSlotComponent(const magda::DeviceInfo& device) : devi
             tracktionLogo_->replaceColour(juce::Colours::black,
                                           DarkTheme::getSecondaryTextColour());
     }
+
     if (isDrumGrid_) {
         // Set empty name - we'll draw custom two-color text in paint()
         setNodeName("");
@@ -54,8 +57,9 @@ DeviceSlotComponent::DeviceSlotComponent(const magda::DeviceInfo& device) : devi
     // Hide built-in bypass button - we'll add our own in the header
     setBypassButtonVisible(false);
 
-    // Add level meter as child (positioned in resized via getMeterWidth)
+    // Add level meter and MIDI note strip (only one visible at a time)
     addAndMakeVisible(levelMeter_);
+    addAndMakeVisible(midiNoteStrip_);
 
     // Set up NodeComponent callbacks
     onDeleteClicked = [this]() {
@@ -541,6 +545,9 @@ DeviceSlotComponent::DeviceSlotComponent(const magda::DeviceInfo& device) : devi
         setupCustomUILinking();
     }
 
+    // Populate macro panel with parameter names
+    updateMacroPanel();
+
     // Start timer for UI button state sync and meter updates (~30 FPS)
     startTimerHz(30);
 }
@@ -571,10 +578,40 @@ void DeviceSlotComponent::timerCallback() {
         }
     }
 
-    // Poll device peak levels for right-side meter strip
-    magda::DeviceMeteringManager::DeviceMeterData data;
-    if (bridge->getDeviceMetering().getLatestLevels(device_.id, data)) {
-        levelMeter_.setLevels(data.peakL, data.peakR);
+    if (isArpeggiator_) {
+        // Poll arpeggiator note output for the MIDI note strip
+        if (arpPlugin_) {
+            int note = arpPlugin_->midiOutNote_.load(std::memory_order_relaxed);
+            int vel = arpPlugin_->midiOutVelocity_.load(std::memory_order_relaxed);
+            if (note != lastArpNote_) {
+                if (lastArpNote_ >= 0)
+                    midiNoteStrip_.clearNote(lastArpNote_);
+                lastArpNote_ = note;
+            }
+            if (note >= 0)
+                midiNoteStrip_.setNote(note, vel);
+        }
+    } else if (isChordEngine_) {
+        // Poll chord engine held notes for the MIDI note strip
+        if (chordPlugin_) {
+            int count = chordPlugin_->getHeldNoteCount();
+            // Clear notes that are no longer held
+            for (int i = 0; i < lastChordCount_; ++i)
+                midiNoteStrip_.clearNote(lastChordNotes_[static_cast<size_t>(i)]);
+            // Set currently held notes
+            for (int i = 0; i < count && i < static_cast<int>(lastChordNotes_.size()); ++i) {
+                int n = chordPlugin_->getHeldNote(i);
+                lastChordNotes_[static_cast<size_t>(i)] = n;
+                midiNoteStrip_.setNote(n, 100);
+            }
+            lastChordCount_ = count;
+        }
+    } else {
+        // Poll device peak levels for right-side meter strip
+        magda::DeviceMeteringManager::DeviceMeterData data;
+        if (bridge->getDeviceMetering().getLatestLevels(device_.id, data)) {
+            levelMeter_.setLevels(data.peakL, data.peakR);
+        }
     }
 }
 
@@ -629,6 +666,18 @@ void DeviceSlotComponent::setNodePath(const magda::ChainNodePath& path) {
                 if (auto* chordPlugin =
                         dynamic_cast<daw::audio::MidiChordEnginePlugin*>(plugin.get())) {
                     chordEngineUI_->setChordEngine(chordPlugin, nodePath_.trackId);
+                }
+            }
+        }
+    }
+
+    // Same for arpeggiator
+    if (arpeggiatorUI_ && nodePath_.trackId != magda::INVALID_TRACK_ID) {
+        if (auto* audioEngine = magda::TrackManager::getInstance().getAudioEngine()) {
+            if (auto* bridge = audioEngine->getAudioBridge()) {
+                auto plugin = bridge->getPlugin(device_.id);
+                if (auto* arp = dynamic_cast<daw::audio::ArpeggiatorPlugin*>(plugin.get())) {
+                    arpeggiatorUI_->setArpeggiator(arp);
                 }
             }
         }
@@ -896,24 +945,27 @@ void DeviceSlotComponent::paint(juce::Graphics& g) {
 }
 
 void DeviceSlotComponent::paintContent(juce::Graphics& g, juce::Rectangle<int> contentArea) {
-    // Draw separator line to the left of the meter strip (skip for chord engine — no meter)
-    if (!collapsed_ && !isChordEngine_) {
+    // Draw separator line to the left of the meter/note strip
+    if (!collapsed_) {
         int lineX = contentArea.getRight() - METER_STRIP_WIDTH - 4;
         g.setColour(DarkTheme::getColour(DarkTheme::BORDER));
         g.drawVerticalLine(lineX, static_cast<float>(contentArea.getY() + 2),
                            static_cast<float>(contentArea.getBottom() - 2));
 
-        // Horizontal lines above and below the pagination row (for external plugin param grid)
+        // Separator under content header (all devices)
+        float left = static_cast<float>(contentArea.getX() + 2);
+        float right = static_cast<float>(lineX);
+        int headerBottom = contentArea.getY() + CONTENT_HEADER_HEIGHT;
+        g.setColour(DarkTheme::getColour(DarkTheme::BORDER));
+        g.drawHorizontalLine(headerBottom, left, right);
+
+        // Additional line below pagination row (for external plugin param grid only)
         if (!isInternalDevice() ||
             !(toneGeneratorUI_ || samplerUI_ || drumGridUI_ || fourOscUI_ || eqUI_ ||
               compressorUI_ || reverbUI_ || delayUI_ || chorusUI_ || phaserUI_ || filterUI_ ||
-              pitchShiftUI_ || impulseResponseUI_ || utilityUI_ || chordEngineUI_)) {
-            float left = static_cast<float>(contentArea.getX() + 2);
-            float right = static_cast<float>(lineX);
-            int paginationTop = contentArea.getY() + CONTENT_HEADER_HEIGHT;
-            int paginationBottom = paginationTop + PAGINATION_HEIGHT + 4;
-            g.setColour(DarkTheme::getColour(DarkTheme::BORDER));
-            g.drawHorizontalLine(paginationTop, left, right);
+              pitchShiftUI_ || impulseResponseUI_ || utilityUI_ || chordEngineUI_ ||
+              arpeggiatorUI_)) {
+            int paginationBottom = headerBottom + PAGINATION_HEIGHT + 4;
             g.drawHorizontalLine(paginationBottom, left, right);
         }
     }
@@ -946,9 +998,10 @@ void DeviceSlotComponent::paintContent(juce::Graphics& g, juce::Rectangle<int> c
             // Drum Grid: "MAGDA Drum Grid" in Microgramma
             g.setFont(FontManager::getInstance().getMicrogrammaFont(9.0f));
             g.drawText("MAGDA Drum Grid", textArea, juce::Justification::centredLeft);
-        } else if (isChordEngine_) {
+        } else if (isChordEngine_ || isArpeggiator_) {
             g.setFont(FontManager::getInstance().getMicrogrammaFont(9.0f));
-            g.drawText("MAGDA Chord Engine", textArea, juce::Justification::centredLeft);
+            juce::String label = isChordEngine_ ? "MAGDA Chord Engine" : "MAGDA Arpeggiator";
+            g.drawText(label, textArea, juce::Justification::centredLeft);
         } else if (isTracktionDevice_ && tracktionLogo_) {
             // Tracktion devices: TE logo inline + "Tracktion / {device name}"
             constexpr int logoSize = 14;
@@ -969,16 +1022,17 @@ void DeviceSlotComponent::paintContent(juce::Graphics& g, juce::Rectangle<int> c
 }
 
 void DeviceSlotComponent::resizedContent(juce::Rectangle<int> contentArea) {
-    // Position the level meter on the right edge of the content area
-    // (when collapsed, meter is positioned by resizedCollapsed instead)
-    // Chord engine has no audio output — skip meter
-    if (!collapsed_ && !isChordEngine_) {
+    // Position the level meter / note strip on the right edge of the content area.
+    // When collapsed, NodeComponent calls resizedCollapsed() first then resizedContent()
+    // with an empty rect — so we must not touch meter visibility when collapsed.
+    if (!collapsed_) {
         auto meterBounds = contentArea.removeFromRight(METER_STRIP_WIDTH).reduced(1, 3);
         contentArea.removeFromRight(4);  // Padding between content and meter
+        bool usesNoteStrip = isArpeggiator_ || isChordEngine_;
         levelMeter_.setBounds(meterBounds);
-        levelMeter_.setVisible(true);
-    } else if (isChordEngine_) {
-        levelMeter_.setVisible(false);
+        levelMeter_.setVisible(!usesNoteStrip);
+        midiNoteStrip_.setBounds(meterBounds);
+        midiNoteStrip_.setVisible(usesNoteStrip);
     }
 
     // Bottom padding
@@ -1023,17 +1077,21 @@ void DeviceSlotComponent::resizedContent(juce::Rectangle<int> contentArea) {
             utilityUI_->setVisible(false);
         if (chordEngineUI_)
             chordEngineUI_->setVisible(false);
+        if (arpeggiatorUI_)
+            arpeggiatorUI_->setVisible(false);
         return;
     }
 
     // Show header controls when expanded
     bool isDrumGrid = drumGridUI_ != nullptr;
-    bool showModMacro = !isDrumGrid && device_.deviceType != magda::DeviceType::MIDI;
-    modButton_->setVisible(showModMacro);
-    macroButton_->setVisible(showModMacro);
+    bool showMod = !isDrumGrid && device_.deviceType != magda::DeviceType::MIDI;
+    bool showMacro =
+        !isDrumGrid && (device_.deviceType != magda::DeviceType::MIDI || isArpeggiator_);
+    modButton_->setVisible(showMod);
+    macroButton_->setVisible(showMacro);
     uiButton_->setVisible(!isInternalDevice());
     onButton_->setVisible(true);
-    gainSlider_.setVisible(!isChordEngine_);
+    gainSlider_.setVisible(!isChordEngine_ && !isArpeggiator_);
 
     // Content header subtitle area (all devices)
     contentArea.removeFromTop(CONTENT_HEADER_HEIGHT);
@@ -1042,7 +1100,7 @@ void DeviceSlotComponent::resizedContent(juce::Rectangle<int> contentArea) {
     if (isInternalDevice() &&
         (toneGeneratorUI_ || samplerUI_ || drumGridUI_ || fourOscUI_ || eqUI_ || compressorUI_ ||
          reverbUI_ || delayUI_ || chorusUI_ || phaserUI_ || filterUI_ || pitchShiftUI_ ||
-         impulseResponseUI_ || utilityUI_ || chordEngineUI_)) {
+         impulseResponseUI_ || utilityUI_ || chordEngineUI_ || arpeggiatorUI_)) {
         // Show custom minimal UI
         if (toneGeneratorUI_) {
             toneGeneratorUI_->setBounds(contentArea.reduced(4));
@@ -1105,6 +1163,10 @@ void DeviceSlotComponent::resizedContent(juce::Rectangle<int> contentArea) {
             chordEngineUI_->setBounds(contentArea.reduced(4));
             chordEngineUI_->setVisible(true);
         }
+        if (arpeggiatorUI_) {
+            arpeggiatorUI_->setBounds(contentArea.reduced(4));
+            arpeggiatorUI_->setVisible(true);
+        }
 
         // Hide parameter grid and pagination
         for (int i = 0; i < NUM_PARAMS_PER_PAGE; ++i) {
@@ -1145,6 +1207,8 @@ void DeviceSlotComponent::resizedContent(juce::Rectangle<int> contentArea) {
             utilityUI_->setVisible(false);
         if (chordEngineUI_)
             chordEngineUI_->setVisible(false);
+        if (arpeggiatorUI_)
+            arpeggiatorUI_->setVisible(false);
 
         // Pagination area
         contentArea.removeFromTop(2);
@@ -1198,6 +1262,10 @@ void DeviceSlotComponent::resizedHeaderExtra(juce::Rectangle<int>& headerArea) {
         headerArea.removeFromLeft(4);
         modButton_->setBounds(headerArea.removeFromLeft(BUTTON_SIZE));
         headerArea.removeFromLeft(4);
+    } else if (isArpeggiator_) {
+        macroButton_->setBounds(headerArea.removeFromLeft(BUTTON_SIZE));
+        headerArea.removeFromLeft(4);
+        modButton_->setVisible(false);
     } else {
         macroButton_->setVisible(false);
         modButton_->setVisible(false);
@@ -1207,8 +1275,8 @@ void DeviceSlotComponent::resizedHeaderExtra(juce::Rectangle<int>& headerArea) {
     onButton_->setBounds(headerArea.removeFromRight(BUTTON_SIZE));
     headerArea.removeFromRight(4);
 
-    // Chord engine: no volume/SC/meter — only power button in header
-    if (isChordEngine_) {
+    // MIDI devices: no volume/SC — only power button in header
+    if (isChordEngine_ || isArpeggiator_) {
         gainSlider_.setVisible(false);
         if (scButton_)
             scButton_->setVisible(false);
@@ -1245,8 +1313,11 @@ void DeviceSlotComponent::resizedHeaderExtra(juce::Rectangle<int>& headerArea) {
 
 void DeviceSlotComponent::resizedCollapsed(juce::Rectangle<int>& area) {
     // Meter is positioned by base class via getCollapsedMeterWidth() -> collapsedMeterArea_
+    bool usesNoteStrip = isArpeggiator_ || isChordEngine_;
     levelMeter_.setBounds(collapsedMeterArea_);
-    levelMeter_.setVisible(!isChordEngine_);
+    levelMeter_.setVisible(!usesNoteStrip);
+    midiNoteStrip_.setBounds(collapsedMeterArea_);
+    midiNoteStrip_.setVisible(usesNoteStrip);
 
     int buttonSize = juce::jmin(BUTTON_SIZE, area.getWidth() - 4);
 
@@ -1276,14 +1347,15 @@ void DeviceSlotComponent::resizedCollapsed(juce::Rectangle<int>& area) {
     uiButton_->setVisible(!isInternalDevice());
     area.removeFromTop(4);
 
-    bool showModMacro = device_.deviceType != magda::DeviceType::MIDI;
+    bool showMod = device_.deviceType != magda::DeviceType::MIDI;
+    bool showMacro = device_.deviceType != magda::DeviceType::MIDI || isArpeggiator_;
     macroButton_->setBounds(
         area.removeFromTop(buttonSize).withSizeKeepingCentre(buttonSize, buttonSize));
-    macroButton_->setVisible(showModMacro);
+    macroButton_->setVisible(showMacro);
     area.removeFromTop(4);
     modButton_->setBounds(
         area.removeFromTop(buttonSize).withSizeKeepingCentre(buttonSize, buttonSize));
-    modButton_->setVisible(showModMacro);
+    modButton_->setVisible(showMod);
 
     // Multi-out button (only if plugin is multi-out)
     if (device_.multiOut.isMultiOut && multiOutButton_) {
@@ -1452,6 +1524,14 @@ void DeviceSlotComponent::onMacroNewLinkCreatedInternal(int macroIndex, magda::M
 void DeviceSlotComponent::onMacroLinkRemovedInternal(int macroIndex, magda::MacroTarget target) {
     magda::TrackManager::getInstance().removeDeviceMacroLink(nodePath_, macroIndex, target);
     updateMacroPanel();
+    updateParamModulation();
+}
+
+void DeviceSlotComponent::onMacroLinkBipolarChangedInternal(int macroIndex,
+                                                            magda::MacroTarget target,
+                                                            bool bipolar) {
+    magda::TrackManager::getInstance().setDeviceMacroLinkBipolar(nodePath_, macroIndex, target,
+                                                                 bipolar);
     updateParamModulation();
 }
 
@@ -2610,18 +2690,32 @@ void DeviceSlotComponent::createCustomUI() {
         if (auto* audioEngine = magda::TrackManager::getInstance().getAudioEngine()) {
             if (auto* bridge = audioEngine->getAudioBridge()) {
                 auto plugin = bridge->getPlugin(device_.id);
-                if (auto* chordPlugin =
-                        dynamic_cast<daw::audio::MidiChordEnginePlugin*>(plugin.get())) {
-                    chordEngineUI_->setChordEngine(chordPlugin, nodePath_.trackId);
+                if (auto* cp = dynamic_cast<daw::audio::MidiChordEnginePlugin*>(plugin.get())) {
+                    chordEngineUI_->setChordEngine(cp, nodePath_.trackId);
+                    chordPlugin_ = cp;
+                }
+            }
+        }
+    } else if (device_.pluginId.containsIgnoreCase(daw::audio::ArpeggiatorPlugin::xmlTypeName)) {
+        arpeggiatorUI_ = std::make_unique<ArpeggiatorUI>();
+        addAndMakeVisible(*arpeggiatorUI_);
+        if (auto* audioEngine = magda::TrackManager::getInstance().getAudioEngine()) {
+            if (auto* bridge = audioEngine->getAudioBridge()) {
+                auto plugin = bridge->getPlugin(device_.id);
+                if (auto* arp = dynamic_cast<daw::audio::ArpeggiatorPlugin*>(plugin.get())) {
+                    arpeggiatorUI_->setArpeggiator(arp);
+                    arpPlugin_ = arp;
                 }
             }
         }
     }
 
-    // MIDI-only plugins have no mappable parameters — hide mod/macro buttons
+    // MIDI-only plugins have no mappable parameters — hide mod buttons
+    // Arpeggiator keeps macros for user-assignable control
     if (device_.deviceType == magda::DeviceType::MIDI) {
         modButton_->setVisible(false);
-        macroButton_->setVisible(false);
+        if (!isArpeggiator_)
+            macroButton_->setVisible(false);
     }
 }
 
@@ -2920,6 +3014,8 @@ void DeviceSlotComponent::setupCustomUILinking() {
         sliders = utilityUI_->getLinkableSliders();
     else if (samplerUI_)
         sliders = samplerUI_->getLinkableSliders();
+    else if (arpeggiatorUI_)
+        sliders = arpeggiatorUI_->getLinkableSliders();
 
     if (sliders.empty())
         return;
@@ -2970,8 +3066,10 @@ void DeviceSlotComponent::setupCustomUILinking() {
     for (int i = 0; i < static_cast<int>(sliders.size()); ++i) {
         auto* slider = sliders[static_cast<size_t>(i)];
 
+        // Use pre-set param index if available, otherwise use vector position
+        int paramIdx = slider->getParamIndex() >= 0 ? slider->getParamIndex() : i;
         // Set link context
-        slider->setLinkContext(device_.id, i, nodePath_);
+        slider->setLinkContext(device_.id, paramIdx, nodePath_);
         slider->setAvailableMods(mods);
         slider->setAvailableRackMods(rackMods);
         slider->setAvailableMacros(macros);

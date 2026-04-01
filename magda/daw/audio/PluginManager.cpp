@@ -6,6 +6,7 @@
 #include "../core/RackInfo.hpp"
 #include "../core/TrackManager.hpp"
 #include "../profiling/PerformanceProfiler.hpp"
+#include "ArpeggiatorPlugin.hpp"
 #include "CurveSnapshot.hpp"
 #include "DrumGridPlugin.hpp"
 #include "MagdaSamplerPlugin.hpp"
@@ -772,6 +773,12 @@ te::Plugin::Ptr PluginManager::loadBuiltInPlugin(TrackId trackId, const juce::St
         juce::ValueTree pluginState(te::IDs::PLUGIN);
         pluginState.setProperty(te::IDs::type, daw::audio::MidiChordEnginePlugin::xmlTypeName,
                                 nullptr);
+        plugin = edit_.getPluginCache().createNewPlugin(pluginState);
+        if (plugin)
+            track->pluginList.insertPlugin(plugin, -1, nullptr);
+    } else if (type.equalsIgnoreCase(daw::audio::ArpeggiatorPlugin::xmlTypeName)) {
+        juce::ValueTree pluginState(te::IDs::PLUGIN);
+        pluginState.setProperty(te::IDs::type, daw::audio::ArpeggiatorPlugin::xmlTypeName, nullptr);
         plugin = edit_.getPluginCache().createNewPlugin(pluginState);
         if (plugin)
             track->pluginList.insertPlugin(plugin, -1, nullptr);
@@ -1846,7 +1853,7 @@ std::pair<int, int> PluginManager::computeModLinkFingerprint(TrackId trackId,
     if (!trackInfo)
         return {0, 0};
 
-    int modCount = 0, linkCount = 0;
+    int modCount = 0, linkCount = 0, bipolarCount = 0;
 
     // Device-level mods
     for (const auto& element : trackInfo->chainElements) {
@@ -1857,6 +1864,8 @@ std::pair<int, int> PluginManager::computeModLinkFingerprint(TrackId trackId,
             if (mod.enabled && !mod.links.empty()) {
                 ++modCount;
                 linkCount += static_cast<int>(mod.links.size());
+                for (const auto& link : mod.links)
+                    bipolarCount += link.bipolar ? 1 : 0;
             }
         }
         // Device-level macros
@@ -1864,6 +1873,8 @@ std::pair<int, int> PluginManager::computeModLinkFingerprint(TrackId trackId,
             if (!macro.links.empty()) {
                 ++modCount;
                 linkCount += static_cast<int>(macro.links.size());
+                for (const auto& link : macro.links)
+                    bipolarCount += link.bipolar ? 1 : 0;
             }
         }
     }
@@ -1873,6 +1884,8 @@ std::pair<int, int> PluginManager::computeModLinkFingerprint(TrackId trackId,
         if (mod.enabled && !mod.links.empty()) {
             ++modCount;
             linkCount += static_cast<int>(mod.links.size());
+            for (const auto& link : mod.links)
+                bipolarCount += link.bipolar ? 1 : 0;
         }
     }
 
@@ -1881,10 +1894,12 @@ std::pair<int, int> PluginManager::computeModLinkFingerprint(TrackId trackId,
         if (!macro.links.empty()) {
             ++modCount;
             linkCount += static_cast<int>(macro.links.size());
+            for (const auto& link : macro.links)
+                bipolarCount += link.bipolar ? 1 : 0;
         }
     }
 
-    return {modCount, linkCount};
+    return {modCount, linkCount + (bipolarCount << 16)};
 }
 
 // =============================================================================
@@ -2034,8 +2049,13 @@ void PluginManager::syncDeviceMacros(TrackId trackId, te::AudioTrack* teTrack) {
                 if (link.target.paramIndex >= 0 &&
                     link.target.paramIndex < static_cast<int>(params.size())) {
                     auto* param = params[static_cast<size_t>(link.target.paramIndex)];
-                    if (param)
-                        param->addModifier(*macroParam, link.amount);
+                    if (param) {
+                        // Bipolar: macro 0→-amount, 0.5→0, 1→+amount
+                        // Unipolar: macro 0→0, 1→+amount
+                        float offset = link.bipolar ? -link.amount : 0.0f;
+                        float value = link.bipolar ? link.amount * 2.0f : link.amount;
+                        param->addModifier(*macroParam, value, offset);
+                    }
                 }
             }
         }
@@ -2118,8 +2138,11 @@ void PluginManager::syncDeviceMacros(TrackId trackId, te::AudioTrack* teTrack) {
             if (link.target.paramIndex >= 0 &&
                 link.target.paramIndex < static_cast<int>(params.size())) {
                 auto* param = params[static_cast<size_t>(link.target.paramIndex)];
-                if (param)
-                    param->addModifier(*macroParam, link.amount);
+                if (param) {
+                    float offset = link.bipolar ? -link.amount : 0.0f;
+                    float value = link.bipolar ? link.amount * 2.0f : link.amount;
+                    param->addModifier(*macroParam, value, offset);
+                }
             }
         }
     }
@@ -2922,6 +2945,10 @@ te::Plugin::Ptr PluginManager::createPluginOnly(TrackId trackId, const DeviceInf
             juce::ValueTree ps(te::IDs::PLUGIN);
             ps.setProperty(te::IDs::type, daw::audio::MidiChordEnginePlugin::xmlTypeName, nullptr);
             plugin = edit_.getPluginCache().createNewPlugin(ps);
+        } else if (device.pluginId.containsIgnoreCase(daw::audio::ArpeggiatorPlugin::xmlTypeName)) {
+            juce::ValueTree ps(te::IDs::PLUGIN);
+            ps.setProperty(te::IDs::type, daw::audio::ArpeggiatorPlugin::xmlTypeName, nullptr);
+            plugin = edit_.getPluginCache().createNewPlugin(ps);
         }
     } else {
         // External plugin — same lookup logic as loadDeviceAsPlugin but without track insertion
@@ -3134,6 +3161,15 @@ te::Plugin::Ptr PluginManager::loadDeviceAsPlugin(TrackId trackId, const DeviceI
             if (plugin) {
                 track->pluginList.insertPlugin(plugin, insertIndex, nullptr);
                 // No processor — analysis-only plugin with transparent passthrough
+            }
+        } else if (device.pluginId.containsIgnoreCase(daw::audio::ArpeggiatorPlugin::xmlTypeName)) {
+            juce::ValueTree pluginState(te::IDs::PLUGIN);
+            pluginState.setProperty(te::IDs::type, daw::audio::ArpeggiatorPlugin::xmlTypeName,
+                                    nullptr);
+            plugin = edit_.getPluginCache().createNewPlugin(pluginState);
+            if (plugin) {
+                track->pluginList.insertPlugin(plugin, insertIndex, nullptr);
+                processor = std::make_unique<ArpeggiatorProcessor>(device.id, plugin);
             }
         } else if (device.pluginId.containsIgnoreCase("delay")) {
             plugin = createInternalPlugin(te::DelayPlugin::xmlTypeName, device.pluginState);

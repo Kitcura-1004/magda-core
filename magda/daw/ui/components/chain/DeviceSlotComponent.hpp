@@ -2,6 +2,7 @@
 
 #include <juce_gui_basics/juce_gui_basics.h>
 
+#include "ArpeggiatorUI.hpp"
 #include "ChorusUI.hpp"
 #include "CompressorUI.hpp"
 #include "DelayUI.hpp"
@@ -18,12 +19,15 @@
 #include "SamplerUI.hpp"
 #include "ToneGeneratorUI.hpp"
 #include "UtilityUI.hpp"
+#include "audio/ArpeggiatorPlugin.hpp"
+#include "audio/MidiChordEnginePlugin.hpp"
 #include "core/DeviceInfo.hpp"
 #include "core/TrackManager.hpp"
 #include "ui/components/common/LinkableTextSlider.hpp"
 #include "ui/components/common/SvgButton.hpp"
 #include "ui/components/common/TextSlider.hpp"
 #include "ui/components/mixer/LevelMeter.hpp"
+#include "ui/components/mixer/MidiNoteStrip.hpp"
 #include "ui/panels/content/ChordPanelContent.hpp"  // relative to magda/daw/
 
 namespace magda::daw::ui {
@@ -103,7 +107,7 @@ class DeviceSlotComponent : public NodeComponent,
         return 0;  // Meter is positioned in content area only, not the full height
     }
     int getCollapsedMeterWidth() const override {
-        return isChordEngine_ ? 0 : METER_STRIP_WIDTH;
+        return METER_STRIP_WIDTH;
     }
 
     // Mod/macro data providers
@@ -136,6 +140,8 @@ class DeviceSlotComponent : public NodeComponent,
     void onMacroNewLinkCreatedInternal(int macroIndex, magda::MacroTarget target,
                                        float amount) override;
     void onMacroLinkRemovedInternal(int macroIndex, magda::MacroTarget target) override;
+    void onMacroLinkBipolarChangedInternal(int macroIndex, magda::MacroTarget target,
+                                           bool bipolar) override;
     void onModClickedInternal(int modIndex) override;
     void onMacroClickedInternal(int macroIndex) override;
     void onAddModRequestedInternal(int slotIndex, magda::ModType type,
@@ -172,6 +178,7 @@ class DeviceSlotComponent : public NodeComponent,
     magda::DeviceInfo device_;
     bool isDrumGrid_ = false;
     bool isChordEngine_ = false;
+    bool isArpeggiator_ = false;
     bool isTracktionDevice_ = false;
     std::unique_ptr<juce::Drawable> tracktionLogo_;
 
@@ -212,9 +219,16 @@ class DeviceSlotComponent : public NodeComponent,
     std::unique_ptr<ImpulseResponseUI> impulseResponseUI_;
     std::unique_ptr<UtilityUI> utilityUI_;
     std::unique_ptr<ChordPanelContent> chordEngineUI_;
+    std::unique_ptr<ArpeggiatorUI> arpeggiatorUI_;
 
     static constexpr int METER_STRIP_WIDTH = 10;
     magda::LevelMeter levelMeter_;
+    magda::MidiNoteStrip midiNoteStrip_;
+    daw::audio::ArpeggiatorPlugin* arpPlugin_ = nullptr;
+    int lastArpNote_ = -1;
+    daw::audio::MidiChordEnginePlugin* chordPlugin_ = nullptr;
+    std::array<int, 32> lastChordNotes_{};
+    int lastChordCount_ = 0;
 
     void updatePageControls();
     void updateParamModulation();  // Update mod/macro pointers for params

@@ -4,6 +4,7 @@
 #include <utility>
 
 #include "../core/TrackManager.hpp"
+#include "ArpeggiatorPlugin.hpp"
 
 namespace magda {
 
@@ -1264,6 +1265,76 @@ float UtilityProcessor::getParameterByIndex(int paramIndex) const {
         default:
             return 0.0f;
     }
+}
+
+// =============================================================================
+// ArpeggiatorProcessor
+// =============================================================================
+
+ArpeggiatorProcessor::ArpeggiatorProcessor(DeviceId deviceId, te::Plugin::Ptr plugin)
+    : DeviceProcessor(deviceId, std::move(plugin)) {}
+
+daw::audio::ArpeggiatorPlugin* ArpeggiatorProcessor::getArpPlugin() const {
+    return dynamic_cast<daw::audio::ArpeggiatorPlugin*>(plugin_.get());
+}
+
+int ArpeggiatorProcessor::getParameterCount() const {
+    if (plugin_)
+        return static_cast<int>(plugin_->getAutomatableParameters().size());
+    return 0;
+}
+
+ParameterInfo ArpeggiatorProcessor::getParameterInfo(int index) const {
+    ParameterInfo info;
+    if (!plugin_)
+        return info;
+
+    auto params = plugin_->getAutomatableParameters();
+    int autoCount = static_cast<int>(params.size());
+
+    if (index >= 0 && index < autoCount) {
+        auto* param = params[index];
+        info.name = param->getParameterName();
+        info.currentValue = param->getCurrentValue();
+        auto range = param->getValueRange();
+        info.minValue = range.getStart();
+        info.maxValue = range.getEnd();
+        info.defaultValue = param->getDefaultValue().value_or(range.getStart());
+        // Depth (5) and skew (6) default to bipolar; all others unipolar
+        info.bipolarModulation = (index == 5 || index == 6);
+    }
+    return info;
+}
+
+void ArpeggiatorProcessor::populateParameters(DeviceInfo& info) const {
+    info.parameters.clear();
+    for (int i = 0; i < getParameterCount(); ++i) {
+        info.parameters.push_back(getParameterInfo(i));
+    }
+}
+
+void ArpeggiatorProcessor::setParameterByIndex(int paramIndex, float value) {
+    if (!plugin_)
+        return;
+
+    auto params = plugin_->getAutomatableParameters();
+    int autoCount = static_cast<int>(params.size());
+
+    if (paramIndex >= 0 && paramIndex < autoCount) {
+        params[paramIndex]->setParameter(value, juce::sendNotificationSync);
+    }
+}
+
+float ArpeggiatorProcessor::getParameterByIndex(int paramIndex) const {
+    if (!plugin_)
+        return 0.0f;
+
+    auto params = plugin_->getAutomatableParameters();
+    int autoCount = static_cast<int>(params.size());
+
+    if (paramIndex >= 0 && paramIndex < autoCount)
+        return params[paramIndex]->getCurrentValue();
+    return 0.0f;
 }
 
 // =============================================================================
