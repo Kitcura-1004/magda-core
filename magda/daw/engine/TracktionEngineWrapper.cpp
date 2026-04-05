@@ -64,10 +64,25 @@ std::unordered_map<ClipId, double> TracktionEngineWrapper::getActiveClipPlayhead
     return {};
 }
 
+void TracktionEngineWrapper::processSessionStateEvents() {
+    if (sessionScheduler_)
+        sessionScheduler_->processStateEvents();
+}
+
 SessionClipPlayState TracktionEngineWrapper::getSessionClipPlayState(ClipId clipId) const {
     if (sessionScheduler_)
         return sessionScheduler_->getClipPlayState(clipId);
     return SessionClipPlayState::Stopped;
+}
+
+void TracktionEngineWrapper::stopSessionTrack(TrackId trackId) {
+    if (sessionScheduler_)
+        sessionScheduler_->stopSessionTrack(trackId);
+}
+
+void TracktionEngineWrapper::deactivateAllSessionClips() {
+    if (sessionScheduler_)
+        sessionScheduler_->deactivateAllSessionClips();
 }
 
 // =============================================================================

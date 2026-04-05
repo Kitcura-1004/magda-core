@@ -10,12 +10,18 @@
 #include "audio/DrumGridPlugin.hpp"
 #include "audio/MagdaSamplerPlugin.hpp"
 #include "audio/MidiChordEnginePlugin.hpp"
+#include "audio/StepClock.hpp"
+#include "core/ClipManager.hpp"
 #include "core/MacroInfo.hpp"
+#include "core/MidiFileWriter.hpp"
 #include "core/ModInfo.hpp"
 #include "core/SelectionManager.hpp"
+#include "core/TrackCommands.hpp"
 #include "core/TrackManager.hpp"
+#include "core/UndoManager.hpp"
 #include "engine/AudioEngine.hpp"
 #include "engine/TracktionEngineWrapper.hpp"
+#include "project/ProjectManager.hpp"
 #include "ui/debug/DebugSettings.hpp"
 #include "ui/dialogs/ParameterConfigDialog.hpp"
 #include "ui/themes/DarkTheme.hpp"
@@ -33,7 +39,10 @@ DeviceSlotComponent::DeviceSlotComponent(const magda::DeviceInfo& device) : devi
     isChordEngine_ =
         device.pluginId.containsIgnoreCase(daw::audio::MidiChordEnginePlugin::xmlTypeName);
     isArpeggiator_ = device.pluginId.containsIgnoreCase(daw::audio::ArpeggiatorPlugin::xmlTypeName);
-    isTracktionDevice_ = isInternalDevice() && !isDrumGrid_ && !isChordEngine_ && !isArpeggiator_;
+    isStepSequencer_ =
+        device.pluginId.containsIgnoreCase(daw::audio::StepSequencerPlugin::xmlTypeName);
+    isTracktionDevice_ = isInternalDevice() && !isDrumGrid_ && !isChordEngine_ && !isArpeggiator_ &&
+                         !isStepSequencer_;
     if (isTracktionDevice_) {
         tracktionLogo_ = juce::Drawable::createFromImageData(BinaryData::fadlogotracktion_svg,
                                                              BinaryData::fadlogotracktion_svgSize);
@@ -63,13 +72,19 @@ DeviceSlotComponent::DeviceSlotComponent(const magda::DeviceInfo& device) : devi
 
     // Set up NodeComponent callbacks
     onDeleteClicked = [this]() {
-        // IMPORTANT: Defer deletion to avoid crash - removeDeviceFromChainByPath will
-        // trigger a UI rebuild that destroys this component. We must not access 'this'
-        // after the removal, so we capture the path by value and defer the operation.
+        // IMPORTANT: Defer deletion to avoid crash - the UI rebuild destroys this component.
+        // Capture values by copy before 'this' is destroyed.
         auto pathToDelete = nodePath_;
-        auto callback = onDeviceDeleted;  // Copy callback before 'this' is destroyed
+        auto callback = onDeviceDeleted;
         juce::MessageManager::callAsync([pathToDelete, callback]() {
-            magda::TrackManager::getInstance().removeDeviceFromChainByPath(pathToDelete);
+            // Top-level devices use undoable command; nested devices fall back to direct removal
+            if (pathToDelete.topLevelDeviceId != magda::INVALID_DEVICE_ID) {
+                magda::UndoManager::getInstance().executeCommand(
+                    std::make_unique<magda::RemoveDeviceFromTrackCommand>(
+                        pathToDelete.trackId, pathToDelete.topLevelDeviceId));
+            } else {
+                magda::TrackManager::getInstance().removeDeviceFromChainByPath(pathToDelete);
+            }
             if (callback) {
                 callback();
             }
@@ -201,6 +216,42 @@ DeviceSlotComponent::DeviceSlotComponent(const magda::DeviceInfo& device) : devi
         }
     };
     addAndMakeVisible(*onButton_);
+
+    // Export as MIDI clip button (step sequencer only for now)
+    if (isStepSequencer_) {
+        exportClipButton_ = std::make_unique<magda::SvgButton>("ExportClip", BinaryData::copy_svg,
+                                                               BinaryData::copy_svgSize);
+        exportClipButton_->setTooltip("Click to copy pattern, drag to timeline");
+        exportClipButton_->addMouseListener(this, false);
+        exportClipButton_->onClick = [this]() {
+            if (!stepSeqPlugin_)
+                return;
+            int count = juce::jlimit(1, daw::audio::StepSequencerPlugin::MAX_STEPS,
+                                     stepSeqPlugin_->numSteps.get());
+            auto rateEnum = static_cast<daw::audio::StepClock::Rate>(stepSeqPlugin_->rate.get());
+            double stepBeats = daw::audio::StepClock::rateToBeats(rateEnum);
+            float gate = stepSeqPlugin_->gateLength.get();
+            int accentVel = stepSeqPlugin_->accentVelocity.get();
+            int normalVel = stepSeqPlugin_->normalVelocity.get();
+
+            std::vector<magda::MidiNote> notes;
+            for (int i = 0; i < count; ++i) {
+                auto step = stepSeqPlugin_->getStep(i);
+                if (!step.gate)
+                    continue;
+                magda::MidiNote note;
+                note.noteNumber = std::clamp(step.noteNumber + step.octaveShift * 12, 0, 127);
+                note.velocity = step.accent ? accentVel : normalVel;
+                note.startBeat = i * stepBeats;
+                note.lengthBeats = stepBeats * gate;
+                notes.push_back(note);
+            }
+
+            if (!notes.empty())
+                ClipManager::getInstance().setNoteClipboard(std::move(notes));
+        };
+        addAndMakeVisible(*exportClipButton_);
+    }
 
     // Pagination controls
     prevPageButton_ = std::make_unique<juce::TextButton>("<");
@@ -591,6 +642,18 @@ void DeviceSlotComponent::timerCallback() {
             if (note >= 0)
                 midiNoteStrip_.setNote(note, vel);
         }
+    } else if (isStepSequencer_) {
+        if (stepSeqPlugin_) {
+            int note = stepSeqPlugin_->midiOutNote_.load(std::memory_order_relaxed);
+            int vel = stepSeqPlugin_->midiOutVelocity_.load(std::memory_order_relaxed);
+            if (note != lastArpNote_) {
+                if (lastArpNote_ >= 0)
+                    midiNoteStrip_.clearNote(lastArpNote_);
+                lastArpNote_ = note;
+            }
+            if (note >= 0)
+                midiNoteStrip_.setNote(note, vel);
+        }
     } else if (isChordEngine_) {
         // Poll chord engine held notes for the MIDI note strip
         if (chordPlugin_) {
@@ -682,6 +745,19 @@ void DeviceSlotComponent::setNodePath(const magda::ChainNodePath& path) {
             }
         }
     }
+
+    // Same for step sequencer
+    if (stepSequencerUI_ && nodePath_.trackId != magda::INVALID_TRACK_ID) {
+        if (auto* audioEngine = magda::TrackManager::getInstance().getAudioEngine()) {
+            if (auto* bridge = audioEngine->getAudioBridge()) {
+                auto plugin = bridge->getPlugin(device_.id);
+                if (auto* seq = dynamic_cast<daw::audio::StepSequencerPlugin*>(plugin.get())) {
+                    stepSequencerUI_->setPlugin(seq);
+                    stepSeqPlugin_ = seq;
+                }
+            }
+        }
+    }
 }
 
 int DeviceSlotComponent::getCustomUITabIndex() const {
@@ -751,6 +827,9 @@ int DeviceSlotComponent::getPreferredWidth() const {
     }
     if (utilityUI_) {
         return getTotalWidth(300) + meterExtra;
+    }
+    if (stepSequencerUI_) {
+        return getTotalWidth(500) + meterExtra;
     }
     if (chordEngineUI_) {
         return getTotalWidth(BASE_SLOT_WIDTH * 2) + meterExtra;
@@ -945,16 +1024,17 @@ void DeviceSlotComponent::paint(juce::Graphics& g) {
 }
 
 void DeviceSlotComponent::paintContent(juce::Graphics& g, juce::Rectangle<int> contentArea) {
-    // Draw separator line to the left of the meter/note strip
+    // Draw separator line to the left of the meter/note strip (below content header)
     if (!collapsed_) {
         int lineX = contentArea.getRight() - METER_STRIP_WIDTH - 4;
+        int meterTop = contentArea.getY() + CONTENT_HEADER_HEIGHT;
         g.setColour(DarkTheme::getColour(DarkTheme::BORDER));
-        g.drawVerticalLine(lineX, static_cast<float>(contentArea.getY() + 2),
+        g.drawVerticalLine(lineX, static_cast<float>(meterTop + 2),
                            static_cast<float>(contentArea.getBottom() - 2));
 
-        // Separator under content header (all devices)
+        // Separator under content header (all devices) — spans full width
         float left = static_cast<float>(contentArea.getX() + 2);
-        float right = static_cast<float>(lineX);
+        float right = static_cast<float>(contentArea.getRight() - 2);
         int headerBottom = contentArea.getY() + CONTENT_HEADER_HEIGHT;
         g.setColour(DarkTheme::getColour(DarkTheme::BORDER));
         g.drawHorizontalLine(headerBottom, left, right);
@@ -964,7 +1044,7 @@ void DeviceSlotComponent::paintContent(juce::Graphics& g, juce::Rectangle<int> c
             !(toneGeneratorUI_ || samplerUI_ || drumGridUI_ || fourOscUI_ || eqUI_ ||
               compressorUI_ || reverbUI_ || delayUI_ || chorusUI_ || phaserUI_ || filterUI_ ||
               pitchShiftUI_ || impulseResponseUI_ || utilityUI_ || chordEngineUI_ ||
-              arpeggiatorUI_)) {
+              arpeggiatorUI_ || stepSequencerUI_)) {
             int paginationBottom = headerBottom + PAGINATION_HEIGHT + 4;
             g.drawHorizontalLine(paginationBottom, left, right);
         }
@@ -998,10 +1078,27 @@ void DeviceSlotComponent::paintContent(juce::Graphics& g, juce::Rectangle<int> c
             // Drum Grid: "MAGDA Drum Grid" in Microgramma
             g.setFont(FontManager::getInstance().getMicrogrammaFont(9.0f));
             g.drawText("MAGDA Drum Grid", textArea, juce::Justification::centredLeft);
-        } else if (isChordEngine_ || isArpeggiator_) {
-            g.setFont(FontManager::getInstance().getMicrogrammaFont(9.0f));
-            juce::String label = isChordEngine_ ? "MAGDA Chord Engine" : "MAGDA Arpeggiator";
-            g.drawText(label, textArea, juce::Justification::centredLeft);
+        } else if (isChordEngine_ || isArpeggiator_ || isStepSequencer_) {
+            // Step recording banner overrides the header
+            if (isStepSequencer_ && stepSeqPlugin_ && stepSeqPlugin_->isStepRecording()) {
+                g.saveState();
+                g.setColour(juce::Colour(0xFFCC3333).withAlpha(0.9f));
+                g.fillRect(headerArea);
+                g.setColour(juce::Colours::white);
+                g.setFont(FontManager::getInstance().getMicrogrammaFont(9.0f));
+                int recPos = stepSeqPlugin_->stepRecordPosition_.load(std::memory_order_relaxed);
+                int maxSteps = juce::jlimit(1, 32, stepSeqPlugin_->numSteps.get());
+                g.drawText("STEP RECORDING  " + juce::String(recPos + 1) + "/" +
+                               juce::String(maxSteps),
+                           textArea, juce::Justification::centredLeft);
+                g.restoreState();
+            } else {
+                g.setFont(FontManager::getInstance().getMicrogrammaFont(9.0f));
+                juce::String label = isChordEngine_   ? "MAGDA Chord Engine"
+                                     : isArpeggiator_ ? "MAGDA Arpeggiator"
+                                                      : "MAGDA Step Sequencer";
+                g.drawText(label, textArea, juce::Justification::centredLeft);
+            }
         } else if (isTracktionDevice_ && tracktionLogo_) {
             // Tracktion devices: TE logo inline + "Tracktion / {device name}"
             constexpr int logoSize = 14;
@@ -1026,9 +1123,11 @@ void DeviceSlotComponent::resizedContent(juce::Rectangle<int> contentArea) {
     // When collapsed, NodeComponent calls resizedCollapsed() first then resizedContent()
     // with an empty rect — so we must not touch meter visibility when collapsed.
     if (!collapsed_) {
-        auto meterBounds = contentArea.removeFromRight(METER_STRIP_WIDTH).reduced(1, 3);
+        auto meterBounds = contentArea.removeFromRight(METER_STRIP_WIDTH)
+                               .withTrimmedTop(CONTENT_HEADER_HEIGHT)
+                               .reduced(1, 3);
         contentArea.removeFromRight(4);  // Padding between content and meter
-        bool usesNoteStrip = isArpeggiator_ || isChordEngine_;
+        bool usesNoteStrip = isArpeggiator_ || isChordEngine_ || isStepSequencer_;
         levelMeter_.setBounds(meterBounds);
         levelMeter_.setVisible(!usesNoteStrip);
         midiNoteStrip_.setBounds(meterBounds);
@@ -1079,19 +1178,21 @@ void DeviceSlotComponent::resizedContent(juce::Rectangle<int> contentArea) {
             chordEngineUI_->setVisible(false);
         if (arpeggiatorUI_)
             arpeggiatorUI_->setVisible(false);
+        if (stepSequencerUI_)
+            stepSequencerUI_->setVisible(false);
         return;
     }
 
     // Show header controls when expanded
     bool isDrumGrid = drumGridUI_ != nullptr;
     bool showMod = !isDrumGrid && device_.deviceType != magda::DeviceType::MIDI;
-    bool showMacro =
-        !isDrumGrid && (device_.deviceType != magda::DeviceType::MIDI || isArpeggiator_);
+    bool showMacro = !isDrumGrid && (device_.deviceType != magda::DeviceType::MIDI ||
+                                     isArpeggiator_ || isStepSequencer_);
     modButton_->setVisible(showMod);
     macroButton_->setVisible(showMacro);
     uiButton_->setVisible(!isInternalDevice());
     onButton_->setVisible(true);
-    gainSlider_.setVisible(!isChordEngine_ && !isArpeggiator_);
+    gainSlider_.setVisible(!isChordEngine_ && !isArpeggiator_ && !isStepSequencer_);
 
     // Content header subtitle area (all devices)
     contentArea.removeFromTop(CONTENT_HEADER_HEIGHT);
@@ -1100,7 +1201,8 @@ void DeviceSlotComponent::resizedContent(juce::Rectangle<int> contentArea) {
     if (isInternalDevice() &&
         (toneGeneratorUI_ || samplerUI_ || drumGridUI_ || fourOscUI_ || eqUI_ || compressorUI_ ||
          reverbUI_ || delayUI_ || chorusUI_ || phaserUI_ || filterUI_ || pitchShiftUI_ ||
-         impulseResponseUI_ || utilityUI_ || chordEngineUI_ || arpeggiatorUI_)) {
+         impulseResponseUI_ || utilityUI_ || chordEngineUI_ || arpeggiatorUI_ ||
+         stepSequencerUI_)) {
         // Show custom minimal UI
         if (toneGeneratorUI_) {
             toneGeneratorUI_->setBounds(contentArea.reduced(4));
@@ -1167,6 +1269,10 @@ void DeviceSlotComponent::resizedContent(juce::Rectangle<int> contentArea) {
             arpeggiatorUI_->setBounds(contentArea.reduced(4));
             arpeggiatorUI_->setVisible(true);
         }
+        if (stepSequencerUI_) {
+            stepSequencerUI_->setBounds(contentArea.reduced(4));
+            stepSequencerUI_->setVisible(true);
+        }
 
         // Hide parameter grid and pagination
         for (int i = 0; i < NUM_PARAMS_PER_PAGE; ++i) {
@@ -1209,6 +1315,8 @@ void DeviceSlotComponent::resizedContent(juce::Rectangle<int> contentArea) {
             chordEngineUI_->setVisible(false);
         if (arpeggiatorUI_)
             arpeggiatorUI_->setVisible(false);
+        if (stepSequencerUI_)
+            stepSequencerUI_->setVisible(false);
 
         // Pagination area
         contentArea.removeFromTop(2);
@@ -1262,7 +1370,7 @@ void DeviceSlotComponent::resizedHeaderExtra(juce::Rectangle<int>& headerArea) {
         headerArea.removeFromLeft(4);
         modButton_->setBounds(headerArea.removeFromLeft(BUTTON_SIZE));
         headerArea.removeFromLeft(4);
-    } else if (isArpeggiator_) {
+    } else if (isArpeggiator_ || isStepSequencer_) {
         macroButton_->setBounds(headerArea.removeFromLeft(BUTTON_SIZE));
         headerArea.removeFromLeft(4);
         modButton_->setVisible(false);
@@ -1275,8 +1383,14 @@ void DeviceSlotComponent::resizedHeaderExtra(juce::Rectangle<int>& headerArea) {
     onButton_->setBounds(headerArea.removeFromRight(BUTTON_SIZE));
     headerArea.removeFromRight(4);
 
+    // Export clip button (step sequencer)
+    if (exportClipButton_) {
+        exportClipButton_->setBounds(headerArea.removeFromRight(BUTTON_SIZE));
+        headerArea.removeFromRight(4);
+    }
+
     // MIDI devices: no volume/SC — only power button in header
-    if (isChordEngine_ || isArpeggiator_) {
+    if (isChordEngine_ || isArpeggiator_ || isStepSequencer_) {
         gainSlider_.setVisible(false);
         if (scButton_)
             scButton_->setVisible(false);
@@ -1311,9 +1425,53 @@ void DeviceSlotComponent::resizedHeaderExtra(juce::Rectangle<int>& headerArea) {
     // Remaining space is for the name label (handled by NodeComponent)
 }
 
+void DeviceSlotComponent::mouseDrag(const juce::MouseEvent& e) {
+    // Export clip drag from header button
+    if (exportClipButton_ && e.originalComponent == exportClipButton_.get() &&
+        e.getDistanceFromDragStart() > 5 && stepSeqPlugin_) {
+        int count = juce::jlimit(1, daw::audio::StepSequencerPlugin::MAX_STEPS,
+                                 stepSeqPlugin_->numSteps.get());
+        auto rateEnum = static_cast<daw::audio::StepClock::Rate>(stepSeqPlugin_->rate.get());
+        double stepBeats = daw::audio::StepClock::rateToBeats(rateEnum);
+        float gate = stepSeqPlugin_->gateLength.get();
+        int accentVel = stepSeqPlugin_->accentVelocity.get();
+        int normalVel = stepSeqPlugin_->normalVelocity.get();
+
+        std::vector<magda::MidiNote> notes;
+        for (int i = 0; i < count; ++i) {
+            auto step = stepSeqPlugin_->getStep(i);
+            if (!step.gate)
+                continue;
+            magda::MidiNote note;
+            note.noteNumber = std::clamp(step.noteNumber + step.octaveShift * 12, 0, 127);
+            note.velocity = step.accent ? accentVel : normalVel;
+            note.startBeat = i * stepBeats;
+            note.lengthBeats = stepBeats * gate;
+            notes.push_back(note);
+        }
+
+        if (notes.empty())
+            return;
+
+        double tempo = ProjectManager::getInstance().getCurrentProjectInfo().tempo;
+        if (tempo <= 0.0)
+            tempo = 120.0;
+
+        auto tempFile = daw::MidiFileWriter::writeToTempFile(notes, tempo, "seq-pattern");
+        if (tempFile.existsAsFile()) {
+            if (exportClipButton_)
+                exportClipButton_->setAlpha(0.4f);
+            juce::DragAndDropContainer::performExternalDragDropOfFiles(
+                juce::StringArray{tempFile.getFullPathName()}, false, this);
+            if (exportClipButton_)
+                exportClipButton_->setAlpha(1.0f);
+        }
+    }
+}
+
 void DeviceSlotComponent::resizedCollapsed(juce::Rectangle<int>& area) {
     // Meter is positioned by base class via getCollapsedMeterWidth() -> collapsedMeterArea_
-    bool usesNoteStrip = isArpeggiator_ || isChordEngine_;
+    bool usesNoteStrip = isArpeggiator_ || isChordEngine_ || isStepSequencer_;
     levelMeter_.setBounds(collapsedMeterArea_);
     levelMeter_.setVisible(!usesNoteStrip);
     midiNoteStrip_.setBounds(collapsedMeterArea_);
@@ -1348,7 +1506,8 @@ void DeviceSlotComponent::resizedCollapsed(juce::Rectangle<int>& area) {
     area.removeFromTop(4);
 
     bool showMod = device_.deviceType != magda::DeviceType::MIDI;
-    bool showMacro = device_.deviceType != magda::DeviceType::MIDI || isArpeggiator_;
+    bool showMacro =
+        device_.deviceType != magda::DeviceType::MIDI || isArpeggiator_ || isStepSequencer_;
     macroButton_->setBounds(
         area.removeFromTop(buttonSize).withSizeKeepingCentre(buttonSize, buttonSize));
     macroButton_->setVisible(showMacro);
@@ -1895,7 +2054,13 @@ void DeviceSlotComponent::showContextMenu() {
         } else if (result == 100) {
             // Delete — same deferred logic as onDeleteClicked
             juce::MessageManager::callAsync([path, callback]() {
-                magda::TrackManager::getInstance().removeDeviceFromChainByPath(path);
+                if (path.topLevelDeviceId != magda::INVALID_DEVICE_ID) {
+                    magda::UndoManager::getInstance().executeCommand(
+                        std::make_unique<magda::RemoveDeviceFromTrackCommand>(
+                            path.trackId, path.topLevelDeviceId));
+                } else {
+                    magda::TrackManager::getInstance().removeDeviceFromChainByPath(path);
+                }
                 if (callback)
                     callback();
             });
@@ -2708,13 +2873,25 @@ void DeviceSlotComponent::createCustomUI() {
                 }
             }
         }
+    } else if (device_.pluginId.containsIgnoreCase(daw::audio::StepSequencerPlugin::xmlTypeName)) {
+        stepSequencerUI_ = std::make_unique<StepSequencerUI>();
+        addAndMakeVisible(*stepSequencerUI_);
+        if (auto* audioEngine = magda::TrackManager::getInstance().getAudioEngine()) {
+            if (auto* bridge = audioEngine->getAudioBridge()) {
+                auto plugin = bridge->getPlugin(device_.id);
+                if (auto* seq = dynamic_cast<daw::audio::StepSequencerPlugin*>(plugin.get())) {
+                    stepSequencerUI_->setPlugin(seq);
+                    stepSeqPlugin_ = seq;
+                }
+            }
+        }
     }
 
     // MIDI-only plugins have no mappable parameters — hide mod buttons
     // Arpeggiator keeps macros for user-assignable control
     if (device_.deviceType == magda::DeviceType::MIDI) {
         modButton_->setVisible(false);
-        if (!isArpeggiator_)
+        if (!isArpeggiator_ && !isStepSequencer_)
             macroButton_->setVisible(false);
     }
 }
@@ -3016,6 +3193,8 @@ void DeviceSlotComponent::setupCustomUILinking() {
         sliders = samplerUI_->getLinkableSliders();
     else if (arpeggiatorUI_)
         sliders = arpeggiatorUI_->getLinkableSliders();
+    else if (stepSequencerUI_)
+        sliders = stepSequencerUI_->getLinkableSliders();
 
     if (sliders.empty())
         return;

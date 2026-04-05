@@ -26,6 +26,7 @@ namespace magda {
  */
 class PianoRollGridComponent : public juce::Component,
                                public juce::DragAndDropTarget,
+                               public juce::FileDragAndDropTarget,
                                public juce::Timer,
                                public ClipManagerListener,
                                public NoteGridHost {
@@ -169,6 +170,9 @@ class PianoRollGridComponent : public juce::Component,
     // Request a note to be selected after the next refresh
     void selectNoteAfterRefresh(ClipId clipId, int noteIndex);
 
+    // Update visual selection to match SelectionManager state
+    void syncSelectionFromManager();
+
     // ClipManagerListener
     void clipsChanged() override {}
     void clipPropertyChanged(ClipId clipId) override;
@@ -223,6 +227,10 @@ class PianoRollGridComponent : public juce::Component,
     void itemDragMove(const SourceDetails& details) override;
     void itemDragExit(const SourceDetails& details) override;
     void itemDropped(const SourceDetails& details) override;
+
+    // FileDragAndDropTarget — accept .mid file drops (chord blocks, exported patterns)
+    bool isInterestedInFileDrag(const juce::StringArray& files) override;
+    void filesDropped(const juce::StringArray& files, int x, int y) override;
 
   private:
     ClipId clipId_ = INVALID_CLIP_ID;      // Primary selected clip (for backward compatibility)

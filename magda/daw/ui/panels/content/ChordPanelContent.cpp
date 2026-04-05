@@ -2,9 +2,12 @@
 
 #include "../../../../agents/llm_client_factory.hpp"
 #include "BinaryData.h"
+#include "core/ClipManager.hpp"
 #include "core/Config.hpp"
+#include "core/MidiFileWriter.hpp"
 #include "core/TrackManager.hpp"
 #include "music/ChordEngine.hpp"
+#include "project/ProjectManager.hpp"
 #include "ui/components/chord/ChordBlockComponent.hpp"
 #include "ui/components/common/DraggableValueLabel.hpp"
 #include "ui/components/common/SvgButton.hpp"
@@ -260,6 +263,8 @@ class AIContainerComponent : public juce::Component {
     AIContainerPaintData paintData;
     bool greyOut = false;
     juce::String streamingText;
+    juce::String promptText;
+    bool loading = false;
     int streamingTextBottom = 0;  // y position after streaming text block
 
     void paint(juce::Graphics& g) override {
@@ -277,13 +282,29 @@ class AIContainerComponent : public juce::Component {
             }
         }
 
-        // Draw streaming text below existing content
+        // Draw prompt + status above streaming text
+        int promptBottom = streamingTextBottom;
+        if (loading && paintData.rows.empty()) {
+            int y = 8;
+            if (promptText.isNotEmpty()) {
+                g.setColour(DarkTheme::getTextColour());
+                g.setFont(FontManager::getInstance().getUIFont(11.0f));
+                g.drawText(promptText, 4, y, getWidth() - 8, 20, juce::Justification::centredLeft);
+                y += 24;
+            }
+            g.setColour(DarkTheme::getSecondaryTextColour().withAlpha(0.5f));
+            g.setFont(FontManager::getInstance().getUIFont(11.0f));
+            g.drawText("Generating...", 4, y, getWidth() - 8, 20, juce::Justification::centredLeft);
+            promptBottom = juce::jmax(promptBottom, y + 28);
+        }
+
+        // Draw streaming text below prompt/existing content
         if (streamingText.isNotEmpty()) {
             auto font = FontManager::getInstance().getUIFont(9.5f);
             g.setFont(font);
             g.setColour(DarkTheme::getSecondaryTextColour().withAlpha(0.7f));
 
-            int textY = streamingTextBottom;
+            int textY = promptBottom;
             int textWidth = getWidth() - 8;
             auto layout = juce::TextLayout();
             juce::AttributedString attrStr;
@@ -805,15 +826,19 @@ void ChordPanelContent::requestAISuggestions() {
     aiPromptText_ = userPrompt;
 
     // Grey out existing results while generating
+    if (auto* container = dynamic_cast<AIContainerComponent*>(aiContainer_.get())) {
+        container->loading = true;
+        container->promptText = userPrompt;
+        container->streamingText = {};
+        if (!aiRows_.empty()) {
+            container->greyOut = true;
+        }
+    }
     if (!aiRows_.empty()) {
         aiGreyOut_ = true;
         for (auto& row : aiRows_)
             for (auto& block : row->blocks)
                 block->setAlpha(0.3f);
-        if (auto* container = dynamic_cast<AIContainerComponent*>(aiContainer_.get())) {
-            container->greyOut = true;
-            container->streamingText = {};
-        }
     }
 
     if (aiSendBtn_)
@@ -875,8 +900,10 @@ void ChordPanelContent::rebuildAIProgressionRows() {
 
     const auto& aiProgs =
         chordPlugin_ ? chordPlugin_->getAIProgressions() : std::vector<AIProgression>{};
-    for (const auto& prog : aiProgs) {
+    for (int progIdx = 0; progIdx < static_cast<int>(aiProgs.size()); ++progIdx) {
+        const auto& prog = aiProgs[static_cast<size_t>(progIdx)];
         auto row = std::make_unique<AIProgressionRow>();
+        row->progressionIndex = progIdx;
 
         for (const auto& chord : prog.chords) {
             auto block = std::make_unique<ChordBlockComponent>(chord);
@@ -885,6 +912,40 @@ void ChordPanelContent::rebuildAIProgressionRows() {
             aiContainer_->addAndMakeVisible(block.get());
             row->blocks.push_back(std::move(block));
         }
+
+        // Export as clip button
+        row->exportButton = std::make_unique<magda::SvgButton>("ExportProg", BinaryData::copy_svg,
+                                                               BinaryData::copy_svgSize);
+        row->exportButton->setTooltip("Click to copy chords, drag to timeline");
+        row->exportButton->addMouseListener(this, false);
+        row->exportButton->onClick = [this, progIdx = row->progressionIndex]() {
+            if (!chordPlugin_)
+                return;
+            const auto& progs = chordPlugin_->getAIProgressions();
+            if (progIdx < 0 || progIdx >= static_cast<int>(progs.size()))
+                return;
+            const auto& prog = progs[static_cast<size_t>(progIdx)];
+            if (prog.chords.empty())
+                return;
+
+            constexpr double beatsPerChord = 4.0;
+            std::vector<magda::MidiNote> notes;
+            for (size_t ci = 0; ci < prog.chords.size(); ++ci) {
+                double startBeat = static_cast<double>(ci) * beatsPerChord;
+                for (const auto& cn : prog.chords[ci].notes) {
+                    magda::MidiNote note;
+                    note.noteNumber = std::clamp(cn.noteNumber, 0, 127);
+                    note.velocity = std::clamp(cn.velocity, 1, 127);
+                    note.startBeat = startBeat;
+                    note.lengthBeats = beatsPerChord;
+                    notes.push_back(note);
+                }
+            }
+
+            if (!notes.empty())
+                ClipManager::getInstance().setNoteClipboard(std::move(notes));
+        };
+        aiContainer_->addAndMakeVisible(row->exportButton.get());
 
         aiRows_.push_back(std::move(row));
     }
@@ -915,9 +976,13 @@ void ChordPanelContent::layoutAIProgressionRows() {
         paintRow.name = prog.name;
         paintRow.description = prog.description;
 
-        // Name area
-        row->nameArea = juce::Rectangle<int>(4, y, containerWidth - 8, 16);
+        // Name area with export button
+        int exportBtnSize = 16;
+        row->nameArea = juce::Rectangle<int>(4, y, containerWidth - 8 - exportBtnSize - 4, 16);
         paintRow.nameArea = row->nameArea;
+        if (row->exportButton)
+            row->exportButton->setBounds(containerWidth - 4 - exportBtnSize, y, exportBtnSize,
+                                         exportBtnSize);
         y += 16;
 
         // Description area
@@ -948,6 +1013,15 @@ void ChordPanelContent::layoutAIProgressionRows() {
 
     if (container) {
         container->paintData = std::move(paintData);
+
+        // If loading with no rows, account for prompt + "Generating..." height
+        if (container->loading && paintData.rows.empty()) {
+            int promptHeight = 8;  // top padding
+            if (container->promptText.isNotEmpty())
+                promptHeight += 24;  // prompt text line
+            promptHeight += 28;      // "Generating..." line
+            y = juce::jmax(y, promptHeight);
+        }
         container->streamingTextBottom = y;
 
         // If streaming, expand container to fit streaming text
@@ -964,6 +1038,97 @@ void ChordPanelContent::layoutAIProgressionRows() {
 
     aiContainer_->setSize(containerWidth, y);
     aiContainer_->repaint();
+}
+
+void ChordPanelContent::mouseDrag(const juce::MouseEvent& e) {
+    if (e.getDistanceFromDragStart() < 5)
+        return;
+
+    // Check if drag originates from an AI progression export button
+    for (auto& row : aiRows_) {
+        if (row->exportButton && e.originalComponent == row->exportButton.get()) {
+            startProgressionDrag(row->progressionIndex);
+            return;
+        }
+    }
+}
+
+void ChordPanelContent::startProgressionDrag(int progressionIndex) {
+    if (!chordPlugin_)
+        return;
+
+    const auto& progs = chordPlugin_->getAIProgressions();
+    if (progressionIndex < 0 || progressionIndex >= static_cast<int>(progs.size()))
+        return;
+
+    const auto& prog = progs[static_cast<size_t>(progressionIndex)];
+    if (prog.chords.empty())
+        return;
+
+    // Convert chords to MidiNotes — 4 beats per chord (1 bar in 4/4)
+    constexpr double beatsPerChord = 4.0;
+    std::vector<magda::MidiNote> notes;
+
+    for (size_t chordIdx = 0; chordIdx < prog.chords.size(); ++chordIdx) {
+        const auto& chord = prog.chords[chordIdx];
+        double startBeat = static_cast<double>(chordIdx) * beatsPerChord;
+
+        for (const auto& cn : chord.notes) {
+            magda::MidiNote note;
+            note.noteNumber = std::clamp(cn.noteNumber, 0, 127);
+            note.velocity = std::clamp(cn.velocity, 1, 127);
+            note.startBeat = startBeat;
+            note.lengthBeats = beatsPerChord;
+            notes.push_back(note);
+        }
+    }
+
+    if (notes.empty())
+        return;
+
+    // Build chord markers for pre-populated annotations
+    std::vector<daw::ChordMarker> markers;
+    for (size_t chordIdx = 0; chordIdx < prog.chords.size(); ++chordIdx) {
+        double startBeat = static_cast<double>(chordIdx) * beatsPerChord;
+        markers.push_back({startBeat, beatsPerChord, prog.chords[chordIdx].getDisplayName()});
+    }
+
+    double tempo = ProjectManager::getInstance().getCurrentProjectInfo().tempo;
+    if (tempo <= 0.0)
+        tempo = 120.0;
+
+    auto clipName = prog.name.isNotEmpty() ? prog.name : prog.description;
+    if (clipName.isEmpty())
+        clipName = "chord-progression";
+    auto tempFile = daw::MidiFileWriter::writeToTempFile(notes, tempo, clipName, markers);
+    if (!tempFile.existsAsFile())
+        return;
+
+    // Ghost the chord blocks during drag
+    std::vector<ChordBlockComponent*> draggedBlocks;
+    for (auto& row : aiRows_) {
+        if (row->progressionIndex == progressionIndex) {
+            for (auto& block : row->blocks) {
+                block->setAlpha(0.4f);
+                draggedBlocks.push_back(block.get());
+            }
+            if (row->exportButton)
+                row->exportButton->setAlpha(0.4f);
+            break;
+        }
+    }
+
+    juce::DragAndDropContainer::performExternalDragDropOfFiles(
+        juce::StringArray{tempFile.getFullPathName()}, false, this);
+
+    for (auto* block : draggedBlocks)
+        block->setAlpha(1.0f);
+    for (auto& row : aiRows_) {
+        if (row->progressionIndex == progressionIndex && row->exportButton) {
+            row->exportButton->setAlpha(1.0f);
+            break;
+        }
+    }
 }
 
 void ChordPanelContent::AIRequestThread::run() {
@@ -1163,6 +1328,8 @@ IDENTIFIER: /[a-zA-Z_#][a-zA-Z0-9_#]*/
                     dynamic_cast<AIContainerComponent*>(safeThis->aiContainer_.get())) {
                 container->greyOut = false;
                 container->streamingText = {};
+                container->loading = false;
+                container->promptText = {};
             }
             // Restore block alpha
             for (auto& row : safeThis->aiRows_)
@@ -1191,6 +1358,8 @@ IDENTIFIER: /[a-zA-Z_#][a-zA-Z0-9_#]*/
         if (auto* container = dynamic_cast<AIContainerComponent*>(safeThis->aiContainer_.get())) {
             container->greyOut = false;
             container->streamingText = {};
+            container->loading = false;
+            container->promptText = {};
         }
 
         if (safeThis->aiSendBtn_)
@@ -1637,21 +1806,7 @@ void ChordPanelContent::paint(juce::Graphics& g) {
                 }
             } else {
                 // AI tab content — draw progression names and descriptions
-                if (aiLoading_ && aiRows_.empty()) {
-                    area.removeFromTop(8);
-                    if (aiPromptText_.isNotEmpty()) {
-                        g.setColour(DarkTheme::getTextColour());
-                        g.setFont(FontManager::getInstance().getUIFont(11.0f));
-                        g.drawText(aiPromptText_, area.removeFromTop(20),
-                                   juce::Justification::centredLeft);
-                        area.removeFromTop(4);
-                    }
-                    g.setColour(DarkTheme::getSecondaryTextColour().withAlpha(0.5f));
-                    g.setFont(FontManager::getInstance().getUIFont(11.0f));
-                    g.drawText("Generating...", area.removeFromTop(20),
-                               juce::Justification::centredLeft);
-                } else if (!aiLoading_ &&
-                           (!chordPlugin_ || chordPlugin_->getAIProgressions().empty())) {
+                if (!aiLoading_ && (!chordPlugin_ || chordPlugin_->getAIProgressions().empty())) {
                     g.setColour(DarkTheme::getSecondaryTextColour().withAlpha(0.3f));
                     g.setFont(FontManager::getInstance().getUIFont(11.0f));
                     area.removeFromTop(8);

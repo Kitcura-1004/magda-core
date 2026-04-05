@@ -124,30 +124,7 @@ void ClipSynchronizer::clipsChanged() {
     // Force graph rebuild if new session clips were moved into slots,
     // so SlotControlNode instances are created in the audio graph
     if (sessionClipsSynced) {
-        // Ensure playback mode is Arrangement on tracks with no actively playing slots,
-        // so arrangement clips remain audible after graph rebuild
-        for (const auto& trackInfo : TrackManager::getInstance().getTracks()) {
-            if (trackInfo.playbackMode != TrackPlaybackMode::Session)
-                continue;
-            auto* track = trackController_.getAudioTrack(trackInfo.id);
-            if (!track)
-                continue;
-            bool anyPlaying = false;
-            for (auto* slot : track->getClipSlotList().getClipSlots()) {
-                if (auto* c = slot->getClip()) {
-                    if (auto lh = c->getLaunchHandle()) {
-                        if (lh->getPlayingStatus() == te::LaunchHandle::PlayState::playing) {
-                            anyPlaying = true;
-                            break;
-                        }
-                    }
-                }
-            }
-            if (!anyPlaying)
-                TrackManager::getInstance().setTrackPlaybackMode(trackInfo.id,
-                                                                 TrackPlaybackMode::Arrangement);
-        }
-
+        // Track playback modes are managed by SessionClipScheduler::syncTrackPlaybackModes()
         reallocateAndNotify();
     }
 }
@@ -741,39 +718,33 @@ void ClipSynchronizer::launchSessionClip(ClipId clipId, bool forceImmediate) {
         }
     }
 
-    // Switch track to session mode before launching so the arrangement is
-    // already muted when the slot starts — prevents a brief audio overlap.
-    if (clip) {
-        TrackManager::getInstance().setTrackPlaybackMode(clip->trackId, TrackPlaybackMode::Session);
-    }
+    // Track playback mode is managed by SessionClipScheduler::syncTrackPlaybackModes()
+    // which runs before this method is called.
 
     auto qType =
         (clip && !forceImmediate) ? toTELaunchQType(clip->launchQuantize) : te::LaunchQType::none;
 
+    // Override the TE slot's own launch quantize to match our intent.
+    // Without this, play(std::nullopt) uses the slot's stored quantize
+    // (e.g. OneBar), causing a delay even when we want immediate launch.
+    if (auto* lq = teClip->getLaunchQuantisation()) {
+        lq->type = qType;
+    }
+
     // Calculate the target beat (nullopt = immediate).
-    // Add a lookahead margin so the target is always safely in the future
-    // by the time the audio thread processes it. The SyncPoint is a snapshot
-    // from the audio thread; message-thread latency + 2-3 audio buffers can
-    // elapse before play() reaches the audio thread.
-    std::optional<te::MonotonicBeat> targetBeat;
-    if (qType != te::LaunchQType::none) {
+    auto targetBeat = (qType != te::LaunchQType::none) ? computeQuantizedBeat(clip->launchQuantize)
+                                                       : std::optional<te::MonotonicBeat>{};
+
+    // Store the precise quantized launch time for SessionRecorder
+    if (targetBeat && clip) {
+        // Convert monotonic beat back to edit beat for time conversion
         auto* ctx = edit_.getCurrentPlaybackContext();
         auto syncPoint = ctx ? ctx->getSyncPoint() : std::nullopt;
         if (syncPoint) {
-            // Lookahead: ~50ms worth of beats to cover message-thread + audio-buffer latency
-            double bpm = edit_.tempoSequence.getBpmAt(te::TimePosition());
-            double lookaheadBeats = (bpm > 0.0) ? (0.05 * bpm / 60.0) : 0.1;
-            auto adjustedBeat = syncPoint->beat + te::BeatDuration::fromBeats(lookaheadBeats);
-
-            auto quantizedBeat = te::getNext(qType, edit_.tempoSequence, adjustedBeat);
             double offset = syncPoint->monotonicBeat.v.inBeats() - syncPoint->beat.inBeats();
-            targetBeat =
-                te::MonotonicBeat{te::BeatPosition::fromBeats(quantizedBeat.inBeats() + offset)};
-            // Store the precise quantized launch time for SessionRecorder
-            if (clip) {
-                double quantizedTime = edit_.tempoSequence.beatsToTime(quantizedBeat).inSeconds();
-                lastLaunchTimeByTrack_[clip->trackId] = quantizedTime;
-            }
+            auto editBeat = te::BeatPosition::fromBeats(targetBeat->v.inBeats() - offset);
+            double quantizedTime = edit_.tempoSequence.beatsToTime(editBeat).inSeconds();
+            lastLaunchTimeByTrack_[clip->trackId] = quantizedTime;
         }
     }
 
@@ -807,8 +778,12 @@ void ClipSynchronizer::launchSessionClip(ClipId clipId, bool forceImmediate) {
         if (clip) {
             lastLaunchTimeByTrack_[clip->trackId] = edit_.getTransport().position.get().inSeconds();
         }
+        DBG("ClipSync: play(nullopt) — immediate launch for clip "
+            << clipId << " forceImmediate=" << (int)forceImmediate);
         launchHandle->play(std::nullopt);
     } else {
+        DBG("ClipSync: play(beat " << targetBeat->v.inBeats() << ") — quantized launch for clip "
+                                   << clipId << " qType=" << static_cast<int>(qType));
         launchHandle->play(*targetBeat);
     }
 }
@@ -816,6 +791,54 @@ void ClipSynchronizer::launchSessionClip(ClipId clipId, bool forceImmediate) {
 double ClipSynchronizer::getLastLaunchTimeForTrack(TrackId trackId) const {
     auto it = lastLaunchTimeByTrack_.find(trackId);
     return (it != lastLaunchTimeByTrack_.end()) ? it->second : 0.0;
+}
+
+std::optional<te::MonotonicBeat> ClipSynchronizer::computeQuantizedBeat(LaunchQuantize quantize) {
+    auto qType = toTELaunchQType(quantize);
+    if (qType == te::LaunchQType::none)
+        return std::nullopt;
+
+    auto* ctx = edit_.getCurrentPlaybackContext();
+    auto syncPoint = ctx ? ctx->getSyncPoint() : std::nullopt;
+    if (!syncPoint)
+        return std::nullopt;
+
+    auto quantizedBeat = te::getNext(qType, edit_.tempoSequence, syncPoint->beat);
+    if (quantizedBeat <= syncPoint->beat) {
+        quantizedBeat = te::getNext(qType, edit_.tempoSequence,
+                                    syncPoint->beat + te::BeatDuration::fromBeats(0.001));
+    }
+
+    double offset = syncPoint->monotonicBeat.v.inBeats() - syncPoint->beat.inBeats();
+    return te::MonotonicBeat{te::BeatPosition::fromBeats(quantizedBeat.inBeats() + offset)};
+}
+
+void ClipSynchronizer::stopSessionClipQueued(ClipId clipId, LaunchQuantize quantize) {
+    auto* teClip = getSessionTeClip(clipId);
+    if (!teClip)
+        return;
+
+    auto launchHandle = teClip->getLaunchHandle();
+    if (!launchHandle)
+        return;
+
+    auto targetBeat = computeQuantizedBeat(quantize);
+    launchHandle->stop(targetBeat ? *targetBeat : std::optional<te::MonotonicBeat>{});
+
+    // Reset synth plugins to prevent stuck MIDI notes
+    const auto* clip = ClipManager::getInstance().getClip(clipId);
+    if (!clip)
+        return;
+
+    if (clip->type == ClipType::MIDI) {
+        auto* audioTrack = trackController_.getAudioTrack(clip->trackId);
+        if (audioTrack) {
+            for (auto* plugin : audioTrack->pluginList) {
+                if (plugin->isSynth())
+                    plugin->reset();
+            }
+        }
+    }
 }
 
 void ClipSynchronizer::stopSessionClip(ClipId clipId) {

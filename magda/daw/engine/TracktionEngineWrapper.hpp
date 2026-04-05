@@ -72,6 +72,8 @@ class TracktionEngineWrapper : public AudioEngine,
     ClipId getSessionPlayheadClipId() const override;
     std::unordered_map<ClipId, double> getActiveClipPlayheadPositions() const override;
     SessionClipPlayState getSessionClipPlayState(ClipId clipId) const override;
+    void stopSessionTrack(TrackId trackId) override;
+    void deactivateAllSessionClips() override;
     void setTempo(double bpm) override;
     double getTempo() const override;
     void setTimeSignature(int numerator, int denominator) override;
@@ -84,6 +86,9 @@ class TracktionEngineWrapper : public AudioEngine,
 
     // Call this each frame to update trigger state (call before updateAllMods)
     void updateTriggerState() override;
+
+    // Drain audio-thread session clip state events
+    void processSessionStateEvents() override;
 
     // Metronome/click track control
     void setMetronomeEnabled(bool enabled) override;

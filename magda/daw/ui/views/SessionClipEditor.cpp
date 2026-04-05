@@ -4,6 +4,7 @@
 #include "../state/TimelineController.hpp"
 #include "../themes/DarkTheme.hpp"
 #include "../themes/FontManager.hpp"
+#include "BinaryData.h"
 #include "core/ClipDisplayInfo.hpp"
 #include "core/ClipPropertyCommands.hpp"
 #include "core/UndoManager.hpp"
@@ -147,18 +148,26 @@ void SessionClipEditor::setupHeader() {
     clipNameLabel_->setJustificationType(juce::Justification::centredLeft);
     addAndMakeVisible(*clipNameLabel_);
 
-    // Loop toggle
-    loopToggle_ = std::make_unique<juce::ToggleButton>("Loop");
-    loopToggle_->setColour(juce::ToggleButton::textColourId, DarkTheme::getTextColour());
-    loopToggle_->setColour(juce::ToggleButton::tickColourId,
-                           DarkTheme::getColour(DarkTheme::ACCENT_BLUE));
+    // Loop toggle (single-icon mode with programmatic bg/border)
+    loopToggle_ = std::make_unique<SvgButton>("Loop", BinaryData::loop_icon_svg,
+                                              BinaryData::loop_icon_svgSize);
+    loopToggle_->setOriginalColor(juce::Colour(0xffBCBCBC));
+    loopToggle_->setNormalColor(juce::Colour(0xff999999));
+    loopToggle_->setActiveColor(juce::Colour(0xffCCCCCC));
+    loopToggle_->setActiveBackgroundColor(juce::Colour(0xff5588AA));
+    loopToggle_->setNormalBackgroundColor(juce::Colour(0xff2A2A2A));
+    loopToggle_->setBorderColor(juce::Colour(0xff555555));
+    loopToggle_->setBorderThickness(1.0f);
+    loopToggle_->setCornerRadius(4.0f);
     loopToggle_->onClick = [this]() {
+        bool newState = !loopToggle_->isActive();
+        loopToggle_->setActive(newState);
         auto& clipManager = ClipManager::getInstance();
         double bpm = 120.0;
         if (auto* controller = TimelineController::getCurrent()) {
             bpm = controller->getState().tempo.bpm;
         }
-        clipManager.setClipLoopEnabled(clipId_, loopToggle_->getToggleState(), bpm);
+        clipManager.setClipLoopEnabled(clipId_, newState, bpm);
     };
     addAndMakeVisible(*loopToggle_);
 
@@ -240,7 +249,7 @@ void SessionClipEditor::resized() {
     closeButton_->setBounds(headerBounds.removeFromRight(30));
     headerBounds.removeFromRight(MARGIN);
 
-    loopToggle_->setBounds(headerBounds.removeFromRight(80));
+    loopToggle_->setBounds(headerBounds.removeFromRight(30));
     headerBounds.removeFromRight(MARGIN * 2);
 
     lengthLabel_->setBounds(headerBounds.removeFromRight(120));
@@ -295,7 +304,7 @@ void SessionClipEditor::updateControls() {
     clipNameLabel_->setText(clip->name, juce::dontSendNotification);
 
     // Update loop toggle
-    loopToggle_->setToggleState(clip->loopEnabled, juce::dontSendNotification);
+    loopToggle_->setActive(clip->loopEnabled);
 
     // Update length label
     lengthLabel_->setText(juce::String(clip->length, 2) + " beats", juce::dontSendNotification);

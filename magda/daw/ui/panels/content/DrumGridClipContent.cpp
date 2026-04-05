@@ -16,6 +16,7 @@
 #include "core/TrackManager.hpp"
 #include "core/UndoManager.hpp"
 #include "ui/components/common/SvgButton.hpp"
+#include "ui/components/common/TimeBendPopup.hpp"
 #include "ui/components/pianoroll/MidiDrawerComponent.hpp"
 #include "ui/components/pianoroll/NoteComponent.hpp"
 #include "ui/components/pianoroll/NoteGridHost.hpp"
@@ -158,11 +159,18 @@ class DrumGridClipGrid : public juce::Component,
     // Refresh note components from clip data
     void refreshNotes() {
         // Preserve selection: pending positions take priority, else keep current indices
+        // Prefer SelectionManager as source of truth (handles duplicate, paste, etc.)
         std::set<size_t> selectedIndices;
         if (pendingSelectPositions_.empty()) {
-            for (const auto& nc : noteComponents_) {
-                if (nc->isSelected())
-                    selectedIndices.insert(nc->getNoteIndex());
+            const auto& noteSel = magda::SelectionManager::getInstance().getNoteSelection();
+            if (noteSel.isValid() && noteSel.clipId == clipId_ && !noteSel.noteIndices.empty()) {
+                for (size_t idx : noteSel.noteIndices)
+                    selectedIndices.insert(idx);
+            } else {
+                for (const auto& nc : noteComponents_) {
+                    if (nc->isSelected())
+                        selectedIndices.insert(nc->getNoteIndex());
+                }
             }
         }
 
@@ -206,6 +214,24 @@ class DrumGridClipGrid : public juce::Component,
             }
         }
 
+        repaint();
+    }
+
+    void syncSelectionFromManager() {
+        const auto& noteSel = magda::SelectionManager::getInstance().getNoteSelection();
+        for (auto& nc : noteComponents_) {
+            bool shouldSelect = false;
+            if (noteSel.isValid() && nc->getSourceClipId() == noteSel.clipId) {
+                size_t idx = nc->getNoteIndex();
+                for (size_t selIdx : noteSel.noteIndices) {
+                    if (idx == selIdx) {
+                        shouldSelect = true;
+                        break;
+                    }
+                }
+            }
+            nc->setSelected(shouldSelect);
+        }
         repaint();
     }
 
@@ -1496,7 +1522,8 @@ DrumGridClipContent::DrumGridClipContent() {
     };
 
     // Handle duplicate from context menu
-    gridComponent_->onDuplicateNotes = [](magda::ClipId clipId, std::vector<size_t> noteIndices) {
+    gridComponent_->onDuplicateNotes = [this](magda::ClipId clipId,
+                                              std::vector<size_t> noteIndices) {
         auto& clipManager = magda::ClipManager::getInstance();
         const auto* clip = clipManager.getClip(clipId);
         if (!clip || clip->type != magda::ClipType::MIDI)
@@ -1527,6 +1554,7 @@ DrumGridClipContent::DrumGridClipContent() {
             if (!inserted.empty()) {
                 magda::SelectionManager::getInstance().selectNotes(
                     clipId, std::vector<size_t>(inserted.begin(), inserted.end()));
+                gridComponent_->syncSelectionFromManager();
             }
         }
     };

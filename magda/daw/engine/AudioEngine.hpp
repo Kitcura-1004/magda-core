@@ -53,6 +53,12 @@ class AudioEngine : public AudioEngineListener {
     /** Returns the play state of a session clip (Stopped/Queued/Playing). */
     virtual SessionClipPlayState getSessionClipPlayState(ClipId clipId) const = 0;
 
+    /** Schedule a quantized stop for the active clip on a track (empty slot in scene). */
+    virtual void stopSessionTrack(TrackId trackId) = 0;
+
+    /** Stop all session clips, clear active state, revert to arrangement. */
+    virtual void deactivateAllSessionClips() = 0;
+
     // ===== Tempo =====
     virtual void setTempo(double bpm) = 0;
     virtual double getTempo() const = 0;
@@ -73,6 +79,9 @@ class AudioEngine : public AudioEngineListener {
 
     // ===== Trigger State (for transport-synced devices) =====
     virtual void updateTriggerState() = 0;
+
+    // ===== Session State Events (audio thread → message thread) =====
+    virtual void processSessionStateEvents() = 0;
 
     // ===== Device Management =====
     virtual juce::AudioDeviceManager* getDeviceManager() = 0;

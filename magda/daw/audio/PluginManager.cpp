@@ -15,6 +15,7 @@
 #include "ModifierHelpers.hpp"
 #include "PluginWindowBridge.hpp"
 #include "SidechainMonitorPlugin.hpp"
+#include "StepSequencerPlugin.hpp"
 #include "TrackController.hpp"
 #include "TransportStateManager.hpp"
 
@@ -779,6 +780,13 @@ te::Plugin::Ptr PluginManager::loadBuiltInPlugin(TrackId trackId, const juce::St
     } else if (type.equalsIgnoreCase(daw::audio::ArpeggiatorPlugin::xmlTypeName)) {
         juce::ValueTree pluginState(te::IDs::PLUGIN);
         pluginState.setProperty(te::IDs::type, daw::audio::ArpeggiatorPlugin::xmlTypeName, nullptr);
+        plugin = edit_.getPluginCache().createNewPlugin(pluginState);
+        if (plugin)
+            track->pluginList.insertPlugin(plugin, -1, nullptr);
+    } else if (type.equalsIgnoreCase(daw::audio::StepSequencerPlugin::xmlTypeName)) {
+        juce::ValueTree pluginState(te::IDs::PLUGIN);
+        pluginState.setProperty(te::IDs::type, daw::audio::StepSequencerPlugin::xmlTypeName,
+                                nullptr);
         plugin = edit_.getPluginCache().createNewPlugin(pluginState);
         if (plugin)
             track->pluginList.insertPlugin(plugin, -1, nullptr);
@@ -2680,6 +2688,7 @@ void PluginManager::captureAllPluginStates() {
             // TE internal plugin (4osc, EQ, Compressor, etc.):
             // Capture the full ValueTree as XML so non-automatable
             // CachedValues (wave shapes, filter type, etc.) are preserved.
+            sd.plugin->flushPluginStateToValueTree();
             if (auto xml = sd.plugin->state.createXml())
                 stateStr = xml->toString();
         }
@@ -2698,16 +2707,70 @@ void PluginManager::captureAllPluginStates() {
     rackSyncManager_.captureAllPluginStates();
 }
 
+void PluginManager::capturePluginState(DeviceId deviceId) {
+    juce::ScopedLock lock(pluginLock_);
+
+    auto it = syncedDevices_.find(deviceId);
+    if (it == syncedDevices_.end() || !it->second.plugin) {
+        DBG("capturePluginState: device " << deviceId << " not found in syncedDevices");
+        return;
+    }
+
+    auto* plugin = it->second.plugin.get();
+    juce::String stateStr;
+
+    if (auto* ext = dynamic_cast<te::ExternalPlugin*>(plugin)) {
+        ext->flushPluginStateToValueTree();
+        stateStr = ext->state.getProperty(te::IDs::state).toString();
+        DBG("capturePluginState: external plugin, state length=" << stateStr.length());
+    } else {
+        plugin->flushPluginStateToValueTree();
+        if (auto xml = plugin->state.createXml())
+            stateStr = xml->toString();
+        DBG("capturePluginState: internal plugin, state length=" << stateStr.length());
+    }
+
+    bool found = false;
+    auto& trackManager = TrackManager::getInstance();
+    for (auto& track : trackManager.getTracks()) {
+        if (auto* devInfo = trackManager.getDevice(track.id, deviceId)) {
+            devInfo->pluginState = stateStr;
+            found = true;
+            DBG("capturePluginState: saved to DeviceInfo on track " << track.id);
+            break;
+        }
+    }
+    if (!found) {
+        DBG("capturePluginState: WARNING - device " << deviceId << " not found in any track");
+    }
+}
+
 void PluginManager::restorePluginState(TrackId trackId, DeviceId deviceId, te::Plugin::Ptr plugin) {
     auto* devInfo = TrackManager::getInstance().getDevice(trackId, deviceId);
-    if (!devInfo || devInfo->pluginState.isEmpty())
+    if (!devInfo || devInfo->pluginState.isEmpty()) {
+        DBG("restorePluginState: no state to restore for device "
+            << deviceId << " (devInfo=" << (devInfo ? "found" : "null") << ", state="
+            << (devInfo ? juce::String(devInfo->pluginState.length()) : "n/a") << ")");
         return;
+    }
 
-    auto* ext = dynamic_cast<te::ExternalPlugin*>(plugin.get());
-    if (!ext)
-        return;
+    DBG("restorePluginState: restoring device "
+        << deviceId << " on track " << trackId
+        << ", state length=" << devInfo->pluginState.length());
 
-    ext->state.setProperty(te::IDs::state, devInfo->pluginState, nullptr);
+    if (auto* ext = dynamic_cast<te::ExternalPlugin*>(plugin.get())) {
+        ext->state.setProperty(te::IDs::state, devInfo->pluginState, nullptr);
+        DBG("restorePluginState: set external plugin state property");
+    } else {
+        // Internal plugin: restore from saved XML ValueTree
+        if (auto xml = juce::parseXML(devInfo->pluginState)) {
+            auto savedState = juce::ValueTree::fromXml(*xml);
+            if (savedState.isValid()) {
+                plugin->restorePluginStateFromValueTree(savedState);
+                DBG("restorePluginState: restored internal plugin from XML");
+            }
+        }
+    }
 }
 
 void PluginManager::purgeStaleEntries() {
@@ -2949,6 +3012,11 @@ te::Plugin::Ptr PluginManager::createPluginOnly(TrackId trackId, const DeviceInf
             juce::ValueTree ps(te::IDs::PLUGIN);
             ps.setProperty(te::IDs::type, daw::audio::ArpeggiatorPlugin::xmlTypeName, nullptr);
             plugin = edit_.getPluginCache().createNewPlugin(ps);
+        } else if (device.pluginId.containsIgnoreCase(
+                       daw::audio::StepSequencerPlugin::xmlTypeName)) {
+            juce::ValueTree ps(te::IDs::PLUGIN);
+            ps.setProperty(te::IDs::type, daw::audio::StepSequencerPlugin::xmlTypeName, nullptr);
+            plugin = edit_.getPluginCache().createNewPlugin(ps);
         }
     } else {
         // External plugin — same lookup logic as loadDeviceAsPlugin but without track insertion
@@ -3154,22 +3222,26 @@ te::Plugin::Ptr PluginManager::loadDeviceAsPlugin(TrackId trackId, const DeviceI
             // No processor for meter - it's just for measurement
         } else if (device.pluginId.containsIgnoreCase(
                        daw::audio::MidiChordEnginePlugin::xmlTypeName)) {
-            juce::ValueTree pluginState(te::IDs::PLUGIN);
-            pluginState.setProperty(te::IDs::type, daw::audio::MidiChordEnginePlugin::xmlTypeName,
-                                    nullptr);
-            plugin = edit_.getPluginCache().createNewPlugin(pluginState);
+            plugin = createInternalPlugin(daw::audio::MidiChordEnginePlugin::xmlTypeName,
+                                          device.pluginState);
             if (plugin) {
                 track->pluginList.insertPlugin(plugin, insertIndex, nullptr);
                 // No processor — analysis-only plugin with transparent passthrough
             }
         } else if (device.pluginId.containsIgnoreCase(daw::audio::ArpeggiatorPlugin::xmlTypeName)) {
-            juce::ValueTree pluginState(te::IDs::PLUGIN);
-            pluginState.setProperty(te::IDs::type, daw::audio::ArpeggiatorPlugin::xmlTypeName,
-                                    nullptr);
-            plugin = edit_.getPluginCache().createNewPlugin(pluginState);
+            plugin = createInternalPlugin(daw::audio::ArpeggiatorPlugin::xmlTypeName,
+                                          device.pluginState);
             if (plugin) {
                 track->pluginList.insertPlugin(plugin, insertIndex, nullptr);
                 processor = std::make_unique<ArpeggiatorProcessor>(device.id, plugin);
+            }
+        } else if (device.pluginId.containsIgnoreCase(
+                       daw::audio::StepSequencerPlugin::xmlTypeName)) {
+            plugin = createInternalPlugin(daw::audio::StepSequencerPlugin::xmlTypeName,
+                                          device.pluginState);
+            if (plugin) {
+                track->pluginList.insertPlugin(plugin, insertIndex, nullptr);
+                processor = std::make_unique<StepSequencerProcessor>(device.id, plugin);
             }
         } else if (device.pluginId.containsIgnoreCase("delay")) {
             plugin = createInternalPlugin(te::DelayPlugin::xmlTypeName, device.pluginState);
@@ -3631,7 +3703,17 @@ te::Plugin::Ptr PluginManager::createInternalPlugin(const juce::String& xmlTypeN
         }
     }
 
+    // Try the string overload first (works for built-in TE plugins like delay, reverb, etc.)
     auto plugin = edit_.getPluginCache().createNewPlugin(xmlTypeName, {});
+
+    // For custom plugins (chord engine, arpeggiator, step sequencer, etc.) the string overload
+    // doesn't work — TE only routes the ValueTree overload through createCustomPlugin.
+    if (!plugin) {
+        juce::ValueTree pluginState(te::IDs::PLUGIN);
+        pluginState.setProperty(te::IDs::type, xmlTypeName, nullptr);
+        plugin = edit_.getPluginCache().createNewPlugin(pluginState);
+    }
+
     DBG("createInternalPlugin: fresh plugin -> "
         << (plugin ? plugin->getName().toRawUTF8() : "NULL")
         << " itemID=" << (plugin ? (juce::int64)plugin->itemID.getRawID() : -1));

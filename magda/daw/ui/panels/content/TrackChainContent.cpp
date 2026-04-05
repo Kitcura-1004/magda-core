@@ -1203,8 +1203,10 @@ void TrackChainContent::resized() {
         const auto* selTrack = magda::TrackManager::getInstance().getTrack(selectedTrackId_);
         bool isMaster = selTrack && selTrack->type == magda::TrackType::Master;
 
-        chainBypassButton_->setBounds(headerArea.removeFromRight(17));
-        headerArea.removeFromRight(4);
+        if (!isMaster) {
+            chainBypassButton_->setBounds(headerArea.removeFromRight(17));
+            headerArea.removeFromRight(4);
+        }
         if (!isMaster) {
             panSlider_.setBounds(headerArea.removeFromRight(40));
             headerArea.removeFromRight(4);
@@ -1337,7 +1339,17 @@ void TrackChainContent::tracksChanged() {
 
 void TrackChainContent::trackPropertyChanged(int trackId) {
     if (static_cast<magda::TrackId>(trackId) == selectedTrackId_) {
-        updateFromSelectedTrack();
+        // Only update header widgets — don't rebuild device components,
+        // as the device chain hasn't changed and rebuilding destroys
+        // transient UI state (e.g. AI results in step sequencer).
+        const auto* track = magda::TrackManager::getInstance().getTrack(selectedTrackId_);
+        if (track) {
+            trackNameLabel_.setText(track->name, juce::dontSendNotification);
+            muteButton_.setToggleState(track->muted, juce::dontSendNotification);
+            soloButton_.setToggleState(track->soloed, juce::dontSendNotification);
+            volumeSlider_.setValue(gainToDb(track->volume), juce::dontSendNotification);
+            panSlider_.setValue(track->pan, juce::dontSendNotification);
+        }
     }
 }
 
@@ -1418,10 +1430,11 @@ void TrackChainContent::updateFromSelectedTrack() {
 
             showHeader(true);
 
-            // Hide solo and pan for master track
+            // Hide solo, pan, and chain bypass for master track
             if (track->type == magda::TrackType::Master) {
                 soloButton_.setVisible(false);
                 panSlider_.setVisible(false);
+                chainBypassButton_->setVisible(false);
             }
 
             noSelectionLabel_.setVisible(false);

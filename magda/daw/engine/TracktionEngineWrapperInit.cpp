@@ -302,7 +302,8 @@ void TracktionEngineWrapper::createEditAndBridges() {
     bool isHeadless = (std::getenv("DISPLAY") == nullptr && !isMacOS && !isWindows);
 
     if (!isHeadless) {
-        sessionScheduler_ = std::make_unique<SessionClipScheduler>(*audioBridge_, *currentEdit_);
+        sessionScheduler_ = std::make_unique<SessionClipScheduler>(
+            *audioBridge_, *currentEdit_, audioBridge_->getSessionAudioMonitor());
         sessionRecorder_ = std::make_unique<SessionRecorder>(*currentEdit_);
         sessionRecorder_->setRecordingPreviews(&recordingPreviews_);
         sessionRecorder_->setPlayStateQuery([this](ClipId clipId) {
@@ -508,6 +509,8 @@ void TracktionEngineWrapper::shutdown() {
     // which unregisters CoreMIDI callbacks. This must happen while the MIDI
     // devices still exist, but after playback is stopped.
     if (midiBridge_) {
+        DBG("Stopping MIDI inputs...");
+        midiBridge_->stopAllInputs();
         DBG("Destroying MidiBridge...");
         midiBridge_.reset();
     }

@@ -17,10 +17,12 @@
 #include "PitchShiftUI.hpp"
 #include "ReverbUI.hpp"
 #include "SamplerUI.hpp"
+#include "StepSequencerUI.hpp"
 #include "ToneGeneratorUI.hpp"
 #include "UtilityUI.hpp"
 #include "audio/ArpeggiatorPlugin.hpp"
 #include "audio/MidiChordEnginePlugin.hpp"
+#include "audio/StepSequencerPlugin.hpp"
 #include "core/DeviceInfo.hpp"
 #include "core/TrackManager.hpp"
 #include "ui/components/common/LinkableTextSlider.hpp"
@@ -93,6 +95,7 @@ class DeviceSlotComponent : public NodeComponent,
     void paintContent(juce::Graphics& g, juce::Rectangle<int> contentArea) override;
     void resizedContent(juce::Rectangle<int> contentArea) override;
     void resizedHeaderExtra(juce::Rectangle<int>& headerArea) override;
+    void mouseDrag(const juce::MouseEvent& e) override;
     void resizedCollapsed(juce::Rectangle<int>& area) override;
     juce::String getCollapsedName() const override;
 
@@ -179,6 +182,7 @@ class DeviceSlotComponent : public NodeComponent,
     bool isDrumGrid_ = false;
     bool isChordEngine_ = false;
     bool isArpeggiator_ = false;
+    bool isStepSequencer_ = false;
     bool isTracktionDevice_ = false;
     std::unique_ptr<juce::Drawable> tracktionLogo_;
 
@@ -190,6 +194,7 @@ class DeviceSlotComponent : public NodeComponent,
     std::unique_ptr<magda::SvgButton> multiOutButton_;  // Multi-output routing
     std::unique_ptr<magda::SvgButton> uiButton_;
     std::unique_ptr<magda::SvgButton> onButton_;
+    std::unique_ptr<magda::SvgButton> exportClipButton_;  // Export pattern/chords as MIDI clip
 
     // Pagination
     int currentPage_ = 0;
@@ -220,11 +225,13 @@ class DeviceSlotComponent : public NodeComponent,
     std::unique_ptr<UtilityUI> utilityUI_;
     std::unique_ptr<ChordPanelContent> chordEngineUI_;
     std::unique_ptr<ArpeggiatorUI> arpeggiatorUI_;
+    std::unique_ptr<StepSequencerUI> stepSequencerUI_;
 
     static constexpr int METER_STRIP_WIDTH = 10;
     magda::LevelMeter levelMeter_;
     magda::MidiNoteStrip midiNoteStrip_;
     daw::audio::ArpeggiatorPlugin* arpPlugin_ = nullptr;
+    daw::audio::StepSequencerPlugin* stepSeqPlugin_ = nullptr;
     int lastArpNote_ = -1;
     daw::audio::MidiChordEnginePlugin* chordPlugin_ = nullptr;
     std::array<int, 32> lastChordNotes_{};

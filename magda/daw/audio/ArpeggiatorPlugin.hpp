@@ -1,13 +1,10 @@
 #pragma once
 
-#include <tracktion_engine/tracktion_engine.h>
-
 #include <array>
-#include <atomic>
+
+#include "MidiDevicePlugin.hpp"
 
 namespace magda::daw::audio {
-
-namespace te = tracktion::engine;
 
 /**
  * @brief MIDI arpeggiator plugin that transforms held notes into rhythmic patterns.
@@ -16,7 +13,7 @@ namespace te = tracktion::engine;
  * events, clears the MIDI buffer, and outputs arpeggiated notes synced to the
  * edit's tempo. All processing happens on the audio thread.
  */
-class ArpeggiatorPlugin : public te::Plugin {
+class ArpeggiatorPlugin : public MidiDevicePlugin {
   public:
     ArpeggiatorPlugin(const te::PluginCreationInfo& info);
     ~ArpeggiatorPlugin() override;
@@ -62,22 +59,6 @@ class ArpeggiatorPlugin : public te::Plugin {
 
     void applyToBuffer(const te::PluginRenderContext&) override;
 
-    bool takesMidiInput() override {
-        return true;
-    }
-    bool takesAudioInput() override {
-        return true;
-    }
-    bool isSynth() override {
-        return false;
-    }
-    bool producesAudioWhenNoAudioInput() override {
-        return false;
-    }
-    double getTailLength() const override {
-        return 0.0;
-    }
-
     void restorePluginStateFromValueTree(const juce::ValueTree&) override;
 
     // --- Parameter access for UI (CachedValues for persistence) ---
@@ -86,11 +67,15 @@ class ArpeggiatorPlugin : public te::Plugin {
     juce::CachedValue<int> octaveRange;
     juce::CachedValue<float> gate;
     juce::CachedValue<float> swing;
-    juce::CachedValue<float> ramp;  // -1.0 to 1.0: bezier depth (perpendicular bow)
-    juce::CachedValue<float> skew;  // -1.0 to 1.0: control-point position offset from centre
+    juce::CachedValue<float> ramp;      // -1.0 to 1.0: bezier depth (perpendicular bow)
+    juce::CachedValue<float> skew;      // -1.0 to 1.0: control-point position offset from centre
+    juce::CachedValue<int> rampCycles;  // 1-8: curve repetitions within one arp cycle
     juce::CachedValue<bool> latch;
     juce::CachedValue<int> velocityMode;
     juce::CachedValue<int> fixedVelocity;
+    juce::CachedValue<float> quantize;
+    juce::CachedValue<int> quantizeSub;
+    juce::CachedValue<bool> hardAngle;
 
     // --- Automatable parameters (for macro/mod linking) ---
     te::AutomatableParameter::Ptr patternParam, rateParam, octavesParam;
@@ -98,16 +83,16 @@ class ArpeggiatorPlugin : public te::Plugin {
     te::AutomatableParameter::Ptr rampParam, skewParam;
     te::AutomatableParameter::Ptr latchParam, velModeParam, fixedVelParam;
 
-    // MIDI output note data for UI strip — written on audio thread, read on UI
-    std::atomic<int> midiOutNote_{-1};     // Current note number (-1 = none)
-    std::atomic<int> midiOutVelocity_{0};  // Current velocity
-
     /** Quadratic bezier timing curve. Control point at (skew, skew+depth) in graph space.
      *  skew=0.5, depth=0  → linear.
      *  depth > 0 → bowed above diagonal (front-loaded / log-like).
      *  depth < 0 → bowed below diagonal (back-loaded / exp-like).
      *  Moving skew away from 0.5 creates asymmetric curves. */
-    static double applyRampCurve(double t, float depth, float skew);
+    static double applyRampCurve(double t, float depth, float skew, bool hardAngle = false);
+
+    /** Current arp step and sequence length for UI (set on audio thread). */
+    std::atomic<int> currentPlayStep_{-1};
+    std::atomic<int> currentSeqLength_{0};
 
   private:
     // --- Audio-thread state ---
@@ -141,8 +126,6 @@ class ArpeggiatorPlugin : public te::Plugin {
 
     // Random
     juce::Random arpRandom_;
-
-    double sampleRate_ = 44100.0;
 
     // Helper to sync CachedValue changes to AutomatableParams
     void syncParamFromProperty(const juce::Identifier& property);

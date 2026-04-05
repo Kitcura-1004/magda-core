@@ -3,7 +3,6 @@
 #include <tracktion_engine/tracktion_engine.h>
 
 #include <unordered_map>
-#include <unordered_set>
 
 #include "../core/ClipManager.hpp"
 
@@ -13,25 +12,25 @@ namespace te = tracktion;
 
 // Forward declarations
 class AudioBridge;
+class SessionClipAudioMonitor;
 
 /**
- * @brief Schedules session clip playback using Tracktion Engine's native ClipSlot/LaunchHandle
- * system.
+ * @brief Thin command layer over TE's native ClipSlot/LaunchHandle system.
  *
- * Uses TE's built-in clip launcher:
- * - ClipSlot hosts clips for launching (no dynamic timeline creation)
- * - LaunchHandle provides lock-free play/stop (no graph rebuilds)
- * - SlotControlNode renders slot clips with its own local playhead
+ * This is NOT a parallel scheduler — TE owns playback state via LaunchHandle.
+ * This class:
+ *  - Sends play/stop commands to TE (launchHandle->play()/stop())
+ *  - Maintains user intent via TrackInfo::activeSessionClipId
+ *  - Syncs TrackPlaybackMode / playSlotClips
+ *  - Reads LaunchHandle state for UI queries
+ *  - Reads audio-thread playhead positions for UI display
  *
- * Play state is derived directly from the LaunchHandle (single source of truth).
- * The scheduler only tracks which clips have been activated (activeClips_) for
- * lifecycle management (transport start/stop, timer monitoring).
- *
- * All operations run on the message thread.
+ * All public methods run on the message thread.
  */
-class SessionClipScheduler : public ClipManagerListener, private juce::Timer {
+class SessionClipScheduler : public ClipManagerListener {
   public:
-    SessionClipScheduler(AudioBridge& audioBridge, te::Edit& edit);
+    SessionClipScheduler(AudioBridge& audioBridge, te::Edit& edit,
+                         SessionClipAudioMonitor& audioMonitor);
     ~SessionClipScheduler() override;
 
     // ClipManagerListener
@@ -39,16 +38,23 @@ class SessionClipScheduler : public ClipManagerListener, private juce::Timer {
     void clipPropertyChanged(ClipId clipId) override;
     void clipPlaybackRequested(ClipId clipId, ClipPlaybackRequest request) override;
 
-    /** Query the play state of a session clip, derived from the TE LaunchHandle. */
+    /** Query the play state of a session clip from TE's LaunchHandle. */
     SessionClipPlayState getClipPlayState(ClipId clipId) const;
 
-    /** Stop all active session clips and clear state. */
+    /** Stop all active session clips, clear activeSessionClipId, revert to arrangement. */
     void deactivateAllSessionClips();
 
-    /** Returns true if any session clips are currently active (playing or queued). */
-    bool hasActiveClips() const {
-        return !activeClips_.empty();
-    }
+    /** Schedule a quantized stop for the active session clip on a track.
+        Used by scene launch for empty slots (empty slot = stop that track). */
+    void stopSessionTrack(TrackId trackId);
+
+    /** Re-launch any session clips that have activeSessionClipId set but aren't
+        currently playing. Call synchronously when transport starts to avoid
+        the 33ms polling delay. */
+    void relaunchActiveClips();
+
+    /** Returns true if any track has an activeSessionClipId set. */
+    bool hasActiveClips() const;
 
     /** Returns the looped session playhead position (seconds), or -1.0 if no session clips active.
         This tracks the most recently launched clip (used by clip editors). */
@@ -62,56 +68,70 @@ class SessionClipScheduler : public ClipManagerListener, private juce::Timer {
     /** Returns per-clip playhead positions for all active clips. */
     std::unordered_map<ClipId, double> getActiveClipPlayheadPositions() const;
 
+    /**
+     * @brief Poll LaunchHandle state and update UI.
+     * Must be called periodically from the message thread (e.g. from PlaybackPositionTimer).
+     */
+    void processStateEvents();
+
   private:
-    void timerCallback() override;
+    /** Convert elapsed beats (from audio monitor) to looped seconds for a clip. */
+    double elapsedBeatsToSeconds(ClipId clipId, double elapsedBeats) const;
 
-    /** Cache wall-clock durations for playhead tracking from clip state into per-clip data. */
-    void updateLaunchTimings(ClipId clipId, const ClipInfo* clip);
-
-    /** Query the LaunchHandle state for a clip. Returns Stopped if clip/handle not found. */
-    SessionClipPlayState queryLaunchHandleState(ClipId clipId) const;
-
-    // Per-clip launch timing data for independent playhead tracking
+    // Per-clip timing data for playhead conversion (beats → seconds)
     struct ClipLaunchData {
-        double launchTransportPos = 0.0;
-        double loopLength = 0.0;
-        double clipLength = 0.0;
+        double loopLengthBeats = 0.0;
+        double clipLengthBeats = 0.0;
         bool looping = false;
     };
 
-    /** Compute the playhead position for a single clip given its launch data. */
-    double computeClipPlayheadPosition(const ClipLaunchData& data) const;
+    /** Update ClipLaunchData from current clip properties. */
+    void updateLaunchTimings(ClipId clipId, const ClipInfo* clip);
+
+    /** Derive and sync TrackPlaybackMode for all tracks from activeSessionClipId.
+        Tracks with an active session clip → Session, others → Arrangement. */
+    void syncTrackPlaybackModes();
+
+    /** Ensure a LaunchHandle shared_ptr is held for a clip (keeps it alive for audio thread). */
+    void retainLaunchHandle(ClipId clipId);
+
+    /** Release the LaunchHandle shared_ptr for a clip. */
+    void releaseLaunchHandle(ClipId clipId);
+
+    /** Set up audio-thread monitoring for a clip's playhead position. */
+    void sendMonitorCommand(ClipId clipId);
+
+    /** Remove audio-thread monitoring for a clip. */
+    void sendUnmonitorCommand(ClipId clipId);
 
     AudioBridge& audioBridge_;
     te::Edit& edit_;
+    SessionClipAudioMonitor& audioMonitor_;
 
-    // Clips we've activated via LaunchHandle (playing or queued).
-    // Actual Queued/Playing/Stopped state is derived from the LaunchHandle.
-    std::unordered_set<ClipId> activeClips_;
-
+    // Per-clip timing data for playhead beat→second conversion
     std::unordered_map<ClipId, ClipLaunchData> clipLaunchData_;
 
     // The "primary" playhead clip — used by getSessionPlayheadPosition()
-    // for the clip editor (which shows one clip at a time).
-    // Clip awaiting Playing transition — used to correct launchTransportPos_
-    // for quantized launches (playhead starts from actual play moment, not click)
-    ClipId pendingPlayheadClip_ = INVALID_CLIP_ID;
-    // The clip that the current playhead position tracks
     ClipId playheadClipId_ = INVALID_CLIP_ID;
 
-    // Debounce counter for stopped detection.
-    // LaunchHandle::getQueuedStatus() uses try_to_lock which can fail when
-    // the audio thread holds the spin mutex, causing a queued clip to appear
-    // "Stopped" for a single timer tick. Require multiple consecutive Stopped
-    // readings before actually removing a clip.
-    static constexpr int kStoppedThreshold = 3;  // ~100ms at 30Hz
-    std::unordered_map<ClipId, int> stoppedCounters_;
+    // LaunchHandle shared_ptrs kept alive while clips are active.
+    std::unordered_map<ClipId, std::shared_ptr<te::LaunchHandle>> activeLaunchHandles_;
 
-    // Cache last-notified state per clip so we only fire notifications on actual transitions
+    // Tracks last-notified play state per clip to avoid redundant UI notifications
     std::unordered_map<ClipId, SessionClipPlayState> lastNotifiedState_;
 
-    // Track last transport position to detect arrangement loop wraps
-    double lastTransportPos_ = 0.0;
+    // Snapshot of state at the start of a launch batch.
+    // Prevents sequential clipPlaybackRequested calls within the same batch
+    // (e.g. scene launch) from seeing each other's mutations.
+    struct LaunchSnapshot {
+        bool transportPlaying = false;
+        bool hasActiveClips = false;
+    };
+    LaunchSnapshot launchSnapshot_;
+    bool launchSnapshotValid_ = false;
+
+    // Transport state tracking for stop/resume detection
+    bool wasTransportPlaying_ = false;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(SessionClipScheduler)
 };

@@ -17,9 +17,12 @@
 #include "content/DrumGridClipContent.hpp"
 #include "content/MidiEditorContent.hpp"
 #include "content/PianoRollContent.hpp"
+#include "core/MidiNoteCommands.hpp"
+#include "core/SelectionManager.hpp"
 #include "core/TrackCommands.hpp"
 #include "core/UndoManager.hpp"
 #include "state/PanelController.hpp"
+#include "ui/components/common/TimeBendPopup.hpp"
 
 namespace magda {
 
@@ -78,28 +81,6 @@ daw::audio::MidiChordEnginePlugin* findChordEngine(TrackId trackId) {
     return nullptr;
 }
 
-/** Check if a track has any MIDI-type device (including inside racks). */
-bool trackHasMidiDevice(TrackId trackId) {
-    auto& trackManager = TrackManager::getInstance();
-    const auto* track = trackManager.getTrack(trackId);
-    if (!track)
-        return false;
-    for (const auto& elem : track->chainElements) {
-        if (isDevice(elem)) {
-            if (getDevice(elem).deviceType == DeviceType::MIDI)
-                return true;
-        } else if (isRack(elem)) {
-            const auto& rack = getRack(elem);
-            for (const auto& chain : rack.chains) {
-                for (const auto& ce : chain.elements) {
-                    if (isDevice(ce) && getDevice(ce).deviceType == DeviceType::MIDI)
-                        return true;
-                }
-            }
-        }
-    }
-    return false;
-}
 }  // namespace
 
 // Resize handle between waveform editor and properties panel
@@ -414,6 +395,31 @@ void BottomPanel::setupHeaderControls() {
         }
     };
     addChildComponent(snapButton_.get());
+
+    // Time bend button (dual icon: off=grey, on=blue when notes selected)
+    bendButton_ = std::make_unique<SvgButton>(
+        "TimeBend", BinaryData::time_bend_off_svg, BinaryData::time_bend_off_svgSize,
+        BinaryData::time_bend_on_svg, BinaryData::time_bend_on_svgSize);
+    bendButton_->setTooltip("Time Bend selected notes");
+    bendButton_->setBorderColor(DarkTheme::getColour(DarkTheme::BORDER));
+    bendButton_->setBorderThickness(1.0f);
+    bendButton_->setCornerRadius(3.0f);
+    bendButton_->onClick = [this]() {
+        const auto& noteSel = SelectionManager::getInstance().getNoteSelection();
+        if (!noteSel.isValid() || noteSel.noteIndices.size() < 2)
+            return;
+        auto clipId = noteSel.clipId;
+        auto indices = noteSel.noteIndices;
+        auto popup = std::make_unique<daw::ui::TimeBendPopup>(clipId, indices);
+        popup->onApply = [clipId, indices](float depth, float skew, int cycles, float quantize,
+                                           int quantizeSub, bool hardAngle) {
+            auto cmd = std::make_unique<BendNoteTimingCommand>(clipId, indices, depth, skew, cycles,
+                                                               quantize, quantizeSub, hardAngle);
+            UndoManager::getInstance().executeCommand(std::move(cmd));
+        };
+        daw::ui::TimeBendPopup::showAbove(std::move(popup), bendButton_.get());
+    };
+    addChildComponent(bendButton_.get());
 }
 
 void BottomPanel::setCollapsed(bool collapsed) {
@@ -439,6 +445,11 @@ void BottomPanel::paint(juce::Graphics& g) {
         // Sidebar column divider (for MIDI editor tab icons)
         if (showEditorTabs_) {
             g.fillRect(SIDEBAR_WIDTH, 0, 1, EDITOR_TAB_HEIGHT - 1);
+
+            // Update bend button active state based on note selection
+            const auto& noteSel = SelectionManager::getInstance().getNoteSelection();
+            bool hasNotes = noteSel.isValid() && noteSel.noteIndices.size() >= 2;
+            bendButton_->setActive(hasNotes);
         }
     }
 
@@ -525,6 +536,13 @@ void BottomPanel::resized() {
             pianoRollTab_->setBounds(tabX, tabY, iconSize, iconSize);
             tabX += iconSize + 4;
             drumGridTab_->setBounds(tabX, tabY, iconSize, iconSize);
+
+            // Time bend button centered horizontally in header
+            bendButton_->setBounds((headerBounds.getCentreX() - iconSize / 2), tabY, iconSize,
+                                   iconSize);
+            bendButton_->setVisible(true);
+        } else {
+            bendButton_->setVisible(false);
         }
     }
 
@@ -776,9 +794,8 @@ void BottomPanel::updateContentBasedOnSelection() {
     showEditorTabs_ = needsTabs;
     showPropsPanel_ = (targetContent == daw::ui::PanelContentType::WaveformEditor);
 
-    // Show chord panel when piano roll is active and track has MIDI device
+    // Show chord panel when piano roll is active and track has a chord engine
     {
-        bool wantChord = false;
         TrackId midiTrackId = INVALID_TRACK_ID;
         if (targetContent == daw::ui::PanelContentType::PianoRoll &&
             selectedClip != INVALID_CLIP_ID) {
@@ -786,13 +803,11 @@ void BottomPanel::updateContentBasedOnSelection() {
             if (clip)
                 midiTrackId = clip->trackId;
         }
-        if (midiTrackId != INVALID_TRACK_ID)
-            wantChord = trackHasMidiDevice(midiTrackId);
+        auto* ce = (midiTrackId != INVALID_TRACK_ID) ? findChordEngine(midiTrackId) : nullptr;
 
-        showChordPanel_ = wantChord;
-        if (wantChord) {
+        showChordPanel_ = (ce != nullptr);
+        if (ce) {
             ensureChordPanelCreated();
-            auto* ce = findChordEngine(midiTrackId);
             chordPanel_->setChordEngine(ce, midiTrackId);
         } else if (chordPanel_) {
             chordPanel_->setChordEngine(nullptr);

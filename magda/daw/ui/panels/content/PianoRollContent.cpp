@@ -15,6 +15,7 @@
 #include "core/UndoManager.hpp"
 #include "music/ChordEngine.hpp"
 #include "ui/components/common/SvgButton.hpp"
+#include "ui/components/common/TimeBendPopup.hpp"
 #include "ui/components/pianoroll/CCLaneComponent.hpp"
 #include "ui/components/pianoroll/MidiDrawerComponent.hpp"
 #include "ui/components/pianoroll/PianoRollGridComponent.hpp"
@@ -387,7 +388,8 @@ void PianoRollContent::setupGridCallbacks() {
     };
 
     // Handle duplicate from context menu
-    gridComponent_->onDuplicateNotes = [](magda::ClipId clipId, std::vector<size_t> noteIndices) {
+    gridComponent_->onDuplicateNotes = [this](magda::ClipId clipId,
+                                              std::vector<size_t> noteIndices) {
         auto& clipManager = magda::ClipManager::getInstance();
         const auto* clip = clipManager.getClip(clipId);
         if (!clip || clip->type != magda::ClipType::MIDI)
@@ -418,6 +420,7 @@ void PianoRollContent::setupGridCallbacks() {
             if (!inserted.empty()) {
                 magda::SelectionManager::getInstance().selectNotes(
                     clipId, std::vector<size_t>(inserted.begin(), inserted.end()));
+                gridComponent_->syncSelectionFromManager();
             }
         }
     };
@@ -1291,12 +1294,22 @@ void PianoRollContent::drawChordRow(juce::Graphics& g, juce::Rectangle<int> area
     int scrollX = viewport_ ? viewport_->getViewPositionX() : 0;
     g.setFont(FontManager::getInstance().getUIFont(11.0f));
 
+    // Chord annotations use clip-relative beat positions (0, 4, 8...).
+    // In absolute mode the viewport is scrolled to the clip's start, so we
+    // must offset annotation positions by the clip's start beat.
+    double clipStartBeats = 0.0;
+    if (!relativeTimeMode_ && clip->view != magda::ClipView::Session) {
+        double tempo = 120.0;
+        if (auto* controller = magda::TimelineController::getCurrent())
+            tempo = controller->getState().tempo.bpm;
+        clipStartBeats = clip->startTime * (tempo / 60.0);
+    }
+
     for (const auto& annotation : clip->chordAnnotations) {
-        int startX = static_cast<int>(annotation.beatPosition * horizontalZoom_) +
-                     GRID_LEFT_PADDING - scrollX;
-        int endX =
-            static_cast<int>((annotation.beatPosition + annotation.lengthBeats) * horizontalZoom_) +
-            GRID_LEFT_PADDING - scrollX;
+        double absBeat = annotation.beatPosition + clipStartBeats;
+        int startX = static_cast<int>(absBeat * horizontalZoom_) + GRID_LEFT_PADDING - scrollX;
+        int endX = static_cast<int>((absBeat + annotation.lengthBeats) * horizontalZoom_) +
+                   GRID_LEFT_PADDING - scrollX;
 
         // Skip if out of view
         if (endX < 0 || startX > area.getWidth())

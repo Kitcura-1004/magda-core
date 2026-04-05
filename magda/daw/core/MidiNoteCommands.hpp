@@ -735,4 +735,34 @@ class SetNoteChordGroupsCommand : public UndoableCommand {
         oldGroups_;  // {noteIndex, oldChordGroup} captured on execute
 };
 
+/**
+ * @brief Command for applying time bend curve to selected notes' timing.
+ *
+ * Redistributes note start times within their original span using the
+ * ramp curve function (same as arpeggiator/step sequencer time bend).
+ */
+class BendNoteTimingCommand : public UndoableCommand {
+  public:
+    BendNoteTimingCommand(ClipId clipId, std::vector<size_t> noteIndices, float depth, float skew,
+                          int cycles = 1, float quantize = 0.0f, int quantizeSub = 64,
+                          bool hardAngle = false);
+
+    void execute() override;
+    void undo() override;
+    juce::String getDescription() const override {
+        return "Time Bend MIDI Notes";
+    }
+
+  private:
+    ClipId clipId_;
+    std::vector<size_t> noteIndices_;
+    float depth_, skew_;
+    int cycles_;
+    float quantize_;
+    int quantizeSub_;
+    bool hardAngle_;
+    std::vector<double> oldStartBeats_;
+    bool executed_ = false;
+};
+
 }  // namespace magda

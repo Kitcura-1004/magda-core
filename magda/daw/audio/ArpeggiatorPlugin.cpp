@@ -2,6 +2,8 @@
 
 #include <algorithm>
 
+#include "StepClock.hpp"
+
 namespace magda::daw::audio {
 
 const char* ArpeggiatorPlugin::xmlTypeName = "arpeggiator";
@@ -18,9 +20,13 @@ static const juce::Identifier skew("arpSkew");
 static const juce::Identifier latch("arpLatch");
 static const juce::Identifier velocityMode("arpVelMode");
 static const juce::Identifier fixedVelocity("arpFixedVel");
+static const juce::Identifier rampCycles("arpRampCycles");
+static const juce::Identifier quantize("arpQuantize");
+static const juce::Identifier quantizeSub("arpQuantizeSub");
+static const juce::Identifier hardAngle("arpHardAngle");
 }  // namespace ArpIDs
 
-ArpeggiatorPlugin::ArpeggiatorPlugin(const te::PluginCreationInfo& info) : te::Plugin(info) {
+ArpeggiatorPlugin::ArpeggiatorPlugin(const te::PluginCreationInfo& info) : MidiDevicePlugin(info) {
     auto um = getUndoManager();
     pattern.referTo(state, ArpIDs::pattern, um, 0);
     rate.referTo(state, ArpIDs::rate, um, 4);  // Eighth note
@@ -29,9 +35,13 @@ ArpeggiatorPlugin::ArpeggiatorPlugin(const te::PluginCreationInfo& info) : te::P
     swing.referTo(state, ArpIDs::swing, um, 0.0f);
     ramp.referTo(state, ArpIDs::ramp, um, 0.0f);
     skew.referTo(state, ArpIDs::skew, um, 0.0f);
+    rampCycles.referTo(state, ArpIDs::rampCycles, um, 1);
     latch.referTo(state, ArpIDs::latch, um, false);
     velocityMode.referTo(state, ArpIDs::velocityMode, um, 0);
     fixedVelocity.referTo(state, ArpIDs::fixedVelocity, um, 100);
+    quantize.referTo(state, ArpIDs::quantize, um, 0.0f);
+    quantizeSub.referTo(state, ArpIDs::quantizeSub, um, 16);
+    hardAngle.referTo(state, ArpIDs::hardAngle, um, false);
 
     // Register automatable parameters so macros can link to them
     patternParam = addParam("pattern", "Pattern", {0.0f, 5.0f, 1.0f});
@@ -95,11 +105,12 @@ void ArpeggiatorPlugin::syncParamFromProperty(const juce::Identifier& property) 
 }
 
 void ArpeggiatorPlugin::initialise(const te::PluginInitialisationInfo& info) {
-    sampleRate_ = info.sampleRate;
+    MidiDevicePlugin::initialise(info);
     resetArpState();
 }
 
 void ArpeggiatorPlugin::deinitialise() {
+    MidiDevicePlugin::deinitialise();
     resetArpState();
 }
 
@@ -110,7 +121,8 @@ void ArpeggiatorPlugin::reset() {
 
 void ArpeggiatorPlugin::restorePluginStateFromValueTree(const juce::ValueTree& v) {
     tracktion::copyPropertiesToCachedValues(v, pattern, rate, octaveRange, gate, swing, ramp, skew,
-                                            latch, velocityMode, fixedVelocity);
+                                            latch, velocityMode, fixedVelocity, quantize,
+                                            quantizeSub, hardAngle);
 }
 
 // =============================================================================
@@ -144,38 +156,8 @@ double ArpeggiatorPlugin::rateToBeats(Rate r) {
     }
 }
 
-double ArpeggiatorPlugin::applyRampCurve(double t, float depth, float skew) {
-    // Quadratic bezier from P0=(0,0) to P2=(1,1) with control point P1=(s, s+d).
-    //   skew is [-1,1] externally, remapped to s in [0.01,0.99] for the bezier
-    //   d = depth [-1,1]: perpendicular offset from diagonal
-    //              d > 0 → bowed above diagonal (front-loaded / log-like)
-    //              d < 0 → bowed below diagonal (back-loaded / exp-like)
-    //              d = 0 → linear (regardless of skew)
-    //
-    // Because the bezier is parametric, x_bez(u) ≠ u in general. We invert
-    // x_bez(u) = 2*(1-u)*u*s + u²  to find u given input t, then return y_bez(u).
-
-    double d = static_cast<double>(juce::jlimit(-0.99f, 0.99f, depth));
-    // Remap skew from [-1,1] to [0.01,0.99]: s = 0.5 + skew * 0.49
-    double s =
-        static_cast<double>(juce::jlimit(0.01, 0.99, 0.5 + static_cast<double>(skew) * 0.49));
-
-    if (std::abs(d) < 0.001)
-        return t;  // linear — skew irrelevant
-
-    // Solve (1-2s)*u² + 2s*u - t = 0 for u in [0,1].
-    double u;
-    double a = 1.0 - 2.0 * s;
-    if (std::abs(a) < 1e-10) {
-        u = t;  // s = 0.5: x_bez(u) = u, no inversion needed
-    } else {
-        double disc = s * s + a * t;  // (s² + (1-2s)*t), always ≥ 0 for t∈[0,1]
-        u = (-s + std::sqrt(std::max(0.0, disc))) / a;
-        u = juce::jlimit(0.0, 1.0, u);
-    }
-
-    // y_bez(u) = 2*(1-u)*u*(s+d) + u²
-    return 2.0 * (1.0 - u) * u * (s + d) + u * u;
+double ArpeggiatorPlugin::applyRampCurve(double t, float depth, float skew, bool hardAngle) {
+    return StepClock::applyRampCurve(t, depth, skew, hardAngle);
 }
 
 void ArpeggiatorPlugin::addHeldNote(int noteNumber, int velocity) {
@@ -214,8 +196,7 @@ void ArpeggiatorPlugin::sendAllNotesOff(te::MidiMessageArray& midi) {
     if (lastPlayedNote_ >= 0) {
         midi.addMidiMessage(juce::MidiMessage::noteOff(1, lastPlayedNote_), 0.0, te::MPESourceID{});
         lastPlayedNote_ = -1;
-        midiOutNote_.store(-1, std::memory_order_relaxed);
-        midiOutVelocity_.store(0, std::memory_order_relaxed);
+        clearMidiOutDisplay();
     }
 }
 
@@ -227,8 +208,9 @@ void ArpeggiatorPlugin::resetArpState() {
     lastPlayedVelocity_ = 0;
     lastNoteOffBeat_ = -1.0;
     wasPlaying_ = false;
-    midiOutNote_.store(-1, std::memory_order_relaxed);
-    midiOutVelocity_.store(0, std::memory_order_relaxed);
+    currentPlayStep_.store(-1, std::memory_order_relaxed);
+    currentSeqLength_.store(0, std::memory_order_relaxed);
+    clearMidiOutDisplay();
 }
 
 ArpeggiatorPlugin::ExpandedSequence ArpeggiatorPlugin::buildSequence() const {
@@ -309,6 +291,9 @@ void ArpeggiatorPlugin::applyToBuffer(const te::PluginRenderContext& fc) {
     if (!fc.bufferForMidiMessages)
         return;
 
+    if (!isEnabled())
+        return;
+
     auto& midi = *fc.bufferForMidiMessages;
     bool isLatched = latchParam ? latchParam->getCurrentValue() >= 0.5f : latch.get();
 
@@ -357,18 +342,21 @@ void ArpeggiatorPlugin::applyToBuffer(const te::PluginRenderContext& fc) {
     midi.clear();
 
     // --- 3. Handle transport transitions ---
+    // Note: TE briefly toggles isPlaying at loop boundaries, so we only
+    // reset the arp on a genuine stop (isPlaying goes false). On start we
+    // just update the flag — the step counter continues from where it was.
     if (fc.isPlaying && !wasPlaying_) {
-        resetArpState();
         wasPlaying_ = true;
     } else if (!fc.isPlaying && wasPlaying_) {
         sendAllNotesOff(midi);
+        clearHeldNotes();
         resetArpState();
         freeRunSamples_ = 0.0;
         wasPlaying_ = false;
     }
 
-    // --- 4. No held notes? ---
-    if (heldCount_ == 0) {
+    // --- 4. No held notes, or no MIDI input while transport is stopped? ---
+    if (heldCount_ == 0 || (!fc.isPlaying && physicallyHeldCount_ <= 0)) {
         sendAllNotesOff(midi);
         freeRunSamples_ = 0.0;
         return;
@@ -419,6 +407,9 @@ void ArpeggiatorPlugin::applyToBuffer(const te::PluginRenderContext& fc) {
     int fixedVel = juce::jlimit(
         1, 127,
         juce::roundToInt(fixedVelParam ? fixedVelParam->getCurrentValue() : fixedVelocity.get()));
+    float quantizeAmount = juce::jlimit(0.0f, 1.0f, quantize.get());
+    int quantizeSubVal = juce::jlimit(16, 512, quantizeSub.get());
+    bool hardAngleVal = hardAngle.get();
 
     // Cycle length in beats (one full pass through the sequence)
     double cycleBeats = seq.length * stepBeats;
@@ -437,8 +428,17 @@ void ArpeggiatorPlugin::applyToBuffer(const te::PluginRenderContext& fc) {
         double cycleStart = arpOriginBeat_ + cycle * cycleBeats;
 
         if (std::abs(rampVal) > 0.001f && seq.length > 1) {
+            int cyc = juce::jlimit(1, 8, rampCycles.get());
             double tLinear = static_cast<double>(stepInCycle) / static_cast<double>(seq.length);
-            double tCurved = applyRampCurve(tLinear, rampVal, skewVal);
+            double tCurved;
+            if (cyc <= 1) {
+                tCurved = applyRampCurve(tLinear, rampVal, skewVal, hardAngleVal);
+            } else {
+                double segLen = 1.0 / static_cast<double>(cyc);
+                int seg = std::min(static_cast<int>(tLinear / segLen), cyc - 1);
+                double tLocal = (tLinear - seg * segLen) / segLen;
+                tCurved = (seg + applyRampCurve(tLocal, rampVal, skewVal, hardAngleVal)) * segLen;
+            }
             return cycleStart + tCurved * cycleBeats;
         }
         return cycleStart + stepInCycle * stepBeats;
@@ -456,8 +456,7 @@ void ArpeggiatorPlugin::applyToBuffer(const te::PluginRenderContext& fc) {
                             te::MPESourceID{});
         lastPlayedNote_ = -1;
         lastNoteOffBeat_ = -1.0;
-        midiOutNote_.store(-1, std::memory_order_relaxed);
-        midiOutVelocity_.store(0, std::memory_order_relaxed);
+        clearMidiOutDisplay();
     }
 
     // --- 8. Walk steps and generate notes ---
@@ -472,6 +471,13 @@ void ArpeggiatorPlugin::applyToBuffer(const te::PluginRenderContext& fc) {
         double swungBeat = stepBeat;
         if (currentStep_ % 2 == 1 && swingVal > 0.0f) {
             swungBeat += static_cast<double>(swingVal) * stepBeats * 0.5;
+        }
+
+        // Apply quantize: pull warped beat toward a regular grid
+        if (quantizeAmount > 0.0f && quantizeSubVal > 0) {
+            double gridSpacing = cycleBeats / static_cast<double>(quantizeSubVal);
+            double snapped = std::round(swungBeat / gridSpacing) * gridSpacing;
+            swungBeat += (snapped - swungBeat) * static_cast<double>(quantizeAmount);
         }
 
         if (swungBeat >= blockStartBeat && swungBeat < blockEndBeat) {
@@ -510,8 +516,7 @@ void ArpeggiatorPlugin::applyToBuffer(const te::PluginRenderContext& fc) {
 
             lastPlayedNote_ = note.noteNumber;
             lastPlayedVelocity_ = vel;
-            midiOutNote_.store(note.noteNumber, std::memory_order_relaxed);
-            midiOutVelocity_.store(vel, std::memory_order_relaxed);
+            setMidiOutDisplay(note.noteNumber, vel);
 
             // Schedule note-off
             double noteOffBeat = swungBeat + stepBeats * static_cast<double>(gateVal);
@@ -522,8 +527,7 @@ void ArpeggiatorPlugin::applyToBuffer(const te::PluginRenderContext& fc) {
                                     te::MPESourceID{});
                 lastPlayedNote_ = -1;
                 lastNoteOffBeat_ = -1.0;
-                midiOutNote_.store(-1, std::memory_order_relaxed);
-                midiOutVelocity_.store(0, std::memory_order_relaxed);
+                clearMidiOutDisplay();
             } else {
                 // Note-off in a future block
                 lastNoteOffBeat_ = noteOffBeat;
@@ -531,6 +535,8 @@ void ArpeggiatorPlugin::applyToBuffer(const te::PluginRenderContext& fc) {
         }
 
         ++currentStep_;
+        currentPlayStep_.store(currentStep_ % seq.length, std::memory_order_relaxed);
+        currentSeqLength_.store(seq.length, std::memory_order_relaxed);
         stepBeat = computeStepBeat(currentStep_);
     }
 }

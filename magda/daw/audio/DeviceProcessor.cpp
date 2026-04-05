@@ -5,6 +5,7 @@
 
 #include "../core/TrackManager.hpp"
 #include "ArpeggiatorPlugin.hpp"
+#include "StepSequencerPlugin.hpp"
 
 namespace magda {
 
@@ -1338,6 +1339,76 @@ float ArpeggiatorProcessor::getParameterByIndex(int paramIndex) const {
 }
 
 // =============================================================================
+// StepSequencerProcessor
+// =============================================================================
+
+StepSequencerProcessor::StepSequencerProcessor(DeviceId deviceId, te::Plugin::Ptr plugin)
+    : DeviceProcessor(deviceId, std::move(plugin)) {}
+
+daw::audio::StepSequencerPlugin* StepSequencerProcessor::getSeqPlugin() const {
+    return dynamic_cast<daw::audio::StepSequencerPlugin*>(plugin_.get());
+}
+
+int StepSequencerProcessor::getParameterCount() const {
+    if (plugin_)
+        return static_cast<int>(plugin_->getAutomatableParameters().size());
+    return 0;
+}
+
+ParameterInfo StepSequencerProcessor::getParameterInfo(int index) const {
+    ParameterInfo info;
+    if (!plugin_)
+        return info;
+
+    auto params = plugin_->getAutomatableParameters();
+    int autoCount = static_cast<int>(params.size());
+
+    if (index >= 0 && index < autoCount) {
+        auto* param = params[index];
+        info.name = param->getParameterName();
+        info.currentValue = param->getCurrentValue();
+        auto range = param->getValueRange();
+        info.minValue = range.getStart();
+        info.maxValue = range.getEnd();
+        info.defaultValue = param->getDefaultValue().value_or(range.getStart());
+        // Timing Depth (6) and Timing Skew (7) are bipolar
+        info.bipolarModulation = (index == 6 || index == 7);
+    }
+    return info;
+}
+
+void StepSequencerProcessor::populateParameters(DeviceInfo& info) const {
+    info.parameters.clear();
+    for (int i = 0; i < getParameterCount(); ++i) {
+        info.parameters.push_back(getParameterInfo(i));
+    }
+}
+
+void StepSequencerProcessor::setParameterByIndex(int paramIndex, float value) {
+    if (!plugin_)
+        return;
+
+    auto params = plugin_->getAutomatableParameters();
+    int autoCount = static_cast<int>(params.size());
+
+    if (paramIndex >= 0 && paramIndex < autoCount) {
+        params[paramIndex]->setParameter(value, juce::sendNotificationSync);
+    }
+}
+
+float StepSequencerProcessor::getParameterByIndex(int paramIndex) const {
+    if (!plugin_)
+        return 0.0f;
+
+    auto params = plugin_->getAutomatableParameters();
+    int autoCount = static_cast<int>(params.size());
+
+    if (paramIndex >= 0 && paramIndex < autoCount)
+        return params[paramIndex]->getCurrentValue();
+    return 0.0f;
+}
+
+// =============================================================================
 // DrumGridProcessor
 // =============================================================================
 
@@ -1589,10 +1660,13 @@ void ExternalPluginProcessor::propagateParameterChange(te::AutomatableParameter&
     if (parameterIndex < 0)
         return;
 
-    // When modifiers are active, use the base value (without modulation) to prevent
-    // modulated values from overwriting the base parameter value in the data model.
-    float valueToStore = param.hasActiveModifierAssignments() ? param.getCurrentBaseValue()
-                                                              : param.getCurrentValue();
+    // When modifiers (macros) are active, the macro owns the base value — skip propagation
+    // entirely. Otherwise, internal plugin modulation (e.g. Serum LFO) gets misinterpreted
+    // as a base value change and overwrites the macro-controlled value.
+    if (param.hasActiveModifierAssignments())
+        return;
+
+    float valueToStore = param.getCurrentValue();
 
     // Update TrackManager on the message thread to avoid threading issues
     // Use callAsync to ensure we're on the message thread
