@@ -16,7 +16,7 @@
         <link rel="prev" href="../../panels/chord-panel/">
       
       
-        <link rel="next" href="../4osc/">
+        <link rel="next" href="../arpeggiator/">
       
       
       <link rel="icon" href="../../assets/images/magda-lisa.svg">
@@ -903,18 +903,27 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#magda-devices" class="md-nav__link">
+  <a href="#midi-devices" class="md-nav__link">
     <span class="md-ellipsis">
-      MAGDA Devices
+      MIDI Devices
     </span>
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#tracktion-engine-devices" class="md-nav__link">
+  <a href="#instruments" class="md-nav__link">
     <span class="md-ellipsis">
-      Tracktion Engine Devices
+      Instruments
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#effects" class="md-nav__link">
+    <span class="md-ellipsis">
+      Effects
     </span>
   </a>
   
@@ -945,11 +954,11 @@
   
   
     <li class="md-nav__item">
-      <a href="../4osc/" class="md-nav__link">
+      <a href="../arpeggiator/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
-    4OSC Synth
+    Arpeggiator
     
   </span>
   
@@ -1011,11 +1020,55 @@
   
   
     <li class="md-nav__item">
+      <a href="../4osc/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    4OSC Synth
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../sampler/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
     Sampler
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../step-sequencer/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Step Sequencer
     
   </span>
   
@@ -1176,6 +1229,27 @@
   
   
     <li class="md-nav__item">
+      <a href="../../time-bend/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Time Bend
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../../transport/" class="md-nav__link">
         
   
@@ -1209,10 +1283,10 @@
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_14" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_15" >
         
           
-          <label class="md-nav__link" for="__nav_14" id="__nav_14_label" tabindex="">
+          <label class="md-nav__link" for="__nav_15" id="__nav_15_label" tabindex="">
             
   
   <span class="md-ellipsis">
@@ -1224,8 +1298,8 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_14_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_14">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_15_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_15">
             <span class="md-nav__icon md-icon"></span>
             Reference
           </label>
@@ -1353,18 +1427,27 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#magda-devices" class="md-nav__link">
+  <a href="#midi-devices" class="md-nav__link">
     <span class="md-ellipsis">
-      MAGDA Devices
+      MIDI Devices
     </span>
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#tracktion-engine-devices" class="md-nav__link">
+  <a href="#instruments" class="md-nav__link">
     <span class="md-ellipsis">
-      Tracktion Engine Devices
+      Instruments
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#effects" class="md-nav__link">
+    <span class="md-ellipsis">
+      Effects
     </span>
   </a>
   
@@ -1400,7 +1483,7 @@
 
 <h1 id="built-in-devices">Built-in Devices<a class="headerlink" href="#built-in-devices" title="Permanent link">&para;</a></h1>
 <p>MAGDA includes its own custom devices as well as processors from the Tracktion Engine.</p>
-<h2 id="magda-devices">MAGDA Devices<a class="headerlink" href="#magda-devices" title="Permanent link">&para;</a></h2>
+<h2 id="midi-devices">MIDI Devices<a class="headerlink" href="#midi-devices" title="Permanent link">&para;</a></h2>
 <table>
 <thead>
 <tr>
@@ -1410,16 +1493,43 @@
 </thead>
 <tbody>
 <tr>
+<td><strong>Arpeggiator</strong></td>
+<td>MIDI arpeggiator with pattern, swing, and time bend. See <a href="../arpeggiator/">Arpeggiator</a>.</td>
+</tr>
+<tr>
 <td><strong>Chord Engine</strong></td>
 <td>Real-time chord detection, suggestion, and AI progression generator. See <a href="../chord-engine/">Chord Engine</a>.</td>
+</tr>
+<tr>
+<td><strong>Step Sequencer</strong></td>
+<td>Programmable step sequencer with AI pattern generation. See <a href="../step-sequencer/">Step Sequencer</a>.</td>
+</tr>
+</tbody>
+</table>
+<h2 id="instruments">Instruments<a class="headerlink" href="#instruments" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Device</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>4OSC Synth</strong></td>
+<td>Four-oscillator subtractive synthesizer with internal mod matrix. See <a href="../4osc/">4OSC Synth</a>.</td>
 </tr>
 <tr>
 <td><strong>Drum Grid</strong></td>
 <td>Chain-based drum machine with per-pad FX. See <a href="../drum-grid/">Drum Grid</a>.</td>
 </tr>
+<tr>
+<td><strong>Sampler</strong></td>
+<td>8-voice sample player with ADSR and pitch controls. See <a href="../sampler/">Sampler</a>.</td>
+</tr>
 </tbody>
 </table>
-<h2 id="tracktion-engine-devices">Tracktion Engine Devices<a class="headerlink" href="#tracktion-engine-devices" title="Permanent link">&para;</a></h2>
+<h2 id="effects">Effects<a class="headerlink" href="#effects" title="Permanent link">&para;</a></h2>
 <p>These processors are provided by the Tracktion Engine and are available in every MAGDA installation:</p>
 <table>
 <thead>
@@ -1429,14 +1539,6 @@
 </tr>
 </thead>
 <tbody>
-<tr>
-<td><strong>Sampler</strong></td>
-<td>8-voice sample player with ADSR and pitch controls. See <a href="../sampler/">Sampler</a>.</td>
-</tr>
-<tr>
-<td><strong>4OSC Synth</strong></td>
-<td>Four-oscillator subtractive synthesizer with internal mod matrix. See <a href="../4osc/">4OSC Synth</a>.</td>
-</tr>
 <tr>
 <td><strong>EQ</strong></td>
 <td>Parametric equalizer</td>
@@ -1488,7 +1590,6 @@
 <ul>
 <li><strong>VST3</strong> — Cross-platform</li>
 <li><strong>Audio Units (AU)</strong> — macOS only</li>
-<li><strong>VST</strong> — Legacy format, cross-platform</li>
 </ul>
 <p>Use the <a href="../../panels/browsers/">Plugin Browser</a> to find and add plugins to your tracks.</p>
 

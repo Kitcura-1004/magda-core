@@ -10,13 +10,13 @@
       
       
       
-        <link rel="canonical" href="https://Conceptual-Machines.github.io/magda-core/reference/keyboard-shortcuts/">
+        <link rel="canonical" href="https://Conceptual-Machines.github.io/magda-core/devices/arpeggiator/">
       
       
-        <link rel="prev" href="../dsl/">
+        <link rel="prev" href="../built-in/">
       
       
-        <link rel="next" href="../file-formats/">
+        <link rel="next" href="../chord-engine/">
       
       
       <link rel="icon" href="../../assets/images/magda-lisa.svg">
@@ -24,7 +24,7 @@
     
     
       
-        <title>Keyboard Shortcuts - MAGDA Manual</title>
+        <title>Arpeggiator - MAGDA Manual</title>
       
     
     
@@ -78,7 +78,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#keyboard-shortcuts" class="md-skip">
+        <a href="#arpeggiator" class="md-skip">
           Skip to content
         </a>
       
@@ -113,7 +113,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              Keyboard Shortcuts
+              Arpeggiator
             
           </span>
         </div>
@@ -809,8 +809,10 @@
       
   
   
+    
   
   
+  
     
     
     
@@ -820,11 +822,11 @@
       
     
     
-    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_11" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_11" checked>
         
           
           <label class="md-nav__link" for="__nav_11" id="__nav_11_label" tabindex="">
@@ -839,7 +841,7 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_11_label" aria-expanded="false">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_11_label" aria-expanded="true">
           <label class="md-nav__title" for="__nav_11">
             <span class="md-nav__icon md-icon"></span>
             Devices
@@ -853,7 +855,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../devices/built-in/" class="md-nav__link">
+      <a href="../built-in/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -872,10 +874,31 @@
                 
   
   
+    
   
   
-    <li class="md-nav__item">
-      <a href="../../devices/arpeggiator/" class="md-nav__link">
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  <span class="md-ellipsis">
+    Arpeggiator
+    
+  </span>
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
         
   
   <span class="md-ellipsis">
@@ -885,6 +908,86 @@
   
 
       </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#overview" class="md-nav__link">
+    <span class="md-ellipsis">
+      Overview
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#parameters" class="md-nav__link">
+    <span class="md-ellipsis">
+      Parameters
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Parameters">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#pattern-timing" class="md-nav__link">
+    <span class="md-ellipsis">
+      Pattern &amp; Timing
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#velocity" class="md-nav__link">
+    <span class="md-ellipsis">
+      Velocity
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#time-bend" class="md-nav__link">
+    <span class="md-ellipsis">
+      Time Bend
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#usage" class="md-nav__link">
+    <span class="md-ellipsis">
+      Usage
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
     </li>
   
 
@@ -897,7 +1000,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../devices/chord-engine/" class="md-nav__link">
+      <a href="../chord-engine/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -919,7 +1022,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../devices/drum-grid/" class="md-nav__link">
+      <a href="../drum-grid/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -941,7 +1044,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../devices/4osc/" class="md-nav__link">
+      <a href="../4osc/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -963,7 +1066,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../devices/sampler/" class="md-nav__link">
+      <a href="../sampler/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -985,7 +1088,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../devices/step-sequencer/" class="md-nav__link">
+      <a href="../step-sequencer/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1189,8 +1292,6 @@
       
   
   
-    
-  
   
   
     
@@ -1202,11 +1303,11 @@
       
     
     
-    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_15" checked>
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_15" >
         
           
           <label class="md-nav__link" for="__nav_15" id="__nav_15_label" tabindex="">
@@ -1221,7 +1322,7 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_15_label" aria-expanded="true">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_15_label" aria-expanded="false">
           <label class="md-nav__title" for="__nav_15">
             <span class="md-nav__icon md-icon"></span>
             Reference
@@ -1235,7 +1336,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../dsl/" class="md-nav__link">
+      <a href="../../reference/dsl/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1254,31 +1355,10 @@
                 
   
   
-    
   
   
-  
-    <li class="md-nav__item md-nav__item--active">
-      
-      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
-      
-      
-        
-      
-      
-        <label class="md-nav__link md-nav__link--active" for="__toc">
-          
-  
-  <span class="md-ellipsis">
-    Keyboard Shortcuts
-    
-  </span>
-  
-
-          <span class="md-nav__icon md-icon"></span>
-        </label>
-      
-      <a href="./" class="md-nav__link md-nav__link--active">
+    <li class="md-nav__item">
+      <a href="../../reference/keyboard-shortcuts/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1288,80 +1368,6 @@
   
 
       </a>
-      
-        
-
-<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
-  
-  
-  
-    
-  
-  
-    <label class="md-nav__title" for="__toc">
-      <span class="md-nav__icon md-icon"></span>
-      Table of contents
-    </label>
-    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
-      
-        <li class="md-nav__item">
-  <a href="#transport" class="md-nav__link">
-    <span class="md-ellipsis">
-      Transport
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#editing" class="md-nav__link">
-    <span class="md-ellipsis">
-      Editing
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#tracks" class="md-nav__link">
-    <span class="md-ellipsis">
-      Tracks
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#navigation" class="md-nav__link">
-    <span class="md-ellipsis">
-      Navigation
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#file" class="md-nav__link">
-    <span class="md-ellipsis">
-      File
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#other" class="md-nav__link">
-    <span class="md-ellipsis">
-      Other
-    </span>
-  </a>
-  
-</li>
-      
-    </ul>
-  
-</nav>
-      
     </li>
   
 
@@ -1374,7 +1380,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../file-formats/" class="md-nav__link">
+      <a href="../../reference/file-formats/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1396,7 +1402,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../troubleshooting/" class="md-nav__link">
+      <a href="../../reference/troubleshooting/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1445,54 +1451,60 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#transport" class="md-nav__link">
+  <a href="#overview" class="md-nav__link">
     <span class="md-ellipsis">
-      Transport
+      Overview
     </span>
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#editing" class="md-nav__link">
+  <a href="#parameters" class="md-nav__link">
     <span class="md-ellipsis">
-      Editing
+      Parameters
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Parameters">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#pattern-timing" class="md-nav__link">
+    <span class="md-ellipsis">
+      Pattern &amp; Timing
     </span>
   </a>
   
 </li>
-      
-        <li class="md-nav__item">
-  <a href="#tracks" class="md-nav__link">
+        
+          <li class="md-nav__item">
+  <a href="#velocity" class="md-nav__link">
     <span class="md-ellipsis">
-      Tracks
+      Velocity
     </span>
   </a>
   
 </li>
-      
-        <li class="md-nav__item">
-  <a href="#navigation" class="md-nav__link">
+        
+          <li class="md-nav__item">
+  <a href="#time-bend" class="md-nav__link">
     <span class="md-ellipsis">
-      Navigation
+      Time Bend
     </span>
   </a>
   
 </li>
-      
-        <li class="md-nav__item">
-  <a href="#file" class="md-nav__link">
-    <span class="md-ellipsis">
-      File
-    </span>
-  </a>
+        
+      </ul>
+    </nav>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#other" class="md-nav__link">
+  <a href="#usage" class="md-nav__link">
     <span class="md-ellipsis">
-      Other
+      Usage
     </span>
   </a>
   
@@ -1517,173 +1529,114 @@
   
 
 
-<h1 id="keyboard-shortcuts">Keyboard Shortcuts<a class="headerlink" href="#keyboard-shortcuts" title="Permanent link">&para;</a></h1>
-<h2 id="transport">Transport<a class="headerlink" href="#transport" title="Permanent link">&para;</a></h2>
+<h1 id="arpeggiator">Arpeggiator<a class="headerlink" href="#arpeggiator" title="Permanent link">&para;</a></h1>
+<p>The Arpeggiator is a MIDI device that takes held chords and plays them back as a rhythmic pattern — one note at a time, in a chosen order and rate.</p>
+<h2 id="overview">Overview<a class="headerlink" href="#overview" title="Permanent link">&para;</a></h2>
+<p><img alt="Arpeggiator" src="../../assets/images/devices/arpeggiator.png" /></p>
+<p>The Arpeggiator sits on a track's device chain before an instrument. It intercepts incoming MIDI chords and outputs arpeggiated note sequences. Hold a chord on your keyboard and the arpeggiator cycles through its notes at the configured rate and pattern.</p>
+<h2 id="parameters">Parameters<a class="headerlink" href="#parameters" title="Permanent link">&para;</a></h2>
+<h3 id="pattern-timing">Pattern &amp; Timing<a class="headerlink" href="#pattern-timing" title="Permanent link">&para;</a></h3>
 <table>
 <thead>
 <tr>
-<th>Shortcut</th>
-<th>Action</th>
+<th>Parameter</th>
+<th>Range</th>
+<th>Description</th>
 </tr>
 </thead>
 <tbody>
 <tr>
-<td><span class="keys"><kbd class="key-space">Space</kbd></span></td>
-<td>Play / Stop</td>
+<td><strong>Pattern</strong></td>
+<td>Up, Down, Up/Down, Down/Up, Random, As Played</td>
+<td>Note order within each cycle</td>
 </tr>
 <tr>
-<td><span class="keys"><kbd class="key-r">R</kbd></span></td>
-<td>Record</td>
+<td><strong>Rate</strong></td>
+<td>Musical subdivisions (1/1 – 1/32, triplets, dotted)</td>
+<td>Speed of the arpeggio steps</td>
 </tr>
 <tr>
-<td><span class="keys"><kbd class="key-home">Home</kbd></span></td>
-<td>Return to start</td>
+<td><strong>Octaves</strong></td>
+<td>1–4</td>
+<td>How many octaves the pattern spans before repeating</td>
+</tr>
+<tr>
+<td><strong>Gate</strong></td>
+<td>0–100%</td>
+<td>Note length as a percentage of the step duration. Lower values produce staccato; higher values produce legato.</td>
+</tr>
+<tr>
+<td><strong>Swing</strong></td>
+<td>-100% to 100%</td>
+<td>Offsets every other step for a shuffle feel</td>
+</tr>
+<tr>
+<td><strong>Latch</strong></td>
+<td>On / Off</td>
+<td>When on, the arpeggio continues playing after you release the keys</td>
 </tr>
 </tbody>
 </table>
-<h2 id="editing">Editing<a class="headerlink" href="#editing" title="Permanent link">&para;</a></h2>
+<h3 id="velocity">Velocity<a class="headerlink" href="#velocity" title="Permanent link">&para;</a></h3>
 <table>
 <thead>
 <tr>
-<th>Shortcut</th>
-<th>Action</th>
+<th>Parameter</th>
+<th>Range</th>
+<th>Description</th>
 </tr>
 </thead>
 <tbody>
 <tr>
-<td><span class="keys"><kbd class="key-control">Ctrl</kbd><span>+</span><kbd class="key-z">Z</kbd></span> / <span class="keys"><kbd class="key-command">Cmd</kbd><span>+</span><kbd class="key-z">Z</kbd></span></td>
-<td>Undo</td>
+<td><strong>Vel Mode</strong></td>
+<td>Original, Fixed, Accent</td>
+<td>How output velocity is determined. Original uses the played velocity; Fixed uses a set value; Accent alternates between normal and accent levels.</td>
 </tr>
 <tr>
-<td><span class="keys"><kbd class="key-control">Ctrl</kbd><span>+</span><kbd class="key-shift">Shift</kbd><span>+</span><kbd class="key-z">Z</kbd></span> / <span class="keys"><kbd class="key-command">Cmd</kbd><span>+</span><kbd class="key-shift">Shift</kbd><span>+</span><kbd class="key-z">Z</kbd></span></td>
-<td>Redo</td>
-</tr>
-<tr>
-<td><span class="keys"><kbd class="key-control">Ctrl</kbd><span>+</span><kbd class="key-x">X</kbd></span> / <span class="keys"><kbd class="key-command">Cmd</kbd><span>+</span><kbd class="key-x">X</kbd></span></td>
-<td>Cut</td>
-</tr>
-<tr>
-<td><span class="keys"><kbd class="key-control">Ctrl</kbd><span>+</span><kbd class="key-c">C</kbd></span> / <span class="keys"><kbd class="key-command">Cmd</kbd><span>+</span><kbd class="key-c">C</kbd></span></td>
-<td>Copy</td>
-</tr>
-<tr>
-<td><span class="keys"><kbd class="key-control">Ctrl</kbd><span>+</span><kbd class="key-v">V</kbd></span> / <span class="keys"><kbd class="key-command">Cmd</kbd><span>+</span><kbd class="key-v">V</kbd></span></td>
-<td>Paste</td>
-</tr>
-<tr>
-<td><span class="keys"><kbd class="key-control">Ctrl</kbd><span>+</span><kbd class="key-d">D</kbd></span> / <span class="keys"><kbd class="key-command">Cmd</kbd><span>+</span><kbd class="key-d">D</kbd></span></td>
-<td>Duplicate clips or track</td>
-</tr>
-<tr>
-<td><span class="keys"><kbd class="key-control">Ctrl</kbd><span>+</span><kbd class="key-shift">Shift</kbd><span>+</span><kbd class="key-d">D</kbd></span> / <span class="keys"><kbd class="key-command">Cmd</kbd><span>+</span><kbd class="key-shift">Shift</kbd><span>+</span><kbd class="key-d">D</kbd></span></td>
-<td>Duplicate track (without content)</td>
-</tr>
-<tr>
-<td><span class="keys"><kbd class="key-control">Ctrl</kbd><span>+</span><kbd class="key-a">A</kbd></span> / <span class="keys"><kbd class="key-command">Cmd</kbd><span>+</span><kbd class="key-a">A</kbd></span></td>
-<td>Select all</td>
-</tr>
-<tr>
-<td><span class="keys"><kbd class="key-delete">Del</kbd></span> / <span class="keys"><kbd class="key-backspace">Backspace</kbd></span></td>
-<td>Delete selected clips or track</td>
-</tr>
-<tr>
-<td><span class="keys"><kbd class="key-control">Ctrl</kbd><span>+</span><kbd class="key-e">E</kbd></span> / <span class="keys"><kbd class="key-command">Cmd</kbd><span>+</span><kbd class="key-e">E</kbd></span></td>
-<td>Split / trim at cursor or selection</td>
-</tr>
-<tr>
-<td><span class="keys"><kbd class="key-control">Ctrl</kbd><span>+</span><kbd class="key-j">J</kbd></span> / <span class="keys"><kbd class="key-command">Cmd</kbd><span>+</span><kbd class="key-j">J</kbd></span></td>
-<td>Join clips</td>
-</tr>
-<tr>
-<td><span class="keys"><kbd class="key-control">Ctrl</kbd><span>+</span><kbd class="key-b">B</kbd></span> / <span class="keys"><kbd class="key-command">Cmd</kbd><span>+</span><kbd class="key-b">B</kbd></span></td>
-<td>Render clip to audio</td>
-</tr>
-<tr>
-<td><span class="keys"><kbd class="key-control">Ctrl</kbd><span>+</span><kbd class="key-shift">Shift</kbd><span>+</span><kbd class="key-b">B</kbd></span> / <span class="keys"><kbd class="key-command">Cmd</kbd><span>+</span><kbd class="key-shift">Shift</kbd><span>+</span><kbd class="key-b">B</kbd></span></td>
-<td>Render time selection</td>
+<td><strong>Fixed Vel</strong></td>
+<td>0–127</td>
+<td>Velocity value used when Vel Mode is set to Fixed</td>
 </tr>
 </tbody>
 </table>
-<h2 id="tracks">Tracks<a class="headerlink" href="#tracks" title="Permanent link">&para;</a></h2>
+<h3 id="time-bend">Time Bend<a class="headerlink" href="#time-bend" title="Permanent link">&para;</a></h3>
+<p>The <a href="../../time-bend/">Time Bend</a> section reshapes the timing of arpeggiated notes within each cycle. Instead of evenly spaced steps, notes can accelerate, decelerate, or cluster in rhythmic patterns.</p>
 <table>
 <thead>
 <tr>
-<th>Shortcut</th>
-<th>Action</th>
+<th>Parameter</th>
+<th>Range</th>
+<th>Description</th>
 </tr>
 </thead>
 <tbody>
 <tr>
-<td><span class="keys"><kbd class="key-control">Ctrl</kbd><span>+</span><kbd class="key-t">T</kbd></span> / <span class="keys"><kbd class="key-command">Cmd</kbd><span>+</span><kbd class="key-t">T</kbd></span></td>
-<td>Add new track</td>
+<td><strong>Depth</strong></td>
+<td>-1.0 to 1.0</td>
+<td>Curve intensity — positive front-loads notes, negative back-loads them</td>
 </tr>
 <tr>
-<td><span class="keys"><kbd class="key-m">M</kbd></span></td>
-<td>Toggle mute on selected track</td>
+<td><strong>Skew</strong></td>
+<td>-1.0 to 1.0</td>
+<td>Shifts the curve's inflection point earlier or later</td>
 </tr>
 <tr>
-<td><span class="keys"><kbd class="key-shift">Shift</kbd><span>+</span><kbd class="key-s">S</kbd></span></td>
-<td>Toggle solo on selected track</td>
+<td><strong>Cycles</strong></td>
+<td>1–8</td>
+<td>Repeats the curve within each arpeggio cycle</td>
 </tr>
 </tbody>
 </table>
-<h2 id="navigation">Navigation<a class="headerlink" href="#navigation" title="Permanent link">&para;</a></h2>
-<table>
-<thead>
-<tr>
-<th>Shortcut</th>
-<th>Action</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><span class="keys"><kbd class="key-control">Ctrl</kbd><span>+</span><kbd class="key-plus">+</kbd></span> / <span class="keys"><kbd class="key-command">Cmd</kbd><span>+</span><kbd class="key-plus">+</kbd></span></td>
-<td>Zoom in</td>
-</tr>
-<tr>
-<td><span class="keys"><kbd class="key-control">Ctrl</kbd><span>+</span><kbd class="key-minus">-</kbd></span> / <span class="keys"><kbd class="key-command">Cmd</kbd><span>+</span><kbd class="key-minus">-</kbd></span></td>
-<td>Zoom out</td>
-</tr>
-<tr>
-<td><span class="keys"><kbd class="key-control">Ctrl</kbd><span>+</span><kbd class="key-shift">Shift</kbd><span>+</span><kbd class="key-l">L</kbd></span> / <span class="keys"><kbd class="key-command">Cmd</kbd><span>+</span><kbd class="key-shift">Shift</kbd><span>+</span><kbd class="key-l">L</kbd></span></td>
-<td>Set loop from clip bounds</td>
-</tr>
-</tbody>
-</table>
-<h2 id="file">File<a class="headerlink" href="#file" title="Permanent link">&para;</a></h2>
-<table>
-<thead>
-<tr>
-<th>Shortcut</th>
-<th>Action</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><span class="keys"><kbd class="key-control">Ctrl</kbd><span>+</span><kbd class="key-s">S</kbd></span> / <span class="keys"><kbd class="key-command">Cmd</kbd><span>+</span><kbd class="key-s">S</kbd></span></td>
-<td>Save</td>
-</tr>
-<tr>
-<td><span class="keys"><kbd class="key-control">Ctrl</kbd><span>+</span><kbd class="key-shift">Shift</kbd><span>+</span><kbd class="key-s">S</kbd></span> / <span class="keys"><kbd class="key-command">Cmd</kbd><span>+</span><kbd class="key-shift">Shift</kbd><span>+</span><kbd class="key-s">S</kbd></span></td>
-<td>Save as</td>
-</tr>
-</tbody>
-</table>
-<h2 id="other">Other<a class="headerlink" href="#other" title="Permanent link">&para;</a></h2>
-<table>
-<thead>
-<tr>
-<th>Shortcut</th>
-<th>Action</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><span class="keys"><kbd class="key-escape">Esc</kbd></span></td>
-<td>Exit link mode / clear edit cursor</td>
-</tr>
-</tbody>
-</table>
+<p>The interactive curve display shows the timing transformation in real time. During playback, a green sweep animation tracks the current step position. Drag the handle to shape the curve, or double-click to reset.</p>
+<p>Depth, Skew, and Cycles can be linked to <a href="../../modulation/macros/">Macros</a> for automatable timing modulation — morph from straight to swung patterns in real time.</p>
+<h2 id="usage">Usage<a class="headerlink" href="#usage" title="Permanent link">&para;</a></h2>
+<ol>
+<li>Place the Arpeggiator before an instrument on a track's device chain</li>
+<li>Play or input a chord — the arpeggiator breaks it into individual notes</li>
+<li>Adjust Pattern, Rate, and Gate to shape the basic rhythm</li>
+<li>Use Time Bend to add rhythmic variation beyond simple swing</li>
+<li>Enable Latch to keep the arpeggio running while you change chords</li>
+</ol>
 
 
 
