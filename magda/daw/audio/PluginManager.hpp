@@ -12,6 +12,7 @@
 #include "../core/TypeIds.hpp"
 #include "CurveSnapshot.hpp"
 #include "DeviceProcessor.hpp"
+#include "DrumGridPlugin.hpp"
 #include "InstrumentRackManager.hpp"
 #include "RackSyncManager.hpp"
 
@@ -61,7 +62,7 @@ struct PluginLoadResult {
  * - PluginWindowBridge& (for closing plugin windows)
  * - TransportStateManager& (for tone generator bypass state)
  */
-class PluginManager {
+class PluginManager : public daw::audio::DrumGridPlugin::Listener {
   public:
     /**
      * @brief Construct PluginManager with required dependencies
@@ -436,6 +437,22 @@ class PluginManager {
      */
     void setDeviceMacroValue(DeviceId deviceId, int macroIndex, float value);
 
+    /**
+     * @brief Sync multi-out tracks for a DrumGrid device
+     * Activates/deactivates multi-out pairs to match current non-empty chains.
+     */
+    void syncDrumGridMultiOutTracks(TrackId trackId, DeviceId deviceId,
+                                    daw::audio::DrumGridPlugin* drumGrid);
+
+    /**
+     * @brief Register per-pad chain plugins in syncedDevices_ for macro/mod linking
+     */
+    void syncDrumGridPadPlugins(TrackId trackId, DeviceId drumGridDeviceId,
+                                daw::audio::DrumGridPlugin* drumGrid);
+
+    // DrumGridPlugin::Listener
+    void drumGridChainsChanged(daw::audio::DrumGridPlugin* plugin) override;
+
   private:
     // Internal device → plugin conversion (used by syncTrackPlugins)
     te::Plugin::Ptr loadDeviceAsPlugin(TrackId trackId, const DeviceInfo& device,
@@ -513,6 +530,9 @@ class PluginManager {
     // Structural fingerprint for mod sync: {activeModCount, totalLinkCount}
     // Used to decide if resyncDeviceModifiers needs a full rebuild or just property update.
     std::map<TrackId, std::pair<int, int>> modLinkFingerprints_;
+
+    // DrumGrid DeviceId → set of pad-plugin DeviceIds registered in syncedDevices_
+    std::map<DeviceId, std::set<DeviceId>> drumGridPadDevices_;
 
     // Sidechain monitor plugins (sourceTrackId → SidechainMonitorPlugin)
     std::map<TrackId, te::Plugin::Ptr> sidechainMonitors_;

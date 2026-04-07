@@ -333,6 +333,7 @@ void ClipInspector::initClipPropertiesSection() {
                                                        BinaryData::audio_clip_svgSize);
     clipTypeIcon_->setOriginalColor(juce::Colour(0xFFB3B3B3));
     clipTypeIcon_->setNormalColor(DarkTheme::getColour(DarkTheme::TEXT_SECONDARY));
+    clipTypeIcon_->setIconPadding(1.0f);
     clipTypeIcon_->setInterceptsMouseClicks(false, false);
     clipTypeIcon_->setTooltip("Audio clip");
     addChildComponent(*clipTypeIcon_);
@@ -342,6 +343,7 @@ void ClipInspector::initClipPropertiesSection() {
                                                        BinaryData::Arrangement_svgSize);
     clipViewIcon_->setOriginalColor(juce::Colour(0xFFB3B3B3));
     clipViewIcon_->setNormalColor(DarkTheme::getColour(DarkTheme::TEXT_SECONDARY));
+    clipViewIcon_->setIconPadding(1.0f);
     clipViewIcon_->setInterceptsMouseClicks(false, false);
     clipViewIcon_->setTooltip("Arrangement clip");
     addChildComponent(*clipViewIcon_);
@@ -419,6 +421,7 @@ void ClipInspector::initClipPropertiesSection() {
                                                            BinaryData::position_svgSize);
     clipPositionIcon_->setOriginalColor(juce::Colour(0xFFB3B3B3));
     clipPositionIcon_->setNormalColor(DarkTheme::getColour(DarkTheme::TEXT_SECONDARY));
+    clipPositionIcon_->setIconPadding(1.0f);
     clipPositionIcon_->setInterceptsMouseClicks(false, false);
     clipPropsContainer_.addChildComponent(*clipPositionIcon_);
 
@@ -630,17 +633,33 @@ void ClipInspector::initClipPropertiesSection() {
         }
 
         // When enabling, update sourceBPM from detected BPM (AudioThumbnailManager)
-        // since the clip model may have stale metadata from TE's default loopInfo
+        // since the clip model may have stale metadata from TE's default loopInfo.
+        // Cached value is applied immediately; cache miss kicks off background
+        // detection and patches the clip when the result arrives. Beat mode is
+        // enabled optimistically with the existing sourceBPM in the meantime.
         if (enable && clip->type == magda::ClipType::Audio) {
-            double detectedBPM =
-                magda::AudioThumbnailManager::getInstance().detectBPM(clip->audioFilePath);
-            if (detectedBPM > 0.0) {
+            auto& thumbs = magda::AudioThumbnailManager::getInstance();
+            double cached = thumbs.getCachedBPM(clip->audioFilePath);
+            if (cached > 0.0) {
+                clip->sourceBPM = cached;
                 double sourceDuration = clip->getSourceLength();
-                clip->sourceBPM = detectedBPM;
-                // Recalculate source beat count from detected BPM and file duration
                 if (sourceDuration > 0.0) {
-                    clip->sourceNumBeats = sourceDuration * detectedBPM / 60.0;
+                    clip->sourceNumBeats = sourceDuration * cached / 60.0;
                 }
+            } else {
+                auto cid = primaryClipId();
+                thumbs.requestBPMDetection(clip->audioFilePath, [cid](double detectedBPM) {
+                    if (detectedBPM <= 0.0)
+                        return;
+                    auto* c = magda::ClipManager::getInstance().getClip(cid);
+                    if (!c)
+                        return;
+                    c->sourceBPM = detectedBPM;
+                    double sd = c->getSourceLength();
+                    if (sd > 0.0)
+                        c->sourceNumBeats = sd * detectedBPM / 60.0;
+                    magda::ClipManager::getInstance().forceNotifyClipPropertyChanged(cid);
+                });
             }
         }
 
@@ -1469,6 +1488,8 @@ void ClipInspector::initFadesSection() {
         btn->setNormalColor(DarkTheme::getColour(DarkTheme::TEXT_SECONDARY));
         btn->setHoverColor(DarkTheme::getColour(DarkTheme::TEXT_PRIMARY));
         btn->setActiveColor(DarkTheme::getColour(DarkTheme::ACCENT_BLUE));
+        btn->setBorderColor(DarkTheme::getColour(DarkTheme::BORDER));
+        btn->setBorderThickness(1.0f);
         btn->setTooltip(icon.tooltip);
         btn->setClickingTogglesState(false);
         clipPropsContainer_.addChildComponent(*btn);
@@ -1522,6 +1543,8 @@ void ClipInspector::initFadesSection() {
         btn->setNormalColor(DarkTheme::getColour(DarkTheme::TEXT_SECONDARY));
         btn->setHoverColor(DarkTheme::getColour(DarkTheme::TEXT_PRIMARY));
         btn->setActiveColor(DarkTheme::getColour(DarkTheme::ACCENT_BLUE));
+        btn->setBorderColor(DarkTheme::getColour(DarkTheme::BORDER));
+        btn->setBorderThickness(1.0f);
         btn->setTooltip(icon.tooltip);
         btn->setClickingTogglesState(false);
         clipPropsContainer_.addChildComponent(*btn);

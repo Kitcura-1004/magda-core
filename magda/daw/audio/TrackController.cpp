@@ -298,8 +298,8 @@ void TrackController::setTrackAudioInput(TrackId trackId, const juce::String& de
                 bool found = false;
                 for (auto* inputDeviceInstance : allInputs) {
                     juce::Logger::writeToLog("[AudioInput] checking device '" +
-                                             inputDeviceInstance->owner.getName() +
-                                             "' against '" + resolvedName + "'");
+                                             inputDeviceInstance->owner.getName() + "' against '" +
+                                             resolvedName + "'");
                     if (inputDeviceInstance->owner.getName() == resolvedName) {
                         auto result = inputDeviceInstance->setTarget(track->itemID, false, nullptr);
                         if (result.has_value()) {
@@ -316,8 +316,8 @@ void TrackController::setTrackAudioInput(TrackId trackId, const juce::String& de
                 }
                 if (!found) {
                     juce::Logger::writeToLog("[AudioInput] device '" + resolvedName +
-                                             "' NOT FOUND in " +
-                                             juce::String(allInputs.size()) + " inputs");
+                                             "' NOT FOUND in " + juce::String(allInputs.size()) +
+                                             " inputs");
                 }
             }
         }

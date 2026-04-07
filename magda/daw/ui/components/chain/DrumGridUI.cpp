@@ -7,6 +7,7 @@
 
 #include "audio/DrumGridPlugin.hpp"
 #include "audio/MagdaSamplerPlugin.hpp"
+#include "ui/components/chain/DeviceSlotHeaderLayout.hpp"
 #include "ui/debug/DebugSettings.hpp"
 #include "ui/themes/DarkTheme.hpp"
 #include "ui/themes/FontManager.hpp"
@@ -226,15 +227,14 @@ DrumGridUI::DrumGridUI() {
     }
 
     // Pagination
-    setupButton(prevPageButton_);
-    prevPageButton_.onClick = [this]() { goToPrevPage(); };
-    addAndMakeVisible(prevPageButton_);
+    prevPageButton_ = makeNavArrowButton("prev", 0.5f);
+    nextPageButton_ = makeNavArrowButton("next", 0.0f);
+    prevPageButton_->onClick = [this]() { goToPrevPage(); };
+    nextPageButton_->onClick = [this]() { goToNextPage(); };
+    addAndMakeVisible(*prevPageButton_);
+    addAndMakeVisible(*nextPageButton_);
 
-    setupButton(nextPageButton_);
-    nextPageButton_.onClick = [this]() { goToNextPage(); };
-    addAndMakeVisible(nextPageButton_);
-
-    pageLabel_.setFont(FontManager::getInstance().getUIFont(10.0f));
+    pageLabel_.setFont(FontManager::getInstance().getUIFont(9.0f));
     pageLabel_.setColour(juce::Label::textColourId, DarkTheme::getSecondaryTextColour());
     pageLabel_.setJustificationType(juce::Justification::centred);
     addAndMakeVisible(pageLabel_);
@@ -348,41 +348,13 @@ DrumGridUI::DrumGridUI() {
     chainsToggleButton_->setNormalColor(DarkTheme::getSecondaryTextColour());
     chainsToggleButton_->setActiveColor(juce::Colours::white);
     chainsToggleButton_->setActiveBackgroundColor(
-        DarkTheme::getColour(DarkTheme::ACCENT_BLUE).darker(0.3f));
+        DarkTheme::getColour(DarkTheme::ACCENT_BLUE).darker(0.6f));
     chainsToggleButton_->setActive(chainsPanelVisible_);
     chainsToggleButton_->onClick = [this]() {
         setChainsPanelVisible(chainsToggleButton_->getToggleState());
         chainsToggleButton_->setActive(chainsToggleButton_->getToggleState());
     };
     addAndMakeVisible(*chainsToggleButton_);
-
-    // Tab buttons for chains panel (Mix / Range)
-    auto setupTabButton = [this](juce::TextButton& btn) {
-        btn.setColour(juce::TextButton::buttonColourId, DarkTheme::getColour(DarkTheme::SURFACE));
-        btn.setColour(juce::TextButton::buttonOnColourId,
-                      DarkTheme::getColour(DarkTheme::ACCENT_BLUE).darker(0.3f));
-        btn.setColour(juce::TextButton::textColourOffId, DarkTheme::getSecondaryTextColour());
-        btn.setColour(juce::TextButton::textColourOnId, DarkTheme::getTextColour());
-        btn.setClickingTogglesState(true);
-        btn.setRadioGroupId(1001);
-        btn.setLookAndFeel(&FlatTabButtonLookAndFeel::getInstance());
-        addAndMakeVisible(btn);
-    };
-    setupTabButton(mixTabButton_);
-    setupTabButton(rangeTabButton_);
-
-    mixTabButton_.setToggleState(true, juce::dontSendNotification);
-
-    mixTabButton_.onClick = [this]() {
-        currentChainsTab_ = ChainsTab::Mix;
-        resized();
-        repaint();
-    };
-    rangeTabButton_.onClick = [this]() {
-        currentChainsTab_ = ChainsTab::Range;
-        resized();
-        repaint();
-    };
 
     // Initialize
     refreshPadButtons();
@@ -391,8 +363,6 @@ DrumGridUI::DrumGridUI() {
 
 DrumGridUI::~DrumGridUI() {
     stopTimer();
-    mixTabButton_.setLookAndFeel(nullptr);
-    rangeTabButton_.setLookAndFeel(nullptr);
 }
 
 void DrumGridUI::setDrumGridPlugin(daw::audio::DrumGridPlugin* plugin) {
@@ -443,6 +413,7 @@ void DrumGridUI::timerCallback() {
         float chainPan = chain->pan.get();
         bool chainMute = chain->mute.get();
         bool chainSolo = chain->solo.get();
+        int chainBusOutput = chain->busOutput.get();
 
         bool changed = false;
         if (std::abs(info.level - chainLevel) > 0.01f) {
@@ -461,13 +432,18 @@ void DrumGridUI::timerCallback() {
             info.solo = chainSolo;
             changed = true;
         }
+        if (info.busOutput != chainBusOutput) {
+            info.busOutput = chainBusOutput;
+            changed = true;
+        }
 
         if (changed) {
             // Update chain row if visible
             for (auto& row : chainRows_) {
                 if (row->getPadIndex() == i) {
                     juce::String displayName = getNoteName(i) + " " + info.sampleName;
-                    row->updateFromPad(displayName, info.level, info.pan, info.mute, info.solo);
+                    row->updateFromPad(displayName, info.level, info.pan, info.mute, info.solo,
+                                       false, info.busOutput);
                     break;
                 }
             }
@@ -481,7 +457,8 @@ void DrumGridUI::timerCallback() {
 }
 
 void DrumGridUI::updatePadInfo(int padIndex, const juce::String& sampleName, bool mute, bool solo,
-                               float levelDb, float pan, int chainIndex, bool bypassed) {
+                               float levelDb, float pan, int chainIndex, bool bypassed,
+                               int busOutput) {
     if (padIndex < 0 || padIndex >= kTotalPads)
         return;
 
@@ -493,6 +470,7 @@ void DrumGridUI::updatePadInfo(int padIndex, const juce::String& sampleName, boo
     info.level = levelDb;
     info.pan = pan;
     info.chainIndex = chainIndex;
+    info.busOutput = busOutput;
 
     // Update visible pad buttons if this pad is on the current page
     int pageStart = currentPage_ * kPadsPerPage;
@@ -544,26 +522,12 @@ void DrumGridUI::setSelectedPad(int padIndex) {
         int rowChainIdx = padInfos_[static_cast<size_t>(rowPad)].chainIndex;
         row->setSelected(rowChainIdx >= 0 && rowChainIdx == selectedChainIdx);
     }
-    for (auto& row : rangeRows_) {
-        int rowPad = row->getPadIndex();
-        int rowChainIdx = padInfos_[static_cast<size_t>(rowPad)].chainIndex;
-        row->setSelected(rowChainIdx >= 0 && rowChainIdx == selectedChainIdx);
-    }
 
     // Scroll chains viewport to show the selected row
-    if (currentChainsTab_ == ChainsTab::Mix) {
-        for (auto& row : chainRows_) {
-            if (row->isSelected()) {
-                chainsViewport_.setViewPosition(0, row->getY());
-                break;
-            }
-        }
-    } else {
-        for (auto& row : rangeRows_) {
-            if (row->isSelected()) {
-                chainsViewport_.setViewPosition(0, row->getY());
-                break;
-            }
+    for (auto& row : chainRows_) {
+        if (row->isSelected()) {
+            chainsViewport_.setViewPosition(0, row->getY());
+            break;
         }
     }
 
@@ -610,30 +574,54 @@ void DrumGridUI::filesDropped(const juce::StringArray& files, int x, int y) {
 
 void DrumGridUI::paint(juce::Graphics& g) {
     // Background
-    g.setColour(DarkTheme::getColour(DarkTheme::BORDER));
-    g.drawRect(getLocalBounds(), 1);
+    constexpr float corner = 5.0f;
+    auto bounds = getLocalBounds().toFloat();
     g.setColour(DarkTheme::getColour(DarkTheme::BACKGROUND).brighter(0.05f));
-    g.fillRect(getLocalBounds().reduced(1));
+    g.fillRoundedRectangle(bounds.reduced(1.0f), corner);
 
-    // Dividers — positioned to match right-to-left layout
-    bool selectedPadHasContent =
-        padInfos_[static_cast<size_t>(selectedPad_)].sampleName.isNotEmpty();
-    bool showDetailPanel = selectedPadHasContent;
+    // Clip inner fills to the rounded shape so they don't bleed past the corners
+    {
+        juce::Path clip;
+        clip.addRoundedRectangle(bounds.reduced(1.0f), corner);
+        g.reduceClipRegion(clip);
 
-    auto divArea = getLocalBounds().reduced(6);
-    float top = static_cast<float>(divArea.getY());
-    float bottom = static_cast<float>(divArea.getBottom());
+        // Left column background
+        auto sidebarColour = DarkTheme::getColour(DarkTheme::BACKGROUND);
+        g.setColour(sidebarColour);
+        g.fillRect(toggleColBounds_);
+
+        // Pagination row background + top-edge separator
+        g.setColour(sidebarColour);
+        g.fillRect(paginationBounds_);
+        g.setColour(DarkTheme::getColour(DarkTheme::BORDER));
+        g.drawHorizontalLine(paginationBounds_.getY(), static_cast<float>(paginationBounds_.getX()),
+                             static_cast<float>(paginationBounds_.getRight()));
+
+        // Left column right-edge separator — drawn last so it renders over pagination fill
+        g.setColour(DarkTheme::getColour(DarkTheme::BORDER));
+        g.drawVerticalLine(toggleColBounds_.getRight(), static_cast<float>(toggleColBounds_.getY()),
+                           static_cast<float>(toggleColBounds_.getBottom()));
+
+        // Dividers between panels
+        bool selectedPadHasContent =
+            padInfos_[static_cast<size_t>(selectedPad_)].sampleName.isNotEmpty();
+        auto divArea = getLocalBounds().reduced(6);
+        float top = static_cast<float>(divArea.getY());
+        float bottom = static_cast<float>(divArea.getBottom());
+        g.setColour(DarkTheme::getColour(DarkTheme::BORDER));
+        if (selectedPadHasContent) {
+            int detailLeft = padChainPanel_.getX() - kGap / 2;
+            g.drawVerticalLine(detailLeft, top, bottom);
+        }
+        if (chainsPanelVisible_) {
+            int chainsLeft = chainsViewport_.getX() - kGap / 2;
+            g.drawVerticalLine(chainsLeft, top, bottom);
+        }
+    }
+
+    // Border drawn on top of everything
     g.setColour(DarkTheme::getColour(DarkTheme::BORDER));
-
-    // Draw dividers between panels
-    if (showDetailPanel) {
-        int detailLeft = padChainPanel_.getX() - kGap / 2;
-        g.drawVerticalLine(detailLeft, top, bottom);
-    }
-    if (chainsPanelVisible_) {
-        int chainsLeft = chainsViewport_.getX() - kGap / 2;
-        g.drawVerticalLine(chainsLeft, top, bottom);
-    }
+    g.drawRoundedRectangle(bounds.reduced(0.5f), corner, 1.0f);
 }
 
 void DrumGridUI::paintOverChildren(juce::Graphics& g) {
@@ -656,6 +644,7 @@ void DrumGridUI::paintOverChildren(juce::Graphics& g) {
 // =============================================================================
 
 void DrumGridUI::resized() {
+    auto innerBounds = getLocalBounds().reduced(4);  // Match main layout padding
     auto area = getLocalBounds().reduced(4);
 
     bool selectedPadHasContent =
@@ -667,7 +656,14 @@ void DrumGridUI::resized() {
 
     // Left column: toggle button (always present)
     auto toggleCol = area.removeFromLeft(kToggleColWidth);
-    chainsToggleButton_->setBounds(toggleCol.removeFromTop(20).withSizeKeepingCentre(20, 20));
+    toggleColBounds_ = toggleCol.withTop(innerBounds.getY()).withBottom(innerBounds.getBottom());
+    // Center button horizontally in column, 6px from top
+    chainsToggleButton_->setBounds(juce::Rectangle<int>(toggleColBounds_.getX(),
+                                                        innerBounds.getY() + 6,
+                                                        toggleColBounds_.getWidth(), 20)
+                                       .withSizeKeepingCentre(20, 20));
+
+    area.removeFromLeft(kGap);  // Gap between toggle column and pads
 
     // Right side allocation
     auto rightBounds = area;
@@ -694,67 +690,37 @@ void DrumGridUI::resized() {
     // 3. PADS — fixed width, left-aligned in remaining space
     auto gridArea = rightBounds.removeFromLeft(juce::jmin(kPadGridWidth, rightBounds.getWidth()));
 
-    // --- Chains panel layout (FlexBox column) ---
+    // --- Chains panel layout ---
     if (chainsPanelVisible_) {
-        chainsLabel_.setVisible(true);
+        chainsLabel_.setVisible(false);
         chainsViewport_.setBounds(chainsArea);
         chainsViewport_.setVisible(true);
-        mixTabButton_.setVisible(true);
-        rangeTabButton_.setVisible(true);
-
-        chainsLabel_.setVisible(false);
-
-        // Reserve tab row space, but position tabs after we know the viewport content width
-        auto tabRow = chainsArea.removeFromTop(20);
-        chainsArea.removeFromTop(2);  // small gap below tabs
-
-        chainsViewport_.setBounds(chainsArea);
 
         int scrollbarWidth = chainsViewport_.getScrollBarThickness();
         int containerWidth = chainsViewport_.getWidth() - scrollbarWidth;
 
-        // Tab buttons — match the container width (excluding scrollbar)
-        auto tabArea = tabRow.withWidth(containerWidth);
-        int tabW = tabArea.getWidth() / 2;
-        mixTabButton_.setBounds(tabArea.removeFromLeft(tabW));
-        rangeTabButton_.setBounds(tabArea.withWidth(tabArea.getWidth()));
-
-        // Add only the visible rows to the container
         chainsContainer_.removeAllChildren();
 
         int y = 0;
-        if (currentChainsTab_ == ChainsTab::Mix) {
-            for (auto& row : chainRows_) {
-                row->setBounds(0, y, containerWidth, PadChainRowComponent::ROW_HEIGHT);
-                chainsContainer_.addAndMakeVisible(*row);
-                y += PadChainRowComponent::ROW_HEIGHT + 2;
-            }
-        } else {
-            for (auto& row : rangeRows_) {
-                row->setBounds(0, y, containerWidth, PadChainRangeRowComponent::ROW_HEIGHT);
-                chainsContainer_.addAndMakeVisible(*row);
-                y += PadChainRangeRowComponent::ROW_HEIGHT + 2;
-            }
+        for (auto& row : chainRows_) {
+            row->setBounds(0, y, containerWidth, PadChainRowComponent::ROW_HEIGHT);
+            chainsContainer_.addAndMakeVisible(*row);
+            y += PadChainRowComponent::ROW_HEIGHT + 2;
         }
         chainsContainer_.setSize(containerWidth, juce::jmax(y, chainsArea.getHeight()));
     } else {
         chainsLabel_.setVisible(false);
         chainsViewport_.setVisible(false);
-        mixTabButton_.setVisible(false);
-        rangeTabButton_.setVisible(false);
     }
 
     // --- Pad Grid layout ---
-    auto paginationRow = gridArea.removeFromBottom(18);
+    auto paginationRow = gridArea.removeFromBottom(26);
+    paginationBounds_ =
+        paginationRow.withLeft(innerBounds.getX()).withRight(innerBounds.getRight());
     gridArea.removeFromBottom(2);
 
     constexpr int padGap = 3;
-    constexpr int minPadSize = 40;
-    constexpr int maxPadSize = 65;
-    // Use only width to determine pad size — the grid width is fixed (kPadGridWidth),
-    // so pad size should not fluctuate with container height changes (e.g., scrollbar toggling).
-    int padSize = (gridArea.getWidth() - padGap * (kGridCols - 1)) / kGridCols;
-    padSize = juce::jlimit(minPadSize, maxPadSize, padSize);
+    constexpr int padSize = 55;
 
     for (int i = 0; i < kPadsPerPage; ++i) {
         int row = i / kGridCols;
@@ -766,10 +732,10 @@ void DrumGridUI::resized() {
         padButtons_[static_cast<size_t>(i)].setBounds(x, y, padSize, padSize);
     }
 
-    int btnW = 22;
-    prevPageButton_.setBounds(paginationRow.removeFromLeft(btnW));
-    nextPageButton_.setBounds(paginationRow.removeFromRight(btnW));
-    pageLabel_.setBounds(paginationRow);
+    auto btnRow = paginationRow.reduced(3, 3);
+    placeNavArrow(*prevPageButton_, btnRow, true);
+    placeNavArrow(*nextPageButton_, btnRow, false);
+    pageLabel_.setBounds(btnRow);
 
     // --- Detail Panel ---
     detailSampleNameLabel_.setVisible(false);
@@ -870,7 +836,6 @@ void DrumGridUI::itemDropped(const SourceDetails& details) {
 
 void DrumGridUI::rebuildChainRows() {
     chainRows_.clear();
-    rangeRows_.clear();
     chainsContainer_.removeAllChildren();
 
     // Build rows from padInfos — one row per pad that has a chain
@@ -888,7 +853,8 @@ void DrumGridUI::rebuildChainRows() {
         // --- Mix row ---
         auto row = std::make_unique<PadChainRowComponent>(i);
         juce::String displayName = getNoteName(i) + " " + info.sampleName;
-        row->updateFromPad(displayName, info.level, info.pan, info.mute, info.solo, info.bypassed);
+        row->updateFromPad(displayName, info.level, info.pan, info.mute, info.solo, info.bypassed,
+                           info.busOutput);
 
         row->onClicked = [this](int padIndex) {
             bool wasSelected = (padIndex == selectedPad_) ||
@@ -939,32 +905,14 @@ void DrumGridUI::rebuildChainRows() {
         row->onRightClicked = [this](int padIndex, juce::Point<int> screenPos) {
             showChainContextMenu(padIndex, screenPos);
         };
+        row->onOutputChanged = [this](int padIndex, int busIndex) {
+            padInfos_[static_cast<size_t>(padIndex)].busOutput = busIndex;
+            if (onPadOutputChanged)
+                onPadOutputChanged(padIndex, busIndex);
+        };
 
         row->setSelected(i == selectedPad_);
         chainRows_.push_back(std::move(row));
-
-        // --- Range row ---
-        auto rangeRow = std::make_unique<PadChainRangeRowComponent>(i);
-        juce::String rangeName = getNoteName(i) + " " + info.sampleName;
-
-        // Query note range from DrumGridPlugin via callback
-        int lowNote = i;
-        int highNote = i;
-        int rootNote = i;
-        if (getNoteRange) {
-            auto [lo, hi, rt] = getNoteRange(i);
-            lowNote = lo;
-            highNote = hi;
-            rootNote = rt;
-        }
-        rangeRow->updateFromChain(rangeName, lowNote, highNote, rootNote);
-        rangeRow->onClicked = [this](int padIndex) { setSelectedPad(padIndex); };
-        rangeRow->onRangeChanged = [this](int padIndex, int lo, int hi, int rt) {
-            if (onPadRangeChanged)
-                onPadRangeChanged(padIndex, lo, hi, rt);
-        };
-        rangeRow->setSelected(i == selectedPad_);
-        rangeRows_.push_back(std::move(rangeRow));
     }
 
     resized();
@@ -1076,8 +1024,8 @@ void DrumGridUI::refreshPadButtons() {
     // Update page label
     pageLabel_.setText("Page " + juce::String(currentPage_ + 1) + "/" + juce::String(kNumPages),
                        juce::dontSendNotification);
-    prevPageButton_.setEnabled(currentPage_ > 0);
-    nextPageButton_.setEnabled(currentPage_ < kNumPages - 1);
+    prevPageButton_->setEnabled(currentPage_ > 0);
+    nextPageButton_->setEnabled(currentPage_ < kNumPages - 1);
 }
 
 void DrumGridUI::refreshDetailPanel() {

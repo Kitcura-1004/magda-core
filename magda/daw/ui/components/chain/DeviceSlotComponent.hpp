@@ -12,6 +12,7 @@
 #include "FourOscUI.hpp"
 #include "ImpulseResponseUI.hpp"
 #include "NodeComponent.hpp"
+#include "ParamGridComponent.hpp"
 #include "ParamSlotComponent.hpp"
 #include "PhaserUI.hpp"
 #include "PitchShiftUI.hpp"
@@ -196,15 +197,8 @@ class DeviceSlotComponent : public NodeComponent,
     std::unique_ptr<magda::SvgButton> onButton_;
     std::unique_ptr<magda::SvgButton> exportClipButton_;  // Export pattern/chords as MIDI clip
 
-    // Pagination
-    int currentPage_ = 0;
-    int totalPages_ = 1;
-    std::unique_ptr<juce::TextButton> prevPageButton_;
-    std::unique_ptr<juce::TextButton> nextPageButton_;
-    std::unique_ptr<juce::Label> pageLabel_;
-
-    // Parameter grid
-    std::unique_ptr<ParamSlotComponent> paramSlots_[NUM_PARAMS_PER_PAGE];
+    // Parameter grid (owns slots + pagination)
+    std::unique_ptr<ParamGridComponent> paramGrid_;
 
     // Custom UI for internal devices
     std::unique_ptr<ToneGeneratorUI> toneGeneratorUI_;
@@ -237,7 +231,6 @@ class DeviceSlotComponent : public NodeComponent,
     std::array<int, 32> lastChordNotes_{};
     int lastChordCount_ = 0;
 
-    void updatePageControls();
     void updateParamModulation();  // Update mod/macro pointers for params
     void updateParameterSlots();   // Reload parameter data for current page
     void updateParameterValues();  // Update only parameter values (for polling)
@@ -258,11 +251,10 @@ class DeviceSlotComponent : public NodeComponent,
     void updateCustomUI();
     void readAndPushModMatrix();  // Read FourOsc mod matrix and push to UI
     void setupCustomUILinking();
+    void wirePadChainLinkCallbacks();  // Wire link mode on PadDeviceSlot param slots
 
     // Dynamic layout helpers
     int getVisibleParamCount() const;
-    int getParamsPerRow() const;
-    int getParamsPerPage() const;
     int getDynamicSlotWidth() const;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(DeviceSlotComponent)

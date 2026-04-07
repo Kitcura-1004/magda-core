@@ -216,9 +216,9 @@ TrackId TrackManager::activateMultiOutPair(TrackId parentTrackId, DeviceId devic
     newTrack.type = TrackType::MultiOut;
     newTrack.name = device->name + ": " + pair.name;
     newTrack.colour = parentTrack->colour;
-    newTrack.audioOutputDevice = "master";
+    newTrack.audioOutputDevice = parentTrack->audioOutputDevice;
 
-    // Set the multi-out link (keeps routing reference, no parent-child hierarchy)
+    // Set the multi-out link (keeps routing reference — NOT parent-child hierarchy)
     newTrack.multiOutLink = MultiOutTrackLink{parentTrackId, deviceId, pairIndex};
 
     // Insert after the parent track (and any existing multi-out siblings) for adjacency
@@ -238,6 +238,7 @@ TrackId TrackManager::activateMultiOutPair(TrackId parentTrackId, DeviceId devic
     }
 
     // Re-fetch pointers after insert (vector reallocation invalidates them)
+    parentTrack = getTrack(parentTrackId);
     device = getDevice(parentTrackId, deviceId);
     auto& pairRef = device->multiOut.outputPairs[static_cast<size_t>(pairIndex)];
 

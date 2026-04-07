@@ -3,6 +3,7 @@
 #include <BinaryData.h>
 #include <tracktion_engine/tracktion_engine.h>
 
+#include "DeviceSlotHeaderLayout.hpp"
 #include "audio/MagdaSamplerPlugin.hpp"
 #include "ui/debug/DebugSettings.hpp"
 #include "ui/themes/DarkTheme.hpp"
@@ -37,8 +38,12 @@ PadDeviceSlot::PadDeviceSlot() {
     // UI button to open plugin native window
     uiButton_ = std::make_unique<magda::SvgButton>("UI", BinaryData::open_in_new_svg,
                                                    BinaryData::open_in_new_svgSize);
-    uiButton_->setNormalColor(DarkTheme::getSecondaryTextColour());
-    uiButton_->setHoverColor(DarkTheme::getTextColour());
+    uiButton_->setIconPadding(2.5f);
+    uiButton_->setOriginalColor(juce::Colour(0xFFB3B3B3));
+    uiButton_->setClickingTogglesState(true);
+    uiButton_->setNormalColor(juce::Colour(0xFFB3B3B3).withAlpha(0.5f));
+    uiButton_->setActiveColor(juce::Colours::white);
+    uiButton_->setActiveBackgroundColor(DarkTheme::getColour(DarkTheme::ACCENT_BLUE));
     addChildComponent(*uiButton_);
 
     // On/power button
@@ -59,16 +64,43 @@ PadDeviceSlot::PadDeviceSlot() {
     };
     addAndMakeVisible(*onButton_);
 
+    // Gain slider (header, right side)
+    gainSlider_.setFormat(TextSlider::Format::Decibels);
+    gainSlider_.setRange(-60.0, 12.0, 0.1);
+    gainSlider_.setValue(0.0, juce::dontSendNotification);
+    gainSlider_.onValueChanged = [this](double value) {
+        if (onGainDbChanged)
+            onGainDbChanged(static_cast<float>(value));
+    };
+    addAndMakeVisible(gainSlider_);
+
+    // Level meter (right edge of content area)
+    addAndMakeVisible(levelMeter_);
+
     // Create param slots
     for (int i = 0; i < PLUGIN_PARAM_SLOTS; ++i) {
         paramSlots_[static_cast<size_t>(i)] = std::make_unique<ParamSlotComponent>(i);
         addChildComponent(*paramSlots_[static_cast<size_t>(i)]);
     }
+
+    startTimerHz(30);
 }
 
 PadDeviceSlot::~PadDeviceSlot() {
+    stopTimer();
     nameLabel_.removeMouseListener(this);
     deleteButton_.setLookAndFeel(nullptr);
+}
+
+void PadDeviceSlot::setGainDb(float db) {
+    gainSlider_.setValue(static_cast<double>(db), juce::dontSendNotification);
+}
+
+void PadDeviceSlot::timerCallback() {
+    if (getMeterLevels) {
+        auto [l, r] = getMeterLevels();
+        levelMeter_.setLevels(l, r);
+    }
 }
 
 void PadDeviceSlot::setPlugin(te::Plugin* plugin) {
@@ -111,6 +143,8 @@ void PadDeviceSlot::setSampler(daw::audio::MagdaSamplerPlugin* sampler) {
 
 void PadDeviceSlot::clear() {
     plugin_ = nullptr;
+    pluginDeviceId_ = magda::INVALID_DEVICE_ID;
+    visibleParamCount_ = 0;
     nameLabel_.setText("", juce::dontSendNotification);
     samplerUI_.reset();
     for (auto& slot : paramSlots_)
@@ -140,10 +174,6 @@ void PadDeviceSlot::setCollapsed(bool collapsed) {
 
 void PadDeviceSlot::setupForSampler(daw::audio::MagdaSamplerPlugin* sampler) {
     preferredWidth_ = SAMPLER_SLOT_WIDTH;
-    // Hide param slots
-    for (auto& slot : paramSlots_)
-        if (slot)
-            slot->setVisible(false);
     uiButton_->setVisible(false);
 
     nameLabel_.setText("Sampler", juce::dontSendNotification);
@@ -202,6 +232,11 @@ void PadDeviceSlot::setupForSampler(daw::audio::MagdaSamplerPlugin* sampler) {
                                 sampler->getSampleLengthSeconds());
 
     samplerUI_->setVisible(true);
+
+    // Hide param slots — sampler uses LinkableTextSliders in SamplerUI instead
+    for (auto& slot : paramSlots_)
+        if (slot)
+            slot->setVisible(false);
 }
 
 void PadDeviceSlot::setupForExternalPlugin(te::Plugin* plugin) {
@@ -213,21 +248,30 @@ void PadDeviceSlot::setupForExternalPlugin(te::Plugin* plugin) {
 
     // Show UI button for external plugins
     uiButton_->setVisible(true);
-    uiButton_->onClick = [plugin]() {
+    uiButton_->onClick = [this, plugin]() {
+        bool isOpen = uiButton_->getToggleState();
+        uiButton_->setActive(isOpen);
         if (auto* ext = dynamic_cast<te::ExternalPlugin*>(plugin)) {
-            if (ext->windowState)
-                ext->windowState->showWindowExplicitly();
+            if (ext->windowState) {
+                if (isOpen)
+                    ext->windowState->showWindowExplicitly();
+                else
+                    ext->windowState->hideWindowTemporarily();
+            }
         } else {
-            plugin->showWindowExplicitly();
+            if (isOpen)
+                plugin->showWindowExplicitly();
         }
     };
 
     // Populate param slots
     auto params = plugin->getAutomatableParameters();
+    visibleParamCount_ = params.size();
     for (int i = 0; i < PLUGIN_PARAM_SLOTS; ++i) {
         auto& slot = paramSlots_[static_cast<size_t>(i)];
         if (i < params.size()) {
             auto* param = params[i];
+            slot->setParamIndex(i);
             slot->setParamName(param->getParameterName());
             slot->setParamValue(param->getCurrentNormalisedValue());
             slot->onValueChanged = [param](double value) {
@@ -243,6 +287,44 @@ void PadDeviceSlot::setupForExternalPlugin(te::Plugin* plugin) {
     constexpr int paramsPerRow = 8;
     constexpr int PARAM_CELL_WIDTH = 48;
     preferredWidth_ = PARAM_CELL_WIDTH * paramsPerRow;
+}
+
+void PadDeviceSlot::setLinkContext(magda::DeviceId deviceId, const magda::ChainNodePath& devicePath,
+                                   const magda::MacroArray* macros, const magda::ModArray* mods,
+                                   const magda::MacroArray* trackMacros,
+                                   const magda::ModArray* trackMods) {
+    pluginDeviceId_ = deviceId;
+
+    // Wire external plugin ParamSlotComponents
+    for (int i = 0; i < PLUGIN_PARAM_SLOTS; ++i) {
+        auto& slot = paramSlots_[static_cast<size_t>(i)];
+        slot->setDeviceId(deviceId);
+        slot->setDevicePath(devicePath);
+        slot->setAvailableMacros(macros);
+        slot->setAvailableMods(mods);
+        slot->setAvailableTrackMacros(trackMacros);
+        slot->setAvailableTrackMods(trackMods);
+    }
+
+    // Wire sampler LinkableTextSliders
+    if (samplerUI_) {
+        auto sliders = samplerUI_->getLinkableSliders();
+        for (int i = 0; i < static_cast<int>(sliders.size()); ++i) {
+            auto* slider = sliders[static_cast<size_t>(i)];
+            int paramIdx = slider->getParamIndex() >= 0 ? slider->getParamIndex() : i;
+            slider->setLinkContext(deviceId, paramIdx, devicePath);
+            slider->setAvailableMacros(macros);
+            slider->setAvailableMods(mods);
+            slider->setAvailableTrackMacros(trackMacros);
+            slider->setAvailableTrackMods(trackMods);
+        }
+    }
+}
+
+std::vector<LinkableTextSlider*> PadDeviceSlot::getLinkableSliders() {
+    if (samplerUI_)
+        return samplerUI_->getLinkableSliders();
+    return {};
 }
 
 void PadDeviceSlot::paint(juce::Graphics& g) {
@@ -333,8 +415,13 @@ void PadDeviceSlot::resized() {
         for (auto& slot : paramSlots_)
             if (slot)
                 slot->setVisible(false);
+        gainSlider_.setVisible(false);
+        levelMeter_.setVisible(false);
         return;
     }
+
+    gainSlider_.setVisible(true);
+    levelMeter_.setVisible(true);
 
     // Expanded: restore visibility and text colour
     nameLabel_.setVisible(true);
@@ -345,28 +432,30 @@ void PadDeviceSlot::resized() {
             samplerUI_->setVisible(isSampler);
         if (!isSampler) {
             // Restore param slot visibility for external plugins
-            auto params = plugin_->getAutomatableParameters();
             for (int i = 0; i < PLUGIN_PARAM_SLOTS; ++i) {
                 if (paramSlots_[static_cast<size_t>(i)])
-                    paramSlots_[static_cast<size_t>(i)]->setVisible(i < params.size());
+                    paramSlots_[static_cast<size_t>(i)]->setVisible(i < visibleParamCount_);
             }
         }
     }
+
+    // Meter strip on the right edge (full height minus header)
+    auto meterArea = area;
+    meterArea.removeFromTop(HEADER_HEIGHT + 2);
+    levelMeter_.setBounds(meterArea.removeFromRight(METER_WIDTH).reduced(1, 2));
+    area.removeFromRight(METER_WIDTH);
 
     // Header
     auto headerRow = area.removeFromTop(HEADER_HEIGHT);
     int btnSize = HEADER_HEIGHT;
 
-    deleteButton_.setBounds(headerRow.removeFromRight(btnSize));
-    headerRow.removeFromRight(2);
-
-    onButton_->setBounds(headerRow.removeFromRight(btnSize));
-    headerRow.removeFromRight(2);
-
-    if (uiButton_->isVisible()) {
-        uiButton_->setBounds(headerRow.removeFromRight(btnSize));
-        headerRow.removeFromRight(2);
-    }
+    layoutDeviceSlotHeaderRight(headerRow, btnSize, 2,
+                                /*delete*/ &deleteButton_,
+                                /*power*/ onButton_.get(),
+                                /*multiOut*/ nullptr,
+                                /*sc*/ nullptr,
+                                /*slider*/ &gainSlider_, GAIN_SLIDER_WIDTH,
+                                /*ui*/ uiButton_.get());
 
     nameLabel_.setBounds(headerRow);
 
@@ -381,8 +470,6 @@ void PadDeviceSlot::resized() {
         constexpr int paramRows = 4;
         int cellWidth = contentArea.getWidth() / paramCols;
         int cellHeight = contentArea.getHeight() / paramRows;
-        DBG("  -> FX params: contentArea.width=" + juce::String(contentArea.getWidth()) +
-            " cellWidth=" + juce::String(cellWidth));
 
         auto labelFont = FontManager::getInstance().getUIFont(
             DebugSettings::getInstance().getParamLabelFontSize());

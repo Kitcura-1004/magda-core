@@ -1,5 +1,6 @@
 #include "PluginManager.hpp"
 
+#include <set>
 #include <unordered_set>
 #include <vector>
 
@@ -115,6 +116,9 @@ void PluginManager::syncAllPlugins() {
                 if (validDeviceIds.find(it->first) == validDeviceIds.end()) {
                     clearLFOCustomWaveCallbacks(it->second.modifiers);
                     deferCurveSnapshots(it->second.curveSnapshots, deferredHolders_);
+                    if (auto* dg =
+                            dynamic_cast<daw::audio::DrumGridPlugin*>(it->second.plugin.get()))
+                        dg->removeListener(this);
                     if (it->second.plugin)
                         pluginToDevice_.erase(it->second.plugin.get());
                     if (it->second.midiReceivePlugin)
@@ -251,6 +255,22 @@ void PluginManager::syncTrackPlugins(TrackId trackId) {
                 // Clear LFO callbacks before destroying CurveSnapshotHolders
                 clearLFOCustomWaveCallbacks(it->second.modifiers);
                 deferCurveSnapshots(it->second.curveSnapshots, deferredHolders_);
+                if (auto* dg = dynamic_cast<daw::audio::DrumGridPlugin*>(it->second.plugin.get())) {
+                    dg->removeListener(this);
+                    // Remove pad plugin entries for this DrumGrid
+                    auto padIt = drumGridPadDevices_.find(deviceId);
+                    if (padIt != drumGridPadDevices_.end()) {
+                        for (auto padDevId : padIt->second) {
+                            auto padSdIt = syncedDevices_.find(padDevId);
+                            if (padSdIt != syncedDevices_.end()) {
+                                if (padSdIt->second.plugin)
+                                    pluginToDevice_.erase(padSdIt->second.plugin.get());
+                                syncedDevices_.erase(padSdIt);
+                            }
+                        }
+                        drumGridPadDevices_.erase(padIt);
+                    }
+                }
                 if (it->second.plugin)
                     pluginToDevice_.erase(it->second.plugin.get());
                 syncedDevices_.erase(it);
@@ -395,6 +415,23 @@ void PluginManager::syncTrackPlugins(TrackId trackId) {
                             juce::ScopedLock lock(pluginLock_);
                             auto sdIt = syncedDevices_.find(devId);
                             if (sdIt != syncedDevices_.end()) {
+                                if (auto* dg = dynamic_cast<daw::audio::DrumGridPlugin*>(
+                                        sdIt->second.plugin.get())) {
+                                    dg->removeListener(this);
+                                    auto padIt = drumGridPadDevices_.find(devId);
+                                    if (padIt != drumGridPadDevices_.end()) {
+                                        for (auto padDevId : padIt->second) {
+                                            auto padSdIt = syncedDevices_.find(padDevId);
+                                            if (padSdIt != syncedDevices_.end()) {
+                                                if (padSdIt->second.plugin)
+                                                    pluginToDevice_.erase(
+                                                        padSdIt->second.plugin.get());
+                                                syncedDevices_.erase(padSdIt);
+                                            }
+                                        }
+                                        drumGridPadDevices_.erase(padIt);
+                                    }
+                                }
                                 if (sdIt->second.plugin)
                                     pluginToDevice_.erase(sdIt->second.plugin.get());
                                 syncedDevices_.erase(sdIt);
@@ -594,6 +631,22 @@ void PluginManager::syncTrackPlugins(TrackId trackId) {
         }
     }
 
+    // Register DrumGrid pad plugins in syncedDevices_ for macro/mod linking
+    {
+        std::vector<std::pair<DeviceId, daw::audio::DrumGridPlugin*>> drumGrids;
+        {
+            juce::ScopedLock lock(pluginLock_);
+            for (const auto& [deviceId, sd] : syncedDevices_) {
+                if (sd.trackId != trackId)
+                    continue;
+                if (auto* dg = dynamic_cast<daw::audio::DrumGridPlugin*>(sd.plugin.get()))
+                    drumGrids.push_back({deviceId, dg});
+            }
+        }
+        for (auto& [deviceId, dg] : drumGrids)
+            syncDrumGridPadPlugins(trackId, deviceId, dg);
+    }
+
     // Ensure VolumeAndPan is near the end of the chain (before LevelMeter)
     // This is the track's fader control - it should come AFTER audio sources
     ensureVolumePluginPosition(teTrack);
@@ -646,6 +699,21 @@ void PluginManager::cleanupTrackPlugins(TrackId trackId) {
                 // Clear LFO callbacks before destroying CurveSnapshotHolders
                 clearLFOCustomWaveCallbacks(it->second.modifiers);
                 deferCurveSnapshots(it->second.curveSnapshots, deferredHolders_);
+                if (auto* dg = dynamic_cast<daw::audio::DrumGridPlugin*>(it->second.plugin.get())) {
+                    dg->removeListener(this);
+                    auto padIt = drumGridPadDevices_.find(deviceId);
+                    if (padIt != drumGridPadDevices_.end()) {
+                        for (auto padDevId : padIt->second) {
+                            auto padSdIt = syncedDevices_.find(padDevId);
+                            if (padSdIt != syncedDevices_.end()) {
+                                if (padSdIt->second.plugin)
+                                    pluginToDevice_.erase(padSdIt->second.plugin.get());
+                                syncedDevices_.erase(padSdIt);
+                            }
+                        }
+                        drumGridPadDevices_.erase(padIt);
+                    }
+                }
                 if (it->second.plugin)
                     pluginToDevice_.erase(it->second.plugin.get());
                 syncedDevices_.erase(it);
@@ -1988,20 +2056,32 @@ void PluginManager::syncDeviceMacros(TrackId trackId, te::AudioTrack* teTrack) {
                     continue;
 
                 // Remove modifier assignments from all plugin params on this track
-                for (const auto& el : trackInfo->chainElements) {
-                    if (!isDevice(el))
-                        continue;
-                    const auto& dev = getDevice(el);
+                // (includes both track-level devices and DrumGrid pad chain plugins)
+                auto removeModFromSynced = [&](DeviceId devId) {
                     te::Plugin::Ptr plugin;
                     {
                         juce::ScopedLock lock(pluginLock_);
-                        auto pit = syncedDevices_.find(dev.id);
+                        auto pit = syncedDevices_.find(devId);
                         if (pit != syncedDevices_.end())
                             plugin = pit->second.plugin;
                     }
                     if (plugin) {
                         for (auto* param : plugin->getAutomatableParameters())
                             param->removeModifier(*macroParam);
+                    }
+                };
+
+                for (const auto& el : trackInfo->chainElements) {
+                    if (!isDevice(el))
+                        continue;
+                    const auto& dev = getDevice(el);
+                    removeModFromSynced(dev.id);
+
+                    // Also remove from pad chain plugins if this is a DrumGrid
+                    auto dgIt = drumGridPadDevices_.find(dev.id);
+                    if (dgIt != drumGridPadDevices_.end()) {
+                        for (auto padDevId : dgIt->second)
+                            removeModFromSynced(padDevId);
                     }
                 }
 
@@ -2079,14 +2159,12 @@ void PluginManager::syncDeviceMacros(TrackId trackId, te::AudioTrack* teTrack) {
                 continue;
 
             // Remove assignments from all plugins on this track
-            for (const auto& el : trackInfo->chainElements) {
-                if (!isDevice(el))
-                    continue;
-                const auto& dev = getDevice(el);
+            // (includes pad chain plugins inside DrumGrid devices)
+            auto removeModFromSynced2 = [&](DeviceId devId) {
                 te::Plugin::Ptr plugin;
                 {
                     juce::ScopedLock lock(pluginLock_);
-                    auto pit = syncedDevices_.find(dev.id);
+                    auto pit = syncedDevices_.find(devId);
                     if (pit != syncedDevices_.end())
                         plugin = pit->second.plugin;
                 }
@@ -2094,6 +2172,21 @@ void PluginManager::syncDeviceMacros(TrackId trackId, te::AudioTrack* teTrack) {
                     for (auto* param : plugin->getAutomatableParameters())
                         param->removeModifier(*macroParam);
                 }
+            };
+
+            for (const auto& el : trackInfo->chainElements) {
+                if (!isDevice(el))
+                    continue;
+                const auto& dev = getDevice(el);
+                removeModFromSynced2(dev.id);
+
+                // Also remove from pad chain plugins if this is a DrumGrid
+                auto dgIt = drumGridPadDevices_.find(dev.id);
+                if (dgIt != drumGridPadDevices_.end()) {
+                    for (auto padDevId : dgIt->second)
+                        removeModFromSynced2(padDevId);
+                }
+
                 // Also check instrument inner plugins
                 if (dev.isInstrument) {
                     if (auto* inner = instrumentRackManager_.getInnerPlugin(dev.id)) {
@@ -2552,8 +2645,12 @@ void PluginManager::syncMultiOutTrack(TrackId trackId, const TrackInfo& trackInf
     ensureVolumePluginPosition(teTrack);
     addLevelMeterToTrack(trackId);
 
-    DBG("PluginManager::syncMultiOutTrack: trackId="
-        << trackId << " sourceDevice=" << link.sourceDeviceId << " pair=" << link.outputPairIndex);
+    // Set audio output routing (e.g. "track:N" to route back to parent)
+    if (trackInfo.audioOutputDevice.isNotEmpty())
+        trackController_.setTrackAudioOutput(trackId, trackInfo.audioOutputDevice);
+
+    DBG("syncMultiOutTrack: trackId=" << trackId << " pair=" << link.outputPairIndex
+                                      << " firstPin=" << outPair.firstPin);
 }
 
 // =============================================================================
@@ -2605,6 +2702,8 @@ void PluginManager::syncMasterPlugins() {
             if (it != syncedDevices_.end()) {
                 clearLFOCustomWaveCallbacks(it->second.modifiers);
                 deferCurveSnapshots(it->second.curveSnapshots, deferredHolders_);
+                if (auto* dg = dynamic_cast<daw::audio::DrumGridPlugin*>(it->second.plugin.get()))
+                    dg->removeListener(this);
                 if (it->second.plugin)
                     pluginToDevice_.erase(it->second.plugin.get());
                 syncedDevices_.erase(it);
@@ -2814,6 +2913,8 @@ void PluginManager::purgeStaleEntries() {
                 // Clear LFO callbacks before destroying CurveSnapshotHolders
                 clearLFOCustomWaveCallbacks(it->second.modifiers);
                 deferCurveSnapshots(it->second.curveSnapshots, deferredHolders_);
+                if (auto* dg = dynamic_cast<daw::audio::DrumGridPlugin*>(it->second.plugin.get()))
+                    dg->removeListener(this);
                 if (it->second.plugin)
                     pluginToDevice_.erase(it->second.plugin.get());
                 if (it->second.midiReceivePlugin)
@@ -2922,11 +3023,18 @@ void PluginManager::clearAllMappings() {
     for (auto& [deviceId, sd] : syncedDevices_) {
         clearLFOCustomWaveCallbacks(sd.modifiers);
         deferCurveSnapshots(sd.curveSnapshots, deferredHolders_);
+        // Unregister DrumGrid listener to avoid dangling pointer
+        if (auto* dg = dynamic_cast<daw::audio::DrumGridPlugin*>(sd.plugin.get()))
+            dg->removeListener(this);
+        else if (auto* inner = instrumentRackManager_.getInnerPlugin(deviceId))
+            if (auto* dg2 = dynamic_cast<daw::audio::DrumGridPlugin*>(inner))
+                dg2->removeListener(this);
     }
     instrumentRackManager_.clear();
     rackSyncManager_.clear();
     syncedDevices_.clear();
     pluginToDevice_.clear();
+    drumGridPadDevices_.clear();
     sidechainMonitors_.clear();
     // Drain deferred holders after all state is cleared (shutdown path —
     // audio engine is stopped so no in-flight callbacks remain)
@@ -3207,6 +3315,10 @@ te::Plugin::Ptr PluginManager::loadDeviceAsPlugin(TrackId trackId, const DeviceI
                 // which can confuse TE's rack graph builder.
                 track->pluginList.insertPlugin(plugin, insertIndex, nullptr);
                 processor = std::make_unique<DrumGridProcessor>(device.id, plugin);
+
+                // Register as listener for auto multi-out track sync
+                if (auto* dg = dynamic_cast<daw::audio::DrumGridPlugin*>(plugin.get()))
+                    dg->addListener(this);
             }
         } else if (device.pluginId.containsIgnoreCase("4osc")) {
             plugin = createInternalPlugin(te::FourOscPlugin::xmlTypeName, device.pluginState);
@@ -3475,6 +3587,8 @@ te::Plugin::Ptr PluginManager::loadDeviceAsPlugin(TrackId trackId, const DeviceI
             int numOutputChannels = 2;
             if (auto* extPlugin = dynamic_cast<te::ExternalPlugin*>(plugin.get())) {
                 numOutputChannels = extPlugin->getNumOutputs();
+            } else if (auto* drumGrid = dynamic_cast<daw::audio::DrumGridPlugin*>(plugin.get())) {
+                numOutputChannels = drumGrid->getNumOutputChannels();
             }
 
             // Remember the plugin's position before wrapping removes it from the track
@@ -3542,6 +3656,20 @@ te::Plugin::Ptr PluginManager::loadDeviceAsPlugin(TrackId trackId, const DeviceI
                             }
                         }
 
+                        // DrumGrid-specific bus names
+                        if (devInfo->multiOut.outputPairs.empty() &&
+                            dynamic_cast<daw::audio::DrumGridPlugin*>(plugin.get())) {
+                            int numPairs = numOutputChannels / 2;
+                            for (int p = 0; p < numPairs; ++p) {
+                                MultiOutOutputPair pair;
+                                pair.outputIndex = p;
+                                pair.firstPin = p * 2 + 1;
+                                pair.numChannels = 2;
+                                pair.name = (p == 0) ? "Main" : ("Bus " + juce::String(p));
+                                devInfo->multiOut.outputPairs.push_back(pair);
+                            }
+                        }
+
                         // Fallback: if no buses found, generate generic names
                         if (devInfo->multiOut.outputPairs.empty()) {
                             int numPairs = numOutputChannels / 2;
@@ -3589,6 +3717,8 @@ te::Plugin::Ptr PluginManager::loadDeviceAsPlugin(TrackId trackId, const DeviceI
                     }
                 }
 
+                // Create a TE FolderTrack (submix) for DrumGrid so the parent and
+                // all multi-out children are summed under one fader — like
                 // Return the INNER plugin (not the rack) so that syncedDevices_
                 // maps to the actual synth for parameter access and window opening
                 return plugin;
@@ -3718,6 +3848,174 @@ te::Plugin::Ptr PluginManager::createInternalPlugin(const juce::String& xmlTypeN
         << (plugin ? plugin->getName().toRawUTF8() : "NULL")
         << " itemID=" << (plugin ? (juce::int64)plugin->itemID.getRawID() : -1));
     return plugin;
+}
+
+//==============================================================================
+// DrumGrid multi-out track sync
+//==============================================================================
+
+void PluginManager::drumGridChainsChanged(daw::audio::DrumGridPlugin* plugin) {
+    if (!plugin)
+        return;
+
+    // Hold a ref-counted pointer to keep the plugin alive across the async call.
+    te::Plugin::Ptr pluginRef(plugin);
+
+    // Dispatch asynchronously — this callback fires during loadSampleToPad/addChain,
+    // and synchronous track activation would re-entrantly destroy UI components
+    // (e.g., DeviceSlotComponent) while their callbacks are still on the stack.
+    juce::WeakReference<PluginManager> weakThis(this);
+
+    juce::MessageManager::callAsync([weakThis, pluginRef]() {
+        auto* self = weakThis.get();
+        if (!self)
+            return;
+
+        auto* dg = dynamic_cast<daw::audio::DrumGridPlugin*>(pluginRef.get());
+        if (!dg)
+            return;
+
+        // Look up the device under lock, then release lock before mutating TrackManager
+        // to avoid deadlock (syncDrumGridMultiOutTracks -> TrackManager listeners ->
+        // syncAllPlugins -> pluginLock_).
+        TrackId matchedTrackId{};
+        DeviceId matchedDeviceId{};
+        bool foundMatch = false;
+
+        {
+            juce::ScopedLock lock(self->pluginLock_);
+            for (const auto& [deviceId, synced] : self->syncedDevices_) {
+                if (synced.plugin.get() == dg ||
+                    self->instrumentRackManager_.getInnerPlugin(deviceId) == dg) {
+                    matchedTrackId = synced.trackId;
+                    matchedDeviceId = deviceId;
+                    foundMatch = true;
+                    break;
+                }
+            }
+        }
+
+        if (foundMatch) {
+            self->syncDrumGridPadPlugins(matchedTrackId, matchedDeviceId, dg);
+            self->syncDrumGridMultiOutTracks(matchedTrackId, matchedDeviceId, dg);
+        }
+    });
+}
+
+void PluginManager::syncDrumGridPadPlugins(TrackId trackId, DeviceId drumGridDeviceId,
+                                           daw::audio::DrumGridPlugin* drumGrid) {
+    if (!drumGrid)
+        return;
+
+    // Collect current valid pad plugin DeviceIds
+    std::set<DeviceId> currentIds;
+    for (const auto& chain : drumGrid->getChains()) {
+        for (int pi = 0; pi < static_cast<int>(chain->plugins.size()); ++pi) {
+            int devId = drumGrid->getPluginDeviceId(chain->index, pi);
+            if (devId >= 0) {
+                currentIds.insert(devId);
+            }
+        }
+    }
+
+    juce::ScopedLock lock(pluginLock_);
+
+    // Remove stale entries
+    auto& oldIds = drumGridPadDevices_[drumGridDeviceId];
+    for (auto oldId : oldIds) {
+        if (currentIds.find(oldId) == currentIds.end()) {
+            auto it = syncedDevices_.find(oldId);
+            if (it != syncedDevices_.end()) {
+                if (it->second.plugin)
+                    pluginToDevice_.erase(it->second.plugin.get());
+                syncedDevices_.erase(it);
+            }
+        }
+    }
+
+    // Add new entries
+    for (const auto& chain : drumGrid->getChains()) {
+        for (int pi = 0; pi < static_cast<int>(chain->plugins.size()); ++pi) {
+            int devId = drumGrid->getPluginDeviceId(chain->index, pi);
+            if (devId < 0)
+                continue;
+            if (syncedDevices_.find(devId) == syncedDevices_.end()) {
+                auto& sd = syncedDevices_[devId];
+                sd.trackId = trackId;
+                sd.plugin = chain->plugins[static_cast<size_t>(pi)];
+                pluginToDevice_[sd.plugin.get()] = devId;
+            }
+        }
+    }
+
+    oldIds = currentIds;
+}
+
+void PluginManager::syncDrumGridMultiOutTracks(TrackId trackId, DeviceId deviceId,
+                                               daw::audio::DrumGridPlugin* drumGrid) {
+    auto& tm = TrackManager::getInstance();
+    auto* devInfo = tm.getDevice(trackId, deviceId);
+    if (!devInfo || !devInfo->multiOut.isMultiOut)
+        return;
+
+    auto& pairs = devInfo->multiOut.outputPairs;
+    const auto& chains = drumGrid->getChains();
+
+    // Build set of bus indices that should be active (non-empty chains with busOutput > 0)
+    std::set<int> activeBuses;
+    std::map<int, juce::String> busNames;  // bus index → chain name
+    for (const auto& chain : chains) {
+        int bus = chain->busOutput.get();
+        if (bus > 0 && !chain->plugins.empty()) {
+            activeBuses.insert(bus);
+            busNames[bus] =
+                chain->name.isNotEmpty() ? chain->name : ("Pad " + juce::String(chain->index));
+        }
+    }
+
+    // Deactivate pairs that no longer have a corresponding chain
+    for (int p = 1; p < static_cast<int>(pairs.size()); ++p) {
+        if (pairs[static_cast<size_t>(p)].active && activeBuses.find(p) == activeBuses.end()) {
+            tm.deactivateMultiOutPair(trackId, deviceId, p);
+        }
+    }
+
+    // Activate pairs for chains that need them
+    for (int bus : activeBuses) {
+        if (bus >= static_cast<int>(pairs.size()))
+            continue;
+
+        auto& pair = pairs[static_cast<size_t>(bus)];
+        if (!pair.active) {
+            auto childTrackId = tm.activateMultiOutPair(trackId, deviceId, bus);
+
+            if (childTrackId != INVALID_TRACK_ID) {
+                // Name the child track after the chain (via setTrackName to notify UI)
+                auto it = busNames.find(bus);
+                if (it != busNames.end()) {
+                    tm.setTrackName(childTrackId, drumGrid->getName() + ": " + it->second);
+                    pair.name = it->second;
+                }
+
+                // Create the TE audio track and add the RackInstance
+                // so audio actually flows through this child track
+                if (auto* childTrack = tm.getTrack(childTrackId))
+                    syncMultiOutTrack(childTrackId, *childTrack);
+            }
+        } else if (pair.trackId != INVALID_TRACK_ID) {
+            // Update name if chain name changed
+            auto it = busNames.find(bus);
+            if (it != busNames.end()) {
+                auto newName = drumGrid->getName() + ": " + it->second;
+                if (auto* childTrack = tm.getTrack(pair.trackId)) {
+                    if (childTrack->name != newName) {
+                        tm.setTrackName(pair.trackId, newName);
+                        pair.name = it->second;
+                    }
+                }
+            }
+        }
+    }
 }
 
 }  // namespace magda
