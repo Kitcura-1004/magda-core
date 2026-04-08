@@ -227,6 +227,11 @@ DeviceSlotComponent::DeviceSlotComponent(const magda::DeviceInfo& device) : devi
     if (isStepSequencer_) {
         exportClipButton_ = std::make_unique<magda::SvgButton>("ExportClip", BinaryData::copy_svg,
                                                                BinaryData::copy_svgSize);
+        // Match the muted styling of multiOut / open-in-external buttons so it
+        // blends into the header instead of popping.
+        exportClipButton_->setOriginalColor(juce::Colour(0xFFB3B3B3));
+        exportClipButton_->setNormalColor(juce::Colour(0xFFB3B3B3).withAlpha(0.5f));
+        exportClipButton_->setActiveColor(juce::Colours::white);
         exportClipButton_->setTooltip("Click to copy pattern, drag to timeline");
         exportClipButton_->addMouseListener(this, false);
         exportClipButton_->onClick = [this]() {
@@ -984,28 +989,39 @@ void DeviceSlotComponent::paint(juce::Graphics& g) {
     NodeComponent::paint(g);
 
     // Custom header text for drum grid (two-color text)
-    if (isDrumGrid_ && !collapsed_ && getHeaderHeight() > 0) {
-        auto bounds = getLocalBounds();
-        auto headerArea = bounds.removeFromTop(getHeaderHeight());
+    if (isDrumGrid_ && !collapsed_ && getHeaderHeight() > 0 && modButton_ &&
+        modButton_->isVisible()) {
+        // Anchor the orange "MDG2000" text directly to the right edge of the
+        // mod button. The macro/mod buttons are placed by resizedHeaderExtra
+        // inside a header rect that already has the param/mod/extra side
+        // panels stripped off, so following the button position is the only
+        // way to stay aligned when the macro or mod editor is open.
+        auto modBounds = modButton_->getBounds();
+        int textStartX = modBounds.getRight() + 4;
+        int textY = modBounds.getY();
+        int textHeight = modBounds.getHeight();
 
-        // Calculate text area: panels + 3px padding + macro(BUTTON_SIZE+4) + mod(BUTTON_SIZE+4)
-        int leftOffset = getParamPanelWidth() + getModPanelWidth() + 3 + 2 * (BUTTON_SIZE + 4);
-        int textStartX = headerArea.getX() + leftOffset;
-        int textY = headerArea.getY();
-        int textHeight = headerArea.getHeight();
-        int availableWidth = headerArea.getWidth() - leftOffset;
+        // Right edge: stop before any header buttons on the right side. The
+        // leftmost right-side button's X gives us the safe boundary.
+        int rightLimit = getWidth();
+        auto narrowestRightX = [&](juce::Component* c) {
+            if (c && c->isVisible() && c->getX() > textStartX && c->getX() < rightLimit)
+                rightLimit = c->getX();
+        };
+        narrowestRightX(uiButton_.get());
+        narrowestRightX(scButton_.get());
+        narrowestRightX(multiOutButton_.get());
+        narrowestRightX(onButton_.get());
+        narrowestRightX(exportClipButton_.get());
 
-        // Get the font
+        int availableWidth = rightLimit - textStartX - 4;
+        if (availableWidth <= 0)
+            return;
+
         auto font = FontManager::getInstance().getMicrogrammaFont(11.0f);
         g.setFont(font);
-
-        // Measure "MDG2000" width using GlyphArrangement
-        juce::GlyphArrangement glyphs;
-        juce::String part1 = "MDG2000";
-        glyphs.addLineOfText(font, part1, 0.0f, 0.0f);
-        // Draw "MDG2000" in orange (left-aligned)
         g.setColour(DarkTheme::getColour(DarkTheme::ACCENT_ORANGE));
-        g.drawText(part1, textStartX, textY, availableWidth, textHeight,
+        g.drawText("MDG2000", textStartX, textY, availableWidth, textHeight,
                    juce::Justification::centredLeft, false);
     }
 }
@@ -1327,21 +1343,27 @@ void DeviceSlotComponent::resizedHeaderExtra(juce::Rectangle<int>& headerArea) {
         modButton_->setVisible(false);
     }
 
-    // Export clip button (step sequencer) — sits between delete and power, handled before shared
-    // layout
-    if (exportClipButton_) {
-        exportClipButton_->setVisible(true);
-        exportClipButton_->setBounds(headerArea.removeFromRight(BUTTON_SIZE));
-        headerArea.removeFromRight(4);
-    }
-
     // MIDI devices: no volume/SC
+    // Right-edge order (left → right): [export clip] [power] [delete X (NodeComponent)]
+    // Power must sit immediately to the left of the delete X — clip lives to its left.
     if (isChordEngine_ || isArpeggiator_ || isStepSequencer_) {
         gainSlider_.setVisible(false);
         if (scButton_)
             scButton_->setVisible(false);
         onButton_->setBounds(headerArea.removeFromRight(BUTTON_SIZE));
+        if (exportClipButton_) {
+            exportClipButton_->setVisible(true);
+            headerArea.removeFromRight(4);
+            exportClipButton_->setBounds(headerArea.removeFromRight(BUTTON_SIZE));
+        }
         return;
+    }
+
+    // Non-MIDI devices with export clip (none currently, but keep symmetric)
+    if (exportClipButton_) {
+        exportClipButton_->setVisible(true);
+        exportClipButton_->setBounds(headerArea.removeFromRight(BUTTON_SIZE));
+        headerArea.removeFromRight(4);
     }
 
     // Set conditional button visibility before calling shared layout
