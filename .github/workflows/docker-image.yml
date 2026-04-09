@@ -8,7 +8,7 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }}/build-linux
+  IMAGE_NAME: conceptual-machines/magda-core/build-linux
 
 jobs:
   build-and-push:
