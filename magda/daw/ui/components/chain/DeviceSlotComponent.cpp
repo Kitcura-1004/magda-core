@@ -111,6 +111,12 @@ DeviceSlotComponent::DeviceSlotComponent(const magda::DeviceInfo& device) : devi
         }
     };
 
+    onCollapsedChanged = [this](bool collapsed) {
+        if (auto* dev = magda::TrackManager::getInstance().getDeviceInChainByPath(nodePath_)) {
+            dev->expanded = !collapsed;
+        }
+    };
+
     onLayoutChanged = [this]() {
         if (onDeviceLayoutChanged) {
             onDeviceLayoutChanged();
@@ -596,6 +602,10 @@ DeviceSlotComponent::DeviceSlotComponent(const magda::DeviceInfo& device) : devi
 
     // Populate macro panel with parameter names
     updateMacroPanel();
+
+    // Restore collapsed state AFTER all child components are created, because
+    // setCollapsed triggers resized() which accesses onButton_, uiButton_, etc.
+    setCollapsed(!device.expanded);
 
     // Start timer for UI button state sync and meter updates (~30 FPS)
     startTimerHz(30);

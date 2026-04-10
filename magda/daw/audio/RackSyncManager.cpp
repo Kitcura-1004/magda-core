@@ -136,6 +136,13 @@ void RackSyncManager::resyncRack(TrackId trackId, const RackInfo& rackInfo) {
     DBG("RackSyncManager: Resynced rack " << rackInfo.id);
 }
 
+void RackSyncManager::updateRackProperties(const RackInfo& rackInfo) {
+    auto it = syncedRacks_.find(rackInfo.id);
+    if (it == syncedRacks_.end())
+        return;
+    updateProperties(it->second, rackInfo);
+}
+
 void RackSyncManager::removeRack(RackId rackId) {
     auto it = syncedRacks_.find(rackId);
     if (it == syncedRacks_.end())
@@ -714,18 +721,14 @@ void RackSyncManager::applyBypassState(SyncedRack& synced, const RackInfo& rackI
     }
 
     // Apply rack output volume/pan via the RackInstance's output level parameters
-    if (rackInfo.volume != 0.0f) {
-        rackInstance->leftOutDb->setParameter(
-            static_cast<float>(juce::jlimit(te::RackInstance::rackMinDb,
-                                            te::RackInstance::rackMaxDb,
-                                            static_cast<double>(rackInfo.volume))),
-            juce::dontSendNotification);
-        rackInstance->rightOutDb->setParameter(
-            static_cast<float>(juce::jlimit(te::RackInstance::rackMinDb,
-                                            te::RackInstance::rackMaxDb,
-                                            static_cast<double>(rackInfo.volume))),
-            juce::dontSendNotification);
-    }
+    rackInstance->leftOutDb->setParameter(
+        static_cast<float>(juce::jlimit(te::RackInstance::rackMinDb, te::RackInstance::rackMaxDb,
+                                        static_cast<double>(rackInfo.volume))),
+        juce::dontSendNotification);
+    rackInstance->rightOutDb->setParameter(
+        static_cast<float>(juce::jlimit(te::RackInstance::rackMinDb, te::RackInstance::rackMaxDb,
+                                        static_cast<double>(rackInfo.volume))),
+        juce::dontSendNotification);
 }
 
 // =============================================================================

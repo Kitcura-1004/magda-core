@@ -42,8 +42,8 @@ void MidiChordEnginePlugin::applyToBuffer(const te::PluginRenderContext& fc) {
     if (!fc.bufferForMidiMessages)
         return;
 
-    // Skip recording during preview playback
-    if (detectionSuppressed_.load(std::memory_order_relaxed))
+    // Skip recording during preview playback or when plugin is bypassed/disabled
+    if (detectionSuppressed_.load(std::memory_order_relaxed) || !isEnabled())
         return;
 
     const double blockTimeSeconds = static_cast<double>(fc.bufferStartSample) / sampleRate_;
@@ -102,6 +102,16 @@ void MidiChordEnginePlugin::applyToBuffer(const te::PluginRenderContext& fc) {
 // =============================================================================
 
 void MidiChordEnginePlugin::timerCallback() {
+    if (!isEnabled()) {
+        // Flush stale FIFO events by consuming them (safe — we're the reader).
+        // Don't call reset() here as it races with the audio thread writer.
+        int start1, size1, start2, size2;
+        noteFifo_.prepareToRead(noteFifo_.getNumReady(), start1, size1, start2, size2);
+        noteFifo_.finishedRead(size1 + size2);
+        heldNoteCount_.store(0, std::memory_order_relaxed);
+        return;
+    }
+
     processNoteEvents();
 
     // Debounce: if held note count changed since last detection, wait
