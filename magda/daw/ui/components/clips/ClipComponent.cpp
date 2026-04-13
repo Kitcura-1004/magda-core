@@ -1644,12 +1644,15 @@ void ClipComponent::mouseUp(const juce::MouseEvent& e) {
                                                                       targetTrackId, dupTempo);
                     auto* cmdPtr = cmd.get();
                     UndoManager::getInstance().executeCommand(std::move(cmd));
-                    if (safeThis == nullptr)
-                        return;
+                    // Select the duplicate — must happen before SafePointer check
+                    // because rebuildClipComponents() during execute destroys this
+                    // component, making safeThis null and skipping the selection.
                     ClipId newClipId = cmdPtr->getDuplicatedClipId();
                     if (newClipId != INVALID_CLIP_ID) {
                         SelectionManager::getInstance().selectClip(newClipId);
                     }
+                    if (safeThis == nullptr)
+                        return;
                     // Reset duplication state
                     isDuplicating_ = false;
                     duplicateClipId_ = INVALID_CLIP_ID;
@@ -2202,8 +2205,12 @@ void ClipComponent::updateCursor(bool isAltDown, bool isShiftDown) {
             setMouseCursor(juce::MouseCursor::LeftRightResizeCursor);
         }
     } else if (isClipSelected) {
-        // Grab cursor when selected (can drag)
-        setMouseCursor(juce::MouseCursor::DraggingHandCursor);
+        // Shift = copy cursor, otherwise grab cursor
+        if (isShiftDown) {
+            setMouseCursor(juce::MouseCursor::CopyingCursor);
+        } else {
+            setMouseCursor(juce::MouseCursor::DraggingHandCursor);
+        }
     } else {
         // Normal cursor when not selected (need to click to select first)
         setMouseCursor(juce::MouseCursor::NormalCursor);
