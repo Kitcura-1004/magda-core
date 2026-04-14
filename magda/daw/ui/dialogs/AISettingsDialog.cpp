@@ -54,8 +54,8 @@ struct ProviderInfo {
 
 const std::vector<ProviderInfo>& getKnownProviders() {
     static const std::vector<ProviderInfo> providers = {
-        {magda::provider::OPENAI, "OpenAI", magda::provider::OPENAI, "", magda::model::GPT_4_1_MINI,
-         BinaryData::openai_svg, BinaryData::openai_svgSize},
+        {magda::provider::OPENAI_CHAT, "OpenAI", magda::provider::OPENAI_CHAT, "",
+         magda::model::GPT_4_1_MINI, BinaryData::openai_svg, BinaryData::openai_svgSize},
         {magda::provider::ANTHROPIC, "Anthropic", magda::provider::ANTHROPIC, "",
          magda::model::CLAUDE_HAIKU, BinaryData::anthropic_svg, BinaryData::anthropic_svgSize},
         {magda::provider::GEMINI, "Gemini", magda::provider::GEMINI, "", magda::model::GEMINI_FLASH,
@@ -890,7 +890,7 @@ class AISettingsDialog::ConfigPage : public juce::Component {
             if (presetId == magda::preset::HYBRID_SPEED)
                 savedOptimize_ = "Speed";
             else
-                savedOptimize_ = "Cost";
+                savedOptimize_ = "Quality";
         } else {
             modeCombo_.setSelectedId(2, juce::dontSendNotification);
             // Infer optimize from whether command uses cloud
@@ -912,7 +912,8 @@ class AISettingsDialog::ConfigPage : public juce::Component {
             savedProviderDisplay_ = "DeepSeek";
         else if (musicCfg.provider == magda::provider::OPENROUTER)
             savedProviderDisplay_ = "OpenRouter";
-        else if (musicCfg.provider == magda::provider::OPENAI)
+        else if (musicCfg.provider == magda::provider::OPENAI_CHAT ||
+                 musicCfg.provider == magda::provider::OPENAI_RESPONSES)
             savedProviderDisplay_ = "OpenAI";
 
         // Update local model label
@@ -952,19 +953,17 @@ class AISettingsDialog::ConfigPage : public juce::Component {
                 }
             }
 
-            // Cost optimization: use cheaper models for router+command
+            // Cost optimization: use cheaper model for router only
+            // (command needs the full model for CFG/Responses API)
             if (optimize == "Cost") {
                 auto routerCfg = config.getAgentLLMConfig(magda::role::ROUTER);
-                auto cmdCfg = config.getAgentLLMConfig(magda::role::COMMAND);
                 applyCheaperModel(routerCfg, presetId);
-                applyCheaperModel(cmdCfg, presetId);
                 config.setAgentLLMConfig(magda::role::ROUTER, routerCfg);
-                config.setAgentLLMConfig(magda::role::COMMAND, cmdCfg);
             }
         } else {
             // Hybrid
             std::string hybridPresetId =
-                optimize == "Speed" ? magda::preset::HYBRID_SPEED : magda::preset::HYBRID_COST;
+                optimize == "Speed" ? magda::preset::HYBRID_SPEED : magda::preset::HYBRID_QUALITY;
             config.setAIPreset(hybridPresetId);
 
             // Router is always local

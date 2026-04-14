@@ -10,7 +10,8 @@ namespace magda {
 
 // --- Provider IDs (wire format / credential keys) ---
 namespace provider {
-inline constexpr const char* OPENAI = "openai_chat";
+inline constexpr const char* OPENAI_CHAT = "openai_chat";
+inline constexpr const char* OPENAI_RESPONSES = "openai_responses";
 inline constexpr const char* ANTHROPIC = "anthropic";
 inline constexpr const char* GEMINI = "gemini";
 inline constexpr const char* DEEPSEEK = "deepseek";
@@ -26,8 +27,8 @@ inline constexpr const char* CLOUD_ANTHROPIC = "cloud_anthropic";
 inline constexpr const char* CLOUD_GEMINI = "cloud_gemini";
 inline constexpr const char* CLOUD_DEEPSEEK = "cloud_deepseek";
 inline constexpr const char* CLOUD_OPENROUTER = "cloud_openrouter";
-inline constexpr const char* HYBRID_COST = "hybrid_cost";
 inline constexpr const char* HYBRID_SPEED = "hybrid_speed";
+inline constexpr const char* HYBRID_QUALITY = "hybrid_quality";
 }  // namespace preset
 
 // --- Model IDs ---
@@ -36,6 +37,9 @@ namespace model {
 inline constexpr const char* GPT_4_1 = "gpt-4.1";
 inline constexpr const char* GPT_4_1_MINI = "gpt-4.1-mini";
 inline constexpr const char* GPT_5 = "gpt-5";
+inline constexpr const char* GPT_5_MINI = "gpt-5-mini";
+inline constexpr const char* GPT_5_NANO = "gpt-5-nano";
+inline constexpr const char* GPT_5_4 = "gpt-5.4";
 // Anthropic
 inline constexpr const char* CLAUDE_OPUS = "claude-opus-4-6";
 inline constexpr const char* CLAUDE_SONNET = "claude-sonnet-4-6";

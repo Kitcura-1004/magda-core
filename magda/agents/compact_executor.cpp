@@ -79,9 +79,15 @@ bool CompactExecutor::execute(const std::vector<Instruction>& instructions) {
     results_.clear();
     currentTrackId_ = -1;
     currentClipId_ = -1;
+    autoCreatedClip_ = false;
     clearActiveSelection();
 
-    // Inherit selected track/clip from UI context
+    // Inherit only the selected track from UI context — intentionally do NOT
+    // inherit the selected clip. The music agent should always produce a fresh
+    // clip unless explicitly seeded by a prior step in the same turn (e.g. the
+    // command agent's clip.new). Using SelectionManager for agent-to-agent
+    // handoff would silently fill whichever clip the user happened to have
+    // selected in the UI.
     auto& sm = SelectionManager::getInstance();
     auto selectedTrack = sm.getSelectedTrack();
 
@@ -89,13 +95,21 @@ bool CompactExecutor::execute(const std::vector<Instruction>& instructions) {
     if (selectedTrack != INVALID_TRACK_ID && selectedTrack != MASTER_TRACK_ID)
         currentTrackId_ = selectedTrack;
 
-    // Single clip selection
-    auto selectedClip = sm.getSelectedClip();
-    if (selectedClip != INVALID_CLIP_ID) {
-        currentClipId_ = selectedClip;
-        auto* clipInfo = ClipManager::getInstance().getClip(selectedClip);
-        if (clipInfo && clipInfo->trackId != INVALID_TRACK_ID)
-            currentTrackId_ = clipInfo->trackId;
+    // Seeded clip from the command agent (BOTH-intent handoff).
+    // Validate before adopting: a stale/deleted ID would otherwise suppress
+    // auto-creation and cause note commands to silently no-op on a missing
+    // clip while still reporting success.
+    if (seedClipId_ >= 0) {
+        auto* clipInfo = ClipManager::getInstance().getClip(seedClipId_);
+        if (clipInfo) {
+            currentClipId_ = seedClipId_;
+            if (clipInfo->trackId != INVALID_TRACK_ID)
+                currentTrackId_ = clipInfo->trackId;
+        } else {
+            DBG("CompactExecutor: ignoring stale seedClipId=" + juce::String(seedClipId_) +
+                " (clip no longer exists)");
+            seedClipId_ = -1;
+        }
     }
 
     // Multi-clip selection → populate selectedClips_ so SET/DEL apply to all
@@ -163,10 +177,15 @@ bool CompactExecutor::execute(const std::vector<Instruction>& instructions) {
         if (ok) {
             succeeded++;
         } else {
+            DBG("CompactExecutor: instruction " + juce::String(succeeded + failed) +
+                " (opcode=" + juce::String(static_cast<int>(inst.opcode)) + ") FAILED: " + error_);
             results_.add("[!] " + error_);
             failed++;
         }
     }
+
+    DBG("CompactExecutor: execute done — succeeded=" + juce::String(succeeded) +
+        " failed=" + juce::String(failed) + " currentClip=" + juce::String(currentClipId_));
 
     if (succeeded == 0 && failed > 0) {
         error_ = "All " + juce::String(failed) + " instruction(s) failed";
@@ -179,6 +198,7 @@ bool CompactExecutor::execute(const std::vector<Instruction>& instructions) {
 bool CompactExecutor::autoCreateClip() {
     if (currentTrackId_ < 0) {
         error_ = "No track context — use TRACK first or select a track";
+        DBG("CompactExecutor::autoCreateClip FAIL: " + error_);
         return false;
     }
 
@@ -186,13 +206,22 @@ bool CompactExecutor::autoCreateClip() {
     double startTime = barsToTime(1.0);
     double length = barsToLength(4.0);
 
+    DBG("CompactExecutor::autoCreateClip creating MIDI clip on track " +
+        juce::String(currentTrackId_) + " start=" + juce::String(startTime, 3) +
+        "s len=" + juce::String(length, 3) + "s");
+
     auto clipId = ClipManager::getInstance().createMidiClip(currentTrackId_, startTime, length);
     if (clipId < 0) {
         error_ = "Failed to auto-create clip";
+        DBG("CompactExecutor::autoCreateClip FAIL: createMidiClip returned -1 for track " +
+            juce::String(currentTrackId_));
         return false;
     }
 
+    DBG("CompactExecutor::autoCreateClip OK: clipId=" + juce::String(clipId));
+
     currentClipId_ = clipId;
+    autoCreatedClip_ = true;
     results_.add("Created MIDI clip at bar 1.00, length 4.00 bars");
     return true;
 }
@@ -652,17 +681,31 @@ bool CompactExecutor::executeArp(const ArpOp& op) {
 
     std::vector<int> midiNotes;
     juce::String chordError;
-    if (!music::resolveChordNotes(op.root.toStdString(), op.quality.toStdString(), 0, midiNotes,
-                                  chordError)) {
+    if (!music::resolveChordNotes(op.root.toStdString(), op.quality.toStdString(), op.inversion,
+                                  midiNotes, chordError)) {
         error_ = chordError;
         return false;
     }
 
-    // Sort ascending for pattern
+    // Sort ascending as the canonical starting order
     std::sort(midiNotes.begin(), midiNotes.end());
 
-    // Default pattern: up
-    std::vector<int> ordered = midiNotes;
+    // Apply pattern ordering: up (default), down, updown
+    auto pattern = op.pattern.trim().toLowerCase();
+    std::vector<int> ordered;
+    if (pattern == "down") {
+        ordered.assign(midiNotes.rbegin(), midiNotes.rend());
+    } else if (pattern == "updown" || pattern == "upanddown" || pattern == "up_down") {
+        ordered = midiNotes;
+        if (midiNotes.size() > 2) {
+            // Add descent without repeating the top and bottom notes
+            for (auto it = midiNotes.rbegin() + 1; it + 1 != midiNotes.rend(); ++it)
+                ordered.push_back(*it);
+        }
+    } else {
+        // "up" or empty/unknown — ascending
+        ordered = midiNotes;
+    }
 
     int velocity = 100;
     double noteLength = op.step;
@@ -710,8 +753,8 @@ bool CompactExecutor::executeChord(const ChordOp& op) {
 
     std::vector<int> midiNotes;
     juce::String chordError;
-    if (!music::resolveChordNotes(op.root.toStdString(), op.quality.toStdString(), 0, midiNotes,
-                                  chordError)) {
+    if (!music::resolveChordNotes(op.root.toStdString(), op.quality.toStdString(), op.inversion,
+                                  midiNotes, chordError)) {
         error_ = chordError;
         return false;
     }

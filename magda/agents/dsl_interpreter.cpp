@@ -327,6 +327,11 @@ bool Params::getBool(const std::string& key, bool def) const {
 Interpreter::Interpreter() {}
 
 bool Interpreter::execute(const char* dslCode) {
+    // Interpreter mutates TrackManager/ClipManager/SelectionManager, all of
+    // which fire listeners that assume the message thread. Callers must
+    // marshal onto the message thread before invoking execute().
+    JUCE_ASSERT_MESSAGE_THREAD;
+
     if (!dslCode || !*dslCode) {
         ctx_.setError("Empty DSL code");
         return false;
@@ -446,6 +451,7 @@ bool Interpreter::parseTrackStatement(Tokenizer& tok) {
             auto trackType = parseTrackType(params);
             auto trackId = tm.createTrack(name, trackType);
             ctx_.currentTrackId = trackId;
+            SelectionManager::getInstance().selectTrack(trackId);
             ctx_.addResult("Created track '" + name + "'");
         }
     } else {
@@ -453,6 +459,7 @@ bool Interpreter::parseTrackStatement(Tokenizer& tok) {
         auto trackType = parseTrackType(params);
         auto trackId = tm.createTrack("", trackType);
         ctx_.currentTrackId = trackId;
+        SelectionManager::getInstance().selectTrack(trackId);
         ctx_.addResult("Created track");
     }
 
@@ -802,6 +809,7 @@ bool Interpreter::executeNewClip(const Params& params) {
     }
 
     ctx_.currentClipId = clipId;
+    SelectionManager::getInstance().selectClip(clipId);
     ctx_.addResult("Created MIDI clip at bar " + juce::String(bar, 2) + ", length " +
                    juce::String(lengthBars, 2) + " bars");
     return true;
