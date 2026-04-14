@@ -3,6 +3,7 @@
 #include "CurveSnapshot.hpp"
 #include "ModifierHelpers.hpp"
 #include "PluginManager.hpp"
+#include "TracktionHelpers.hpp"
 #include "core/TrackManager.hpp"
 
 namespace magda {
@@ -289,7 +290,7 @@ void RackSyncManager::capturePluginStates(SyncedRack& synced) {
             stateStr = ext->state.getProperty(te::IDs::state).toString();
         } else {
             auto stateCopy = plugin->state.createCopy();
-            stateCopy.removeProperty(te::IDs::id, nullptr);
+            stripTracktionIdsRecursive(stateCopy);
             if (auto xml = stateCopy.createXml())
                 stateStr = xml->toString();
         }
