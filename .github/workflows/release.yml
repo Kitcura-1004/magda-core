@@ -342,7 +342,7 @@ jobs:
           Copy-Item $pdb.FullName $pdbName
           Write-Output "Staged PDB: $pdbName"
         } else {
-          Write-Warning "MAGDA.pdb not found — crash symbolization unavailable for this release"
+          Write-Warning "MAGDA.pdb not found - crash symbolization unavailable for this release"
         }
 
     - name: Create installer
