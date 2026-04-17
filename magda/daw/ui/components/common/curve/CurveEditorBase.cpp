@@ -1,6 +1,7 @@
 #include "CurveEditorBase.hpp"
 
 #include <algorithm>
+#include <limits>
 #include <map>
 #include <set>
 
@@ -10,6 +11,7 @@ namespace magda {
 
 CurveEditorBase::CurveEditorBase() {
     setName("CurveEditorBase");
+    setWantsKeyboardFocus(true);
 }
 
 CurveEditorBase::~CurveEditorBase() = default;
@@ -230,15 +232,6 @@ void CurveEditorBase::renderCurveSegment(juce::Path& path, const CurvePoint& p1,
     int pixelX2 = xToPixel(x2);
     int pixelY2 = yToPixel(y2);
 
-    // DEBUG: Check if path current position matches p1
-    auto currentPos = path.getCurrentPosition();
-    if (std::abs(currentPos.x - pixelX1) > 2 || std::abs(currentPos.y - pixelY1) > 2) {
-        DBG("!!! PATH MISMATCH !!! pathPos=(" + juce::String(currentPos.x) + "," +
-            juce::String(currentPos.y) + ")" + " p1Pixel=(" + juce::String(pixelX1) + "," +
-            juce::String(pixelY1) + ")" + " p1=(" + juce::String(x1) + "," + juce::String(y1) +
-            ")");
-    }
-
     switch (p1.curveType) {
         case CurveType::Linear: {
             if (std::abs(effectiveTension) < 0.001) {
@@ -291,7 +284,8 @@ void CurveEditorBase::renderCurveSegment(juce::Path& path, const CurvePoint& p1,
 }
 
 void CurveEditorBase::paintDrawingPreview(juce::Graphics& g) {
-    if (activeDrawMode_ == CurveDrawMode::Pencil && !drawingPath_.empty()) {
+    if ((activeDrawMode_ == CurveDrawMode::Pencil || activeDrawMode_ == CurveDrawMode::Curve) &&
+        !drawingPath_.empty()) {
         g.setColour(juce::Colour(0xAAFFFFFF));
         for (size_t i = 1; i < drawingPath_.size(); ++i) {
             g.drawLine(static_cast<float>(drawingPath_[i - 1].x),
@@ -299,11 +293,6 @@ void CurveEditorBase::paintDrawingPreview(juce::Graphics& g) {
                        static_cast<float>(drawingPath_[i].x), static_cast<float>(drawingPath_[i].y),
                        2.0f);
         }
-    } else if (activeDrawMode_ == CurveDrawMode::Line && isDrawing_) {
-        g.setColour(juce::Colour(0xAAFFFFFF));
-        auto mousePos = getMouseXYRelative();
-        g.drawLine(static_cast<float>(lineStartPoint_.x), static_cast<float>(lineStartPoint_.y),
-                   static_cast<float>(mousePos.x), static_cast<float>(mousePos.y), 2.0f);
     }
 }
 
@@ -312,24 +301,20 @@ void CurveEditorBase::mouseDown(const juce::MouseEvent& e) {
 
     if (e.mods.isLeftButtonDown()) {
         // Resolve effective draw mode from modifier keys:
-        //   Cmd/Ctrl → Pencil, Alt/Option → Line, otherwise use drawMode_
+        //   Cmd/Ctrl → freeform Pencil, Shift → Line stamp, otherwise Select
         if (e.mods.isCommandDown()) {
             activeDrawMode_ = CurveDrawMode::Pencil;
-        } else if (e.mods.isAltDown()) {
+        } else if (e.mods.isShiftDown()) {
             activeDrawMode_ = CurveDrawMode::Line;
         } else {
-            activeDrawMode_ = drawMode_;
+            activeDrawMode_ = CurveDrawMode::Select;
         }
 
         switch (activeDrawMode_) {
             case CurveDrawMode::Select:
-                // Clear selection on empty-area click (no shift)
-                if (!e.mods.isShiftDown()) {
-                    clearSelection();
-                }
-                // Start lasso selection on empty area
+                // Record click position; lasso starts on drag, point added on click-release
                 lassoAnchor_ = e.getPosition();
-                isLassoActive_ = true;
+                isLassoActive_ = false;
                 lassoRect_ = {};
                 break;
 
@@ -339,13 +324,46 @@ void CurveEditorBase::mouseDown(const juce::MouseEvent& e) {
                 drawingPath_.push_back(e.getPosition());
                 break;
 
-            case CurveDrawMode::Line:
-                isDrawing_ = true;
-                lineStartPoint_ = e.getPosition();
+            case CurveDrawMode::Line: {
+                // Shift+click: stamp a Serum-style step cell spanning one
+                // grid division. The cell has a cliff at both edges —
+                // achieved by flipping the preceding point to Step inside
+                // onStepStamped so the incoming segment holds flat then
+                // cliffs into the cell (instead of linearly fading in).
+                double x = pixelToX(e.x);
+                double y = pixelToY(e.y);
+                if (snapYToGrid)
+                    y = snapYToGrid(y);
+                y = juce::jlimit(0.0, 1.0, y);
+
+                double gridStart = x;
+                double gridEnd = x;
+                if (snapXToGrid && getGridSpacingX) {
+                    gridStart = snapXToGrid(x);
+                    gridEnd = gridStart + getGridSpacingX();
+                }
+
+                // Find the nearest point strictly before gridStart so the
+                // subclass can flip it to Step (left-edge cliff) and so
+                // the cell's right edge can return to that point's value
+                // (the dip's baseline).
+                uint32_t prevPointId = INVALID_CURVE_POINT_ID;
+                double prevValue = 0.5;
+                const auto& existing = getPoints();
+                double bestTime = -std::numeric_limits<double>::infinity();
+                for (const auto& p : existing) {
+                    if (p.x < gridStart && p.x > bestTime) {
+                        bestTime = p.x;
+                        prevPointId = p.id;
+                        prevValue = p.y;
+                    }
+                }
+
+                onStepStamped(gridStart, gridEnd, y, prevPointId, prevValue);
                 break;
+            }
 
             case CurveDrawMode::Curve:
-                // Similar to pencil but creates bezier points
                 isDrawing_ = true;
                 drawingPath_.clear();
                 drawingPath_.push_back(e.getPosition());
@@ -355,12 +373,24 @@ void CurveEditorBase::mouseDown(const juce::MouseEvent& e) {
 }
 
 void CurveEditorBase::mouseDrag(const juce::MouseEvent& e) {
-    if (isLassoActive_) {
+    // Select mode: start lasso after a small movement threshold
+    if (activeDrawMode_ == CurveDrawMode::Select && !isDrawing_) {
         auto pos = e.getPosition();
-        lassoRect_ = juce::Rectangle<int>(
-            std::min(lassoAnchor_.x, pos.x), std::min(lassoAnchor_.y, pos.y),
-            std::abs(pos.x - lassoAnchor_.x), std::abs(pos.y - lassoAnchor_.y));
-        repaint();
+        int dx = pos.x - lassoAnchor_.x;
+        int dy = pos.y - lassoAnchor_.y;
+
+        if (!isLassoActive_ && (dx * dx + dy * dy) > 16) {
+            // Passed threshold — start lasso
+            isLassoActive_ = true;
+            clearSelection();
+        }
+
+        if (isLassoActive_) {
+            lassoRect_ = juce::Rectangle<int>(
+                std::min(lassoAnchor_.x, pos.x), std::min(lassoAnchor_.y, pos.y),
+                std::abs(pos.x - lassoAnchor_.x), std::abs(pos.y - lassoAnchor_.y));
+            repaint();
+        }
         return;
     }
 
@@ -370,41 +400,43 @@ void CurveEditorBase::mouseDrag(const juce::MouseEvent& e) {
     if (activeDrawMode_ == CurveDrawMode::Pencil || activeDrawMode_ == CurveDrawMode::Curve) {
         drawingPath_.push_back(e.getPosition());
         repaint();
-    } else if (activeDrawMode_ == CurveDrawMode::Line) {
-        repaint();  // Redraw line preview
     }
 }
 
 void CurveEditorBase::mouseUp(const juce::MouseEvent& e) {
-    if (isLassoActive_) {
-        isLassoActive_ = false;
+    if (activeDrawMode_ == CurveDrawMode::Select && !isDrawing_) {
+        if (isLassoActive_) {
+            // Finish lasso selection
+            isLassoActive_ = false;
 
-        // If shift is NOT held, clear selection before adding lasso hits
-        if (!e.mods.isShiftDown()) {
-            selectedPointIds_.clear();
+            // Gather points whose centres fall within the lasso rectangle
+            std::vector<uint32_t> selectedIds;
             for (auto& pc : pointComponents_) {
-                pc->setSelected(false);
+                auto centre = pc->getBounds().getCentre();
+                if (lassoRect_.contains(centre)) {
+                    selectedPointIds_.insert(pc->getPointId());
+                    pc->setSelected(true);
+                    selectedIds.push_back(pc->getPointId());
+                }
             }
-        }
 
-        // Gather points whose centres fall within the lasso rectangle
-        std::vector<uint32_t> selectedIds;
-        for (auto& pc : pointComponents_) {
-            auto centre = pc->getBounds().getCentre();
-            bool hit = lassoRect_.contains(centre);
-            if (hit) {
-                selectedPointIds_.insert(pc->getPointId());
-                pc->setSelected(true);
-                selectedIds.push_back(pc->getPointId());
+            if (!selectedIds.empty()) {
+                onPointsSelected(selectedIds);
             }
-        }
 
-        if (!selectedIds.empty()) {
-            onPointsSelected(selectedIds);
-        }
+            lassoRect_ = {};
+            repaint();
+        } else {
+            // No drag happened — single click adds a point
+            double x = pixelToX(e.x);
+            double y = pixelToY(e.y);
 
-        lassoRect_ = {};
-        repaint();
+            if (snapXToGrid) {
+                x = snapXToGrid(x);
+            }
+
+            onPointAdded(x, y, CurveType::Linear);
+        }
         return;
     }
 
@@ -416,17 +448,8 @@ void CurveEditorBase::mouseUp(const juce::MouseEvent& e) {
                 createPointsFromDrawingPath();
                 break;
 
-            case CurveDrawMode::Line: {
-                // Create two points: start and end
-                double startX = pixelToX(lineStartPoint_.x);
-                double startY = pixelToY(lineStartPoint_.y);
-                double endX = pixelToX(e.x);
-                double endY = pixelToY(e.y);
-
-                onPointAdded(startX, startY, CurveType::Linear);
-                onPointAdded(endX, endY, CurveType::Linear);
-                break;
-            }
+            case CurveDrawMode::Line:
+                break;  // Line is handled on mouseDown (instant stamp)
 
             case CurveDrawMode::Curve:
                 createPointsFromDrawingPath();
@@ -442,19 +465,19 @@ void CurveEditorBase::mouseUp(const juce::MouseEvent& e) {
 }
 
 void CurveEditorBase::mouseDoubleClick(const juce::MouseEvent& e) {
-    // Double-click to add a point
-    double x = pixelToX(e.x);
-    double y = pixelToY(e.y);
+    // Double-click on empty area is a no-op.
+    // Point deletion on double-click is handled by CurvePointComponent.
+    juce::ignoreUnused(e);
+}
 
-    // Snap if enabled
-    if (snapXToGrid) {
-        x = snapXToGrid(x);
+void CurveEditorBase::modifierKeysChanged(const juce::ModifierKeys& modifiers) {
+    if (modifiers.isShiftDown()) {
+        setMouseCursor(juce::MouseCursor::PointingHandCursor);
+    } else if (modifiers.isCommandDown()) {
+        setMouseCursor(juce::MouseCursor::CopyingCursor);
+    } else {
+        setMouseCursor(juce::MouseCursor::NormalCursor);
     }
-
-    CurveType curveType =
-        (drawMode_ == CurveDrawMode::Curve) ? CurveType::Bezier : CurveType::Linear;
-
-    onPointAdded(x, y, curveType);
 }
 
 bool CurveEditorBase::keyPressed(const juce::KeyPress& key) {
@@ -466,6 +489,22 @@ bool CurveEditorBase::keyPressed(const juce::KeyPress& key) {
         }
         return true;
     }
+
+    // Cmd+A: select all points
+    if (key == juce::KeyPress('a', juce::ModifierKeys::commandModifier, 0)) {
+        std::vector<uint32_t> allIds;
+        for (auto& pc : pointComponents_) {
+            selectedPointIds_.insert(pc->getPointId());
+            pc->setSelected(true);
+            allIds.push_back(pc->getPointId());
+        }
+        if (!allIds.empty()) {
+            onPointsSelected(allIds);
+        }
+        repaint();
+        return true;
+    }
+
     return false;
 }
 
@@ -482,8 +521,13 @@ int CurveEditorBase::yToPixel(double y) const {
 }
 
 std::pair<double, double> CurveEditorBase::getEffectivePosition(const CurvePoint& p) const {
-    if (previewPointId_ != INVALID_CURVE_POINT_ID && p.id == previewPointId_) {
-        return {previewX_, previewY_};
+    if (previewPointId_ != INVALID_CURVE_POINT_ID) {
+        if (p.id == previewPointId_)
+            return {previewX_, previewY_};
+        // Multi-point drag: check follower preview positions
+        auto it = multiPreviewPositions_.find(p.id);
+        if (it != multiPreviewPositions_.end())
+            return it->second;
     }
     return {p.x, p.y};
 }
@@ -523,15 +567,18 @@ void CurveEditorBase::rebuildPointComponents() {
                     }
                 }
             } else {
-                // Clear others, select only this one
-                selectedPointIds_.clear();
-                for (auto& p : pointComponents_) {
-                    p->setSelected(false);
-                }
-                selectedPointIds_.insert(pointId);
-                for (auto& p : pointComponents_) {
-                    if (p->getPointId() == pointId)
-                        p->setSelected(true);
+                // If clicking a point that's already part of a multi-selection,
+                // keep the selection intact so dragging moves all selected points.
+                if (!selectedPointIds_.count(pointId) || selectedPointIds_.size() == 1) {
+                    selectedPointIds_.clear();
+                    for (auto& p : pointComponents_) {
+                        p->setSelected(false);
+                    }
+                    selectedPointIds_.insert(pointId);
+                    for (auto& p : pointComponents_) {
+                        if (p->getPointId() == pointId)
+                            p->setSelected(true);
+                    }
                 }
             }
 
@@ -542,36 +589,107 @@ void CurveEditorBase::rebuildPointComponents() {
             // Clear preview state - drag is complete
             previewPointId_ = INVALID_CURVE_POINT_ID;
 
-            // Allow subclass to constrain position (e.g., pin edge points)
+            // Snap X/Y if enabled
+            if (snapXToGrid)
+                newX = snapXToGrid(newX);
+            if (snapYToGrid)
+                newY = snapYToGrid(newY);
             constrainPointPosition(pointId, newX, newY);
-            onPointMoved(pointId, newX, newY);
+
+            if (selectedPointIds_.size() > 1 && multiDragStartPositions_.count(pointId)) {
+                // Multi-point drag commit: compute delta from lead point's start,
+                // apply to all selected points, commit as a batch.
+                const auto& leadStart = multiDragStartPositions_.at(pointId);
+                double deltaX = newX - leadStart.first;
+                double deltaY = newY - leadStart.second;
+
+                std::map<uint32_t, std::pair<double, double>> finalPositions;
+                for (const auto& [pid, startPos] : multiDragStartPositions_) {
+                    double fx = std::max(0.0, startPos.first + deltaX);
+                    double fy = juce::jlimit(0.0, 1.0, startPos.second + deltaY);
+                    if (pid != pointId) {
+                        if (snapXToGrid)
+                            fx = snapXToGrid(fx);
+                        if (snapYToGrid)
+                            fy = snapYToGrid(fy);
+                        constrainPointPosition(pid, fx, fy);
+                    } else {
+                        fx = newX;
+                        fy = newY;
+                    }
+                    finalPositions[pid] = {fx, fy};
+                }
+                onSelectedPointsMoved(finalPositions);
+            } else {
+                onPointMoved(pointId, newX, newY);
+            }
+
+            multiDragStartPositions_.clear();
+            multiPreviewPositions_.clear();
         };
 
         pc->onPointDragPreview = [this](uint32_t pointId, double newX, double newY) {
-            // Allow subclass to constrain position (e.g., pin edge points)
+            // Snap X/Y if enabled
+            if (snapXToGrid)
+                newX = snapXToGrid(newX);
+            if (snapYToGrid)
+                newY = snapYToGrid(newY);
             constrainPointPosition(pointId, newX, newY);
 
-            // Update preview state directly
+            // On first call for this drag, snapshot start positions of all
+            // selected points so we can move them by the same delta.
+            if (previewPointId_ != pointId) {
+                multiDragStartPositions_.clear();
+                multiPreviewPositions_.clear();
+                for (const auto& p : getPoints()) {
+                    if (selectedPointIds_.count(p.id)) {
+                        multiDragStartPositions_[p.id] = {p.x, p.y};
+                    }
+                }
+            }
+
+            // Update lead point preview
             previewPointId_ = pointId;
             previewX_ = newX;
             previewY_ = newY;
 
-            // Update the point component position
-            for (auto& ptComp : pointComponents_) {
-                if (ptComp->getPointId() == pointId) {
-                    int px = xToPixel(newX);
-                    int py = yToPixel(newY);
-                    ptComp->setCentrePosition(px, py);
-                    break;
+            // If multiple points selected, move followers by the same delta
+            if (selectedPointIds_.size() > 1 && multiDragStartPositions_.count(pointId)) {
+                const auto& leadStart = multiDragStartPositions_.at(pointId);
+                double deltaX = newX - leadStart.first;
+                double deltaY = newY - leadStart.second;
+
+                multiPreviewPositions_.clear();
+                for (auto& ptComp : pointComponents_) {
+                    uint32_t pid = ptComp->getPointId();
+                    if (!selectedPointIds_.count(pid))
+                        continue;
+                    double fx, fy;
+                    if (pid == pointId) {
+                        fx = newX;
+                        fy = newY;
+                    } else if (multiDragStartPositions_.count(pid)) {
+                        const auto& s = multiDragStartPositions_.at(pid);
+                        fx = std::max(0.0, s.first + deltaX);
+                        fy = juce::jlimit(0.0, 1.0, s.second + deltaY);
+                    } else {
+                        continue;
+                    }
+                    multiPreviewPositions_[pid] = {fx, fy};
+                    ptComp->setCentrePosition(xToPixel(fx), yToPixel(fy));
+                }
+            } else {
+                // Single point: just reposition that one component
+                for (auto& ptComp : pointComponents_) {
+                    if (ptComp->getPointId() == pointId) {
+                        ptComp->setCentrePosition(xToPixel(newX), yToPixel(newY));
+                        break;
+                    }
                 }
             }
 
-            // Update tension handle positions that depend on this point
             updateTensionHandlePositions();
-
-            // Notify subclass for fluid preview updates
             onPointDragPreview(pointId, newX, newY);
-
             repaint();
         };
 
@@ -680,6 +798,7 @@ void CurveEditorBase::updatePointPositions() {
     }
 
     // Position tension handles at the midpoint of each curve segment
+    constexpr int MIN_SEGMENT_PIXELS = 30;  // Hide handle if segment narrower than this
     size_t tensionIdx = 0;
     for (size_t i = 0; i < points.size() - 1 && tensionIdx < tensionHandles_.size(); ++i) {
         const auto& p1 = points[i];
@@ -687,26 +806,32 @@ void CurveEditorBase::updatePointPositions() {
 
         // Only position for Linear curves
         if (p1.curveType == CurveType::Linear) {
-            double midX = (p1.x + p2.x) / 2.0;
-            double midY = (p1.y + p2.y) / 2.0;
+            int segPixels = xToPixel(p2.x) - xToPixel(p1.x);
+            bool hasRoom = segPixels >= MIN_SEGMENT_PIXELS;
+            tensionHandles_[tensionIdx]->setVisible(hasRoom);
 
-            // Apply tension to get the actual curve position at midpoint
-            if (std::abs(p1.tension) > 0.001) {
-                double t = 0.5;
-                double curvedT;
-                if (p1.tension > 0) {
-                    curvedT = std::pow(t, 1.0 + p1.tension * 2.0);
-                } else {
-                    curvedT = 1.0 - std::pow(1.0 - t, 1.0 - p1.tension * 2.0);
+            if (hasRoom) {
+                double midX = (p1.x + p2.x) / 2.0;
+                double midY = (p1.y + p2.y) / 2.0;
+
+                // Apply tension to get the actual curve position at midpoint
+                if (std::abs(p1.tension) > 0.001) {
+                    double t = 0.5;
+                    double curvedT;
+                    if (p1.tension > 0) {
+                        curvedT = std::pow(t, 1.0 + p1.tension * 2.0);
+                    } else {
+                        curvedT = 1.0 - std::pow(1.0 - t, 1.0 - p1.tension * 2.0);
+                    }
+                    midY = p1.y + curvedT * (p2.y - p1.y);
                 }
-                midY = p1.y + curvedT * (p2.y - p1.y);
+
+                int px = xToPixel(midX);
+                int py = yToPixel(midY);
+
+                tensionHandles_[tensionIdx]->setCentrePosition(px, py);
+                tensionHandles_[tensionIdx]->setTension(p1.tension);
             }
-
-            int px = xToPixel(midX);
-            int py = yToPixel(midY);
-
-            tensionHandles_[tensionIdx]->setCentrePosition(px, py);
-            tensionHandles_[tensionIdx]->setTension(p1.tension);
             ++tensionIdx;
         }
     }
@@ -717,6 +842,7 @@ void CurveEditorBase::updateTensionHandlePositions() {
     if (points.size() < 2)
         return;
 
+    constexpr int MIN_SEGMENT_PIXELS = 30;
     size_t tensionIdx = 0;
     for (size_t i = 0; i < points.size() - 1 && tensionIdx < tensionHandles_.size(); ++i) {
         const auto& p1 = points[i];
@@ -726,33 +852,39 @@ void CurveEditorBase::updateTensionHandlePositions() {
             auto [x1, y1] = getEffectivePosition(p1);
             auto [x2, y2] = getEffectivePosition(p2);
 
-            double midX = (x1 + x2) / 2.0;
-            double midY = (y1 + y2) / 2.0;
+            int segPixels = xToPixel(x2) - xToPixel(x1);
+            bool hasRoom = segPixels >= MIN_SEGMENT_PIXELS;
+            tensionHandles_[tensionIdx]->setVisible(hasRoom);
 
-            // Apply tension to get actual curve position at midpoint
-            double tension = p1.tension;
-            if (tensionPreviewPointId_ != INVALID_CURVE_POINT_ID &&
-                p1.id == tensionPreviewPointId_) {
-                tension = tensionPreviewValue_;
-            }
+            if (hasRoom) {
+                double midX = (x1 + x2) / 2.0;
+                double midY = (y1 + y2) / 2.0;
 
-            if (std::abs(tension) > 0.001) {
-                double t = 0.5;
-                double curvedT;
-                if (tension > 0) {
-                    curvedT = std::pow(t, 1.0 + tension * 2.0);
-                } else {
-                    curvedT = 1.0 - std::pow(1.0 - t, 1.0 - tension * 2.0);
+                // Apply tension to get actual curve position at midpoint
+                double tension = p1.tension;
+                if (tensionPreviewPointId_ != INVALID_CURVE_POINT_ID &&
+                    p1.id == tensionPreviewPointId_) {
+                    tension = tensionPreviewValue_;
                 }
-                midY = y1 + curvedT * (y2 - y1);
+
+                if (std::abs(tension) > 0.001) {
+                    double t = 0.5;
+                    double curvedT;
+                    if (tension > 0) {
+                        curvedT = std::pow(t, 1.0 + tension * 2.0);
+                    } else {
+                        curvedT = 1.0 - std::pow(1.0 - t, 1.0 - tension * 2.0);
+                    }
+                    midY = y1 + curvedT * (y2 - y1);
+                }
+
+                int px = xToPixel(midX);
+                int py = yToPixel(midY);
+
+                tensionHandles_[tensionIdx]->setCentrePosition(px, py);
+                // Update slope direction in case points were moved
+                tensionHandles_[tensionIdx]->setSlopeGoesDown(y2 < y1);
             }
-
-            int px = xToPixel(midX);
-            int py = yToPixel(midY);
-
-            tensionHandles_[tensionIdx]->setCentrePosition(px, py);
-            // Update slope direction in case points were moved
-            tensionHandles_[tensionIdx]->setSlopeGoesDown(y2 < y1);
             ++tensionIdx;
         }
     }
@@ -762,6 +894,21 @@ void CurveEditorBase::syncSelectionState() {
     for (auto& pc : pointComponents_) {
         pc->setSelected(selectedPointIds_.count(pc->getPointId()) > 0);
     }
+}
+
+void CurveEditorBase::onStepStamped(double gridStart, double gridEnd, double y,
+                                    uint32_t prevPointId, double prevValue) {
+    // Default behaviour: add the cell's left edge at (gridStart, y) and,
+    // if we have a baseline, a recovery point at (gridEnd, prevValue) so
+    // the cell reads as a dip back to the previous value. The recovery
+    // point is Linear so downstream segments don't mutate into
+    // hold-then-cliff. Subclasses that support undo compound ops (e.g.
+    // AutomationCurveEditor) should override to also flip prevPointId's
+    // curveType to Step so the cell's left edge is a cliff instead of a
+    // linear fade.
+    onPointAdded(gridStart, y, CurveType::Step);
+    if (prevPointId != INVALID_CURVE_POINT_ID && gridEnd > gridStart)
+        onPointAdded(gridEnd, prevValue, CurveType::Linear);
 }
 
 void CurveEditorBase::createPointsFromDrawingPath() {
@@ -801,6 +948,9 @@ void CurveEditorBase::createPointsFromDrawingPath() {
 
         if (snapXToGrid) {
             x = snapXToGrid(x);
+        }
+        if (snapYToGrid) {
+            y = snapYToGrid(y);
         }
 
         onPointAdded(x, y, curveType);

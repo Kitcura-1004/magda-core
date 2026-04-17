@@ -4,6 +4,7 @@
 
 #include <cmath>
 #include <functional>
+#include <map>
 #include <memory>
 #include <set>
 #include <vector>
@@ -46,6 +47,7 @@ class CurveEditorBase : public juce::Component {
     void mouseUp(const juce::MouseEvent& e) override;
     void mouseDoubleClick(const juce::MouseEvent& e) override;
     bool keyPressed(const juce::KeyPress& key) override;
+    void modifierKeysChanged(const juce::ModifierKeys& modifiers) override;
 
     // Configuration
     void setDrawMode(CurveDrawMode mode) {
@@ -109,6 +111,8 @@ class CurveEditorBase : public juce::Component {
 
     // Snapping
     std::function<double(double)> snapXToGrid;
+    std::function<double(double)> snapYToGrid;  // Snap a normalized Y (0-1) to grid
+    std::function<double()> getGridSpacingX;    // Returns grid step size in X units
 
   protected:
     CurveDrawMode drawMode_ = CurveDrawMode::Select;
@@ -144,6 +148,11 @@ class CurveEditorBase : public juce::Component {
     double previewX_ = 0.0;
     double previewY_ = 0.0;
 
+    // Multi-point drag: start positions (snapshotted when drag begins) and
+    // current preview positions for all selected points except the lead.
+    std::map<uint32_t, std::pair<double, double>> multiDragStartPositions_;
+    std::map<uint32_t, std::pair<double, double>> multiPreviewPositions_;
+
     // Tension preview state
     uint32_t tensionPreviewPointId_ = INVALID_CURVE_POINT_ID;
     double tensionPreviewValue_ = 0.0;
@@ -176,6 +185,29 @@ class CurveEditorBase : public juce::Component {
     virtual void onDeleteSelectedPoints(const std::set<uint32_t>& pointIds) {
         juce::ignoreUnused(pointIds);
     }
+
+    // Batch move callback — called instead of onPointMoved when multiple
+    // points are selected and the user drags any one of them. The map
+    // contains the final {x, y} for every selected point (including the lead).
+    // Default falls back to individual onPointMoved calls for each entry.
+    virtual void onSelectedPointsMoved(
+        const std::map<uint32_t, std::pair<double, double>>& finalPositions) {
+        for (const auto& [id, pos] : finalPositions)
+            onPointMoved(id, pos.first, pos.second);
+    }
+
+    // Step stamp callback — creates a Serum-style "dip" cell:
+    //   - Left edge: cliff from prevValue down/up to y at gridStart
+    //   - Cell holds at y across one grid division
+    //   - Right edge: cliff back from y to prevValue at gridEnd
+    // Subclasses override to group the mutations into one undo step AND
+    // flip the preceding point's curveType to Step so its outgoing
+    // segment becomes the left-edge cliff instead of a linear fade.
+    // prevPointId is INVALID_CURVE_POINT_ID when nothing exists before
+    // the stamp position; in that case there is no baseline to return to,
+    // so the cell is stamped as a single point and extends rightward.
+    virtual void onStepStamped(double gridStart, double gridEnd, double y, uint32_t prevPointId,
+                               double prevValue);
 
     // Constrain point position during drag (override to pin edge points, etc.)
     virtual void constrainPointPosition(uint32_t pointId, double& x, double& y) {

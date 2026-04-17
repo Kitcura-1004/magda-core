@@ -2,6 +2,7 @@
 
 #include <unordered_set>
 
+#include "../core/AutomationManager.hpp"
 #include "../core/ClipOperations.hpp"
 #include "../core/RackInfo.hpp"
 #include "../engine/PluginWindowManager.hpp"
@@ -60,7 +61,9 @@ AudioBridge::AudioBridge(te::Engine& engine, te::Edit& edit)
       edit_(edit),
       trackController_(engine, edit),
       pluginManager_(engine, edit, trackController_, pluginWindowBridge_, transportState_),
-      clipSynchronizer_(edit, trackController_, warpMarkerManager_) {
+      clipSynchronizer_(edit, trackController_, warpMarkerManager_),
+      automationPlayback_(*this, edit),
+      automationRecording_(edit) {
     // Wire up async plugin load completion callback to notify UI
     pluginManager_.onAsyncPluginLoaded = [](TrackId trackId) {
         TrackManager::getInstance().notifyTrackDevicesChanged(trackId);
@@ -165,9 +168,18 @@ void AudioBridge::trackPropertyChanged(int trackId) {
                 track->setFrozen(trackInfo->frozen, te::AudioTrack::individualFreeze);
             }
 
-            // Sync volume/pan to VolumeAndPanPlugin
-            setTrackVolume(trackId, trackInfo->volume);
-            setTrackPan(trackId, trackInfo->pan);
+            // Sync volume/pan to VolumeAndPanPlugin.
+            //
+            // Skip only when this callback is re-entering from
+            // AutomationPlaybackEngine echoing a curve value back into
+            // TrackInfo. Pushing that value into TE would race with TE's
+            // own curve evaluation. Manual fader/pan edits on any track —
+            // including tracks without automation — still flow through,
+            // even while transport is playing.
+            if (!AutomationManager::getInstance().isApplyingAutomationWrite()) {
+                setTrackVolume(trackId, trackInfo->volume);
+                setTrackPan(trackId, trackInfo->pan);
+            }
 
             // Sync audio output routing
             trackController_.setTrackAudioOutput(trackId, trackInfo->audioOutputDevice);
@@ -240,6 +252,9 @@ void AudioBridge::trackPropertyChanged(int trackId) {
             }
         }
     }
+
+    // Forward to automation recording engine
+    automationRecording_.onTrackPropertyChanged(trackId);
 }
 
 void AudioBridge::trackSelectionChanged(TrackId newTrackId) {
@@ -388,19 +403,26 @@ void AudioBridge::deviceModifiersChanged(TrackId trackId) {
     // Modifier properties changed (rate, waveform, sync, trigger mode) - resync only modifiers
     pluginManager_.resyncDeviceModifiers(trackId);
 
-    // Re-check sidechain monitor on this track and all other tracks
+    // Re-check sidechain monitors on this track and all other tracks
     // (a sidechain source change on this track may affect the source track's monitor)
     for (const auto& track : magda::TrackManager::getInstance().getTracks()) {
         pluginManager_.checkSidechainMonitor(track.id);
+        pluginManager_.checkAudioSidechainMonitor(track.id);
     }
 
     // Re-check MIDI routing in case trigger mode changed to/from MIDI
     updateMidiRoutingForSelection();
 }
 
+void AudioBridge::audioSidechainTriggered(TrackId /*sourceTrackId*/) {
+    // Audio sidechain triggering now happens on the audio thread via
+    // AudioSidechainMonitorPlugin — this callback is no longer needed.
+}
+
 void AudioBridge::macroValueChanged(TrackId trackId, bool isRack, int id, int macroIndex,
                                     float value) {
     pluginManager_.setMacroValue(trackId, isRack, id, macroIndex, value);
+    automationRecording_.onMacroValueChanged(trackId, isRack, id, macroIndex, value);
 }
 
 void AudioBridge::masterChannelChanged() {
@@ -451,6 +473,9 @@ void AudioBridge::deviceParameterChanged(DeviceId deviceId, int paramIndex, floa
     } else if (auto* utilityProc = dynamic_cast<UtilityProcessor*>(processor)) {
         utilityProc->setParameterByIndex(paramIndex, newValue);
     }
+
+    // Forward to automation recording engine
+    automationRecording_.onDeviceParameterChanged(deviceId, paramIndex, newValue);
 }
 
 void AudioBridge::devicePropertyChanged(DeviceId deviceId) {
@@ -494,20 +519,27 @@ void AudioBridge::devicePropertyChanged(DeviceId deviceId) {
                 }
             }
 
-            // MIDI sidechain: ensure MidiReceivePlugin + SidechainMonitorPlugin
-            if (device->sidechain.isActive() &&
-                device->sidechain.type == SidechainConfig::Type::MIDI) {
-                DBG("AudioBridge::devicePropertyChanged - MIDI sidechain set, "
-                    "ensuring MidiReceive + monitor for source track "
+            // Both MIDI and Audio sidechain routes use MidiBroadcastBus + MidiReceivePlugin
+            // for TE's native LFO resync. Audio sidechain generates synthetic MIDI from
+            // AudioSidechainMonitorPlugin; MIDI sidechain uses real MIDI from
+            // SidechainMonitorPlugin.
+            if (device->sidechain.isActive()) {
+                DBG("AudioBridge::devicePropertyChanged - sidechain set (type="
+                    << (int)device->sidechain.type
+                    << "), ensuring MidiReceive + monitors for source track "
                     << device->sidechain.sourceTrackId);
                 pluginManager_.ensureMidiReceive(track.id, device->id,
                                                  device->sidechain.sourceTrackId);
-                pluginManager_.checkSidechainMonitor(device->sidechain.sourceTrackId);
+                if (device->sidechain.type == SidechainConfig::Type::MIDI)
+                    pluginManager_.checkSidechainMonitor(device->sidechain.sourceTrackId);
+                if (device->sidechain.type == SidechainConfig::Type::Audio)
+                    pluginManager_.checkAudioSidechainMonitor(device->sidechain.sourceTrackId);
             } else {
                 pluginManager_.removeMidiReceive(track.id, device->id);
             }
-            // Also re-check the track this device is on (may no longer need monitor)
+            // Re-check monitors on current track (may no longer need them)
             pluginManager_.checkSidechainMonitor(track.id);
+            pluginManager_.checkAudioSidechainMonitor(track.id);
 
             return;
         }
@@ -900,6 +932,12 @@ void AudioBridge::timerCallback() {
 
     // NOTE: Window state sync is now handled by PluginWindowManager's timer
 
+    // Automation playback — sample curves at playhead and apply to parameters
+    automationPlayback_.process();
+
+    // Automation recording — detect transport transitions, manage recording lifecycle
+    automationRecording_.process();
+
     // Update metering from level measurers (runs at 30 FPS on message thread)
     trackController_.withTrackMapping(
         [this](const std::map<TrackId, te::AudioTrack*>& trackMapping) {
@@ -990,6 +1028,18 @@ void AudioBridge::timerCallback() {
         masterPeakL_.store(peakL, std::memory_order_relaxed);
         masterPeakR_.store(peakR, std::memory_order_relaxed);
     }
+}
+
+// =============================================================================
+// Automation Recording
+// =============================================================================
+
+void AudioBridge::setAutomationWriteEnabled(bool enabled) {
+    automationRecording_.setWriteEnabled(enabled);
+}
+
+bool AudioBridge::isAutomationWriteEnabled() const {
+    return automationRecording_.isWriteEnabled();
 }
 
 // =============================================================================

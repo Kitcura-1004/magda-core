@@ -18,6 +18,7 @@
 #include "ui/themes/DarkTheme.hpp"
 #include "ui/themes/FontManager.hpp"
 #include "ui/windows/MainWindow.hpp"
+#include "version.hpp"
 
 using namespace juce;
 
@@ -49,7 +50,7 @@ class MagdaDAWApplication : public JUCEApplication {
         return "MAGDA";
     }
     const String getApplicationVersion() override {
-        return "1.0.0";
+        return MAGDA_VERSION;
     }
 
     void initialise(const String& commandLine) override {
@@ -148,6 +149,17 @@ class MagdaDAWApplication : public JUCEApplication {
             }
         }
 
+        // Open project file if passed on command line (e.g. double-click .mgd in file manager)
+        auto cmdLine = getCommandLineParameters();
+        if (cmdLine.isNotEmpty()) {
+            auto filePath = cmdLine.unquoted().trim();
+            juce::File projectFile(filePath);
+            if (projectFile.existsAsFile() && projectFile.hasFileExtension("mgd")) {
+                juce::Logger::writeToLog("Opening project from command line: " + filePath);
+                mainWindow_->openProjectFile(projectFile);
+            }
+        }
+
         juce::Logger::writeToLog("=== MAGDA is ready! ===");
     }
 
@@ -208,6 +220,16 @@ class MagdaDAWApplication : public JUCEApplication {
         // that cause heap corruption during normal exit(). Since all our own
         // cleanup is already done above, _exit() is safe here.
         _exit(0);
+    }
+
+    void anotherInstanceStarted(const String& commandLine) override {
+        // Another instance was launched with a file path (e.g. double-click .mgd while app is
+        // running)
+        auto filePath = commandLine.unquoted().trim();
+        juce::File projectFile(filePath);
+        if (projectFile.existsAsFile() && projectFile.hasFileExtension("mgd") && mainWindow_) {
+            mainWindow_->openProjectFile(projectFile);
+        }
     }
 
     void systemRequestedQuit() override {

@@ -148,9 +148,19 @@ struct CurveSnapshotHolder {
     CurveSnapshot buffers[2];
     std::atomic<CurveSnapshot*> active{&buffers[0]};
 
-    // One-shot state: audio thread tracks phase to detect cycle completion
+    // One-shot state: cumulative phase tracks how far through the cycle we are.
+    // evaluateCallback adds phase deltas each block on the destination audio thread.
+    // When cumulative >= 1.0 the curve has played once → hold at endValue.
+    //
+    // pendingReset_ is the cross-thread signal: resetOneShot() (source audio thread)
+    // sets it to true; evaluateCallback (destination audio thread) consumes it and
+    // locally zeroes cumulativePhase_/previousPhase_. This avoids the race where a
+    // concurrent evaluateCallback reads stale cumulative and overwrites the zero.
+    std::atomic<bool> pendingReset_{false};
+    std::atomic<float> cumulativePhase_{0.0f};
     std::atomic<float> previousPhase_{-1.0f};
     std::atomic<bool> oneShotCompleted_{false};
+    std::atomic<int> evalLogCount_{0};  // throttle DBG spam in evaluateCallback
 
     /**
      * @brief Message thread: copy curve data from ModInfo into the inactive
@@ -188,11 +198,13 @@ struct CurveSnapshotHolder {
      * @brief Reset one-shot state so the LFO plays through one more cycle.
      *
      * Call this alongside LFOModifier::triggerNoteOn() when retriggering.
-     * Safe to call from any thread (uses relaxed atomics).
+     * Safe to call from any thread. Sets a pending flag that evaluateCallback
+     * consumes on the destination audio thread, avoiding cross-thread races
+     * on cumulativePhase_/previousPhase_.
      */
     void resetOneShot() {
         oneShotCompleted_.store(false, std::memory_order_release);
-        previousPhase_.store(-1.0f, std::memory_order_release);
+        pendingReset_.store(true, std::memory_order_release);
     }
 
     /**
@@ -209,16 +221,40 @@ struct CurveSnapshotHolder {
         const CurveSnapshot* snap = holder->active.load(std::memory_order_acquire);
 
         if (snap->oneShot) {
-            if (holder->oneShotCompleted_.load(std::memory_order_acquire))
-                return snap->endValue();
+            // Consume pending reset from resetOneShot() on this thread,
+            // so cumulativePhase_/previousPhase_ are only written by one thread.
+            bool wasReset = holder->pendingReset_.exchange(false, std::memory_order_acquire);
+            if (wasReset) {
+                holder->cumulativePhase_.store(0.0f, std::memory_order_relaxed);
+                holder->previousPhase_.store(-1.0f, std::memory_order_relaxed);
+                holder->oneShotCompleted_.store(false, std::memory_order_relaxed);
+                holder->evalLogCount_.store(0, std::memory_order_relaxed);
+            }
 
+            bool alreadyCompleted = holder->oneShotCompleted_.load(std::memory_order_relaxed);
+            if (alreadyCompleted) {
+                float ev = snap->endValue();
+                return ev;
+            }
+
+            // Accumulate phase delta to detect when one full cycle has elapsed.
             float prev = holder->previousPhase_.load(std::memory_order_relaxed);
             holder->previousPhase_.store(phase, std::memory_order_relaxed);
 
-            // Detect phase wrap-around: phase jumped back significantly
-            if (prev >= 0.0f && phase < prev - 0.5f) {
-                holder->oneShotCompleted_.store(true, std::memory_order_release);
-                return snap->endValue();
+            if (prev >= 0.0f) {
+                float delta = phase - prev;
+                // Normal forward movement: delta is small positive.
+                // Phase wrap (0.99 → 0.01): delta is ~-1.0, correct to ~+0.01.
+                if (delta < -0.5f)
+                    delta += 1.0f;
+                if (delta > 0.0f) {
+                    float cum = holder->cumulativePhase_.load(std::memory_order_relaxed) + delta;
+                    holder->cumulativePhase_.store(cum, std::memory_order_relaxed);
+                    if (cum >= 1.0f) {
+                        holder->oneShotCompleted_.store(true, std::memory_order_relaxed);
+                        return snap->endValue();
+                    }
+                }
             }
         }
 

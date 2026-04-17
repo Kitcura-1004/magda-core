@@ -1,9 +1,13 @@
 #include "AutomationLaneComponent.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <vector>
 
+#include "../../../audio/AutomationCurveSimplifier.hpp"
+#include "../../../core/AutomationCommands.hpp"
 #include "../../../core/ParameterUtils.hpp"
+#include "../../../core/UndoManager.hpp"
 
 namespace magda {
 
@@ -198,6 +202,21 @@ void AutomationLaneComponent::setPixelsPerSecond(double pps) {
     updateClipPositions();
 }
 
+void AutomationLaneComponent::setPixelsPerBeat(double ppb) {
+    pixelsPerBeat_ = ppb;
+    if (curveEditor_) {
+        curveEditor_->setPixelsPerBeat(ppb);
+    }
+    updateClipPositions();
+}
+
+void AutomationLaneComponent::setTempoBPM(double bpm) {
+    tempoBPM_ = bpm;
+    if (curveEditor_) {
+        curveEditor_->setTempoBPM(bpm);
+    }
+}
+
 int AutomationLaneComponent::getPreferredHeight() const {
     const auto* lane = getLaneInfo();
     if (lane) {
@@ -228,7 +247,18 @@ void AutomationLaneComponent::rebuildContent() {
         // Absolute lane: single curve editor
         curveEditor_ = std::make_unique<AutomationCurveEditor>(laneId_);
         curveEditor_->setPixelsPerSecond(pixelsPerSecond_);
-        curveEditor_->snapTimeToGrid = snapTimeToGrid;
+        curveEditor_->setPixelsPerBeat(pixelsPerBeat_);
+        curveEditor_->setTempoBPM(tempoBPM_);
+        curveEditor_->snapTimeToGrid = [this](double x) {
+            if (snapTimeToGrid)
+                return snapTimeToGrid(x);
+            return x;
+        };
+        curveEditor_->getGridSpacingBeats = [this]() -> double {
+            if (getGridSpacingBeats)
+                return getGridSpacingBeats();
+            return 1.0;
+        };
         curveEditor_->setDrawMode(AutomationDrawMode::Pencil);  // Default to draw mode
         addAndMakeVisible(curveEditor_.get());
 
@@ -274,8 +304,8 @@ void AutomationLaneComponent::updateClipPositions() {
         if (!clip)
             continue;
 
-        int x = static_cast<int>(clip->startTime * pixelsPerSecond_);
-        int width = static_cast<int>(clip->length * pixelsPerSecond_);
+        int x = SCALE_LABEL_WIDTH + static_cast<int>(clip->startTime * pixelsPerBeat_);
+        int width = static_cast<int>(clip->length * pixelsPerBeat_);
         cc->setBounds(x, contentY, juce::jmax(10, width), juce::jmax(10, contentHeight));
     }
 }
@@ -295,20 +325,101 @@ void AutomationLaneComponent::syncSelectionState() {
 void AutomationLaneComponent::showContextMenu() {
     juce::PopupMenu menu;
 
-    // Hide Lane option
-    menu.addItem(1, "Hide Lane");
+    enum MenuItem { HideLane = 1, SimplifyLane = 2 };
 
-    // Show menu
+    menu.addItem(HideLane, "Hide Lane");
+
+    // Only offer Simplify when there's meaningful data to reduce.
+    const auto* lane = getLaneInfo();
+    const bool canSimplify =
+        (lane != nullptr) && lane->isAbsolute() && lane->absolutePoints.size() > 2;
+    menu.addItem(SimplifyLane, "Simplify Curve", canSimplify);
+
     auto options = juce::PopupMenu::Options().withTargetComponent(this);
 
     auto laneId = laneId_;  // Capture for lambda
     menu.showMenuAsync(options, [laneId](int result) {
-        if (result == 1) {
-            // Defer to avoid destroying component during callback
-            juce::MessageManager::callAsync(
-                [laneId]() { AutomationManager::getInstance().setLaneVisible(laneId, false); });
+        switch (result) {
+            case HideLane:
+                juce::MessageManager::callAsync(
+                    [laneId]() { AutomationManager::getInstance().setLaneVisible(laneId, false); });
+                break;
+            case SimplifyLane:
+                juce::MessageManager::callAsync(
+                    [laneId]() { AutomationLaneComponent::simplifyLane(laneId, 0.01); });
+                break;
+            default:
+                break;
         }
     });
+}
+
+void AutomationLaneComponent::simplifyLane(AutomationLaneId laneId, double epsilon,
+                                           const std::vector<AutomationPointId>& pointIdFilter) {
+    auto& autoMgr = AutomationManager::getInstance();
+    const auto* lane = autoMgr.getLane(laneId);
+    if (lane == nullptr || !lane->isAbsolute() || lane->absolutePoints.size() <= 2)
+        return;
+
+    // Snapshot IDs + (time, value) pairs sorted by time. When a filter is
+    // supplied we still sort everything by time, but only points inside the
+    // filter are candidates for removal — others are pinned as "keep" so the
+    // user's unselected points survive intact.
+    struct Entry {
+        AutomationPointId id;
+        AutomationCurveSimplifier::Point p;
+        bool inScope;
+    };
+
+    std::vector<AutomationPointId> filterSorted(pointIdFilter.begin(), pointIdFilter.end());
+    std::sort(filterSorted.begin(), filterSorted.end());
+    const bool hasFilter = !filterSorted.empty();
+
+    std::vector<Entry> entries;
+    entries.reserve(lane->absolutePoints.size());
+    for (const auto& pt : lane->absolutePoints) {
+        bool inScope =
+            !hasFilter || std::binary_search(filterSorted.begin(), filterSorted.end(), pt.id);
+        entries.push_back({pt.id, {pt.time, pt.value}, inScope});
+    }
+    std::sort(entries.begin(), entries.end(),
+              [](const Entry& a, const Entry& b) { return a.p.time < b.p.time; });
+
+    std::vector<AutomationCurveSimplifier::Point> polyline;
+    polyline.reserve(entries.size());
+    for (const auto& e : entries)
+        polyline.push_back(e.p);
+
+    auto keepIdx = AutomationCurveSimplifier::simplify(polyline, epsilon);
+
+    std::vector<bool> keep(entries.size(), false);
+    for (auto idx : keepIdx)
+        keep[idx] = true;
+    // Pin out-of-scope points so the filtered variant never deletes them.
+    for (size_t i = 0; i < entries.size(); ++i) {
+        if (!entries[i].inScope)
+            keep[i] = true;
+    }
+
+    size_t drops = 0;
+    for (bool k : keep)
+        if (!k)
+            ++drops;
+    if (drops == 0)
+        return;
+
+    auto& undo = UndoManager::getInstance();
+    undo.beginCompoundOperation("Simplify Automation Curve");
+    autoMgr.beginNotificationBatch();
+    for (size_t i = 0; i < entries.size(); ++i) {
+        if (keep[i])
+            continue;
+        auto cmd = std::make_unique<DeleteAutomationPointCommand>(
+            laneId, INVALID_AUTOMATION_CLIP_ID, entries[i].id);
+        undo.executeCommand(std::move(cmd));
+    }
+    autoMgr.endNotificationBatch();
+    undo.endCompoundOperation();
 }
 
 // Convert real value to normalized position using ParameterInfo
@@ -318,7 +429,7 @@ static double realToNormalizedForTarget(double realValue, const ParameterInfo& i
 }
 
 void AutomationLaneComponent::paintScaleLabels(juce::Graphics& g, juce::Rectangle<int> area) {
-    if (area.getHeight() <= 0)
+    if (area.getHeight() <= 0 || area.getWidth() < 25)
         return;
 
     // Background for scale area
@@ -388,11 +499,27 @@ void AutomationLaneComponent::paintScaleLabels(juce::Graphics& g, juce::Rectangl
             drawLabelAtRealValue(static_cast<double>(i), paramInfo.choices[static_cast<size_t>(i)]);
         }
     } else {
-        // Default: linear percentage scale
-        std::vector<double> normalizedValues = {1.0, 0.75, 0.5, 0.25, 0.0};
-        for (double normValue : normalizedValues) {
-            float realValue =
-                ParameterUtils::normalizedToReal(static_cast<float>(normValue), paramInfo);
+        std::vector<double> realValuesForLabels;
+
+        if (paramInfo.isBipolar()) {
+            // Pick the larger |bound| so ±max and ±half land on the lane
+            // regardless of any asymmetry in the underlying range.
+            float absMax = std::max(std::abs(paramInfo.minValue), std::abs(paramInfo.maxValue));
+            realValuesForLabels = {absMax, absMax * 0.5, 0.0, -absMax * 0.5, -absMax};
+        } else {
+            // Unipolar: evenly spaced in normalized space.
+            for (double norm : {1.0, 0.75, 0.5, 0.25, 0.0}) {
+                realValuesForLabels.push_back(static_cast<double>(
+                    ParameterUtils::normalizedToReal(static_cast<float>(norm), paramInfo)));
+            }
+        }
+
+        for (double realValue : realValuesForLabels) {
+            // Clamp to range and convert back to normalized for positioning.
+            double clamped = juce::jlimit(static_cast<double>(paramInfo.minValue),
+                                          static_cast<double>(paramInfo.maxValue), realValue);
+            double normValue = static_cast<double>(
+                ParameterUtils::realToNormalized(static_cast<float>(clamped), paramInfo));
             int y = area.getY() + valueToPixel(normValue, area.getHeight());
 
             auto labelBounds = juce::Rectangle<int>(2, y - 5, area.getWidth() - 6, 10);
@@ -401,9 +528,26 @@ void AutomationLaneComponent::paintScaleLabels(juce::Graphics& g, juce::Rectangl
             if (labelBounds.getBottom() > area.getBottom())
                 labelBounds.setY(area.getBottom() - 10);
 
-            // Format as percentage for generic params
-            juce::String label = juce::String(static_cast<int>(std::round(realValue))) +
-                                 (paramInfo.unit.isNotEmpty() ? "" : "%");
+            // Show the real value using the plugin's display text if available,
+            // otherwise unit or fallback percentage.
+            juce::String label;
+            if (!paramInfo.valueTable.empty()) {
+                int idx = juce::jlimit(
+                    0, static_cast<int>(paramInfo.valueTable.size()) - 1,
+                    static_cast<int>(std::round(normValue * (paramInfo.valueTable.size() - 1))));
+                label = paramInfo.valueTable[static_cast<size_t>(idx)].trim();
+            }
+            if (label.isEmpty()) {
+                juce::String numberText;
+                if (paramInfo.isBipolar() && std::abs(clamped) > 0.001) {
+                    numberText = (clamped > 0 ? "+" : "-") +
+                                 juce::String(static_cast<int>(std::round(std::abs(clamped))));
+                } else {
+                    numberText = juce::String(static_cast<int>(std::round(clamped)));
+                }
+                label =
+                    numberText + (paramInfo.unit.isNotEmpty() ? paramInfo.unit : juce::String("%"));
+            }
 
             g.drawText(label, labelBounds, juce::Justification::centredRight);
             g.drawHorizontalLine(y, static_cast<float>(area.getRight() - 4),
@@ -459,7 +603,40 @@ juce::String AutomationLaneComponent::formatScaleValue(double normalizedValue) c
         return "C";
     }
 
-    // Generic percentage
+    DBG("[LANE-FMT] norm=" << normalizedValue << " real=" << realValue << " unit='"
+                           << paramInfo.unit << "'"
+                           << " vtSize=" << paramInfo.valueTable.size()
+                           << " scale=" << static_cast<int>(paramInfo.scale)
+                           << " lane=" << lane->getDisplayName());
+
+    // Live plugin display text — exact, no quantization.
+    if (paramInfo.displayText) {
+        auto text = paramInfo.displayText->format(static_cast<float>(normalizedValue));
+        if (text.isNotEmpty())
+            return text;
+    }
+
+    // Value table fallback.
+    if (!paramInfo.valueTable.empty()) {
+        int idx = juce::jlimit(0, static_cast<int>(paramInfo.valueTable.size()) - 1,
+                               static_cast<int>(std::round(static_cast<float>(normalizedValue) *
+                                                           (paramInfo.valueTable.size() - 1))));
+        auto text = paramInfo.valueTable[static_cast<size_t>(idx)].trim();
+        if (text.isNotEmpty())
+            return text;
+    }
+
+    // Generic: show the real value in the parameter's unit.
+    // Fall back to percentage only for unit-less parameters.
+    if (paramInfo.unit.isNotEmpty()) {
+        int rounded = static_cast<int>(std::round(realValue));
+        juce::String numberText;
+        if (paramInfo.isBipolar() && rounded > 0)
+            numberText = "+" + juce::String(rounded);
+        else
+            numberText = juce::String(rounded);
+        return numberText + paramInfo.unit;
+    }
     return juce::String(static_cast<int>(normalizedValue * 100)) + "%";
 }
 

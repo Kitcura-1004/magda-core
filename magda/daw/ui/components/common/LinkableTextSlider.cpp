@@ -119,7 +119,8 @@ LinkableTextSlider::LinkableTextSlider(TextSlider::Format format) : slider_(form
                                .onRackMacroLinked = onRackMacroLinked,
                                .onTrackMacroLinked = onTrackMacroLinked,
                                .onRackMacroUnlinked = onRackMacroUnlinked,
-                               .onTrackMacroUnlinked = onTrackMacroUnlinked});
+                               .onTrackMacroUnlinked = onTrackMacroUnlinked,
+                               .onShowAutomationLane = onShowAutomationLane});
         }
     };
     addAndMakeVisible(slider_);
@@ -158,6 +159,10 @@ void LinkableTextSlider::setValueFormatter(std::function<juce::String(double)> f
 
 void LinkableTextSlider::setValueParser(std::function<double(const juce::String&)> parser) {
     slider_.setValueParser(std::move(parser));
+}
+
+void LinkableTextSlider::setParameterInfo(const magda::ParameterInfo& info) {
+    slider_.setParameterInfo(info);
 }
 
 void LinkableTextSlider::setRightClickEditsText(bool shouldEdit) {
@@ -354,7 +359,8 @@ void LinkableTextSlider::mouseDown(const juce::MouseEvent& e) {
                            .onRackMacroLinked = onRackMacroLinked,
                            .onTrackMacroLinked = onTrackMacroLinked,
                            .onRackMacroUnlinked = onRackMacroUnlinked,
-                           .onTrackMacroUnlinked = onTrackMacroUnlinked});
+                           .onTrackMacroUnlinked = onTrackMacroUnlinked,
+                           .onShowAutomationLane = onShowAutomationLane});
         return;
     }
 

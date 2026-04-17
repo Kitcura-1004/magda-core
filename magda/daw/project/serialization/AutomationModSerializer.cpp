@@ -16,7 +16,9 @@ juce::var ProjectSerializer::serializeAutomationLaneInfo(const AutomationLaneInf
     obj->setProperty("name", lane.name);
     obj->setProperty("visible", lane.visible);
     obj->setProperty("expanded", lane.expanded);
-    obj->setProperty("armed", lane.armed);
+    obj->setProperty("bypass", lane.bypass);
+    obj->setProperty("snapTime", lane.snapTime);
+    obj->setProperty("snapValue", lane.snapValue);
     obj->setProperty("height", lane.height);
 
     // Absolute points
@@ -53,7 +55,12 @@ bool ProjectSerializer::deserializeAutomationLaneInfo(const juce::var& json,
     outLane.name = obj->getProperty("name").toString();
     outLane.visible = obj->getProperty("visible");
     outLane.expanded = obj->getProperty("expanded");
-    outLane.armed = obj->getProperty("armed");
+    if (obj->hasProperty("bypass"))
+        outLane.bypass = obj->getProperty("bypass");
+    if (obj->hasProperty("snapTime"))
+        outLane.snapTime = obj->getProperty("snapTime");
+    if (obj->hasProperty("snapValue"))
+        outLane.snapValue = obj->getProperty("snapValue");
     outLane.height = obj->getProperty("height");
 
     // Absolute points
@@ -187,6 +194,8 @@ juce::var ProjectSerializer::serializeAutomationTarget(const AutomationTarget& t
     obj->setProperty("macroIndex", target.macroIndex);
     obj->setProperty("modId", target.modId);
     obj->setProperty("modParamIndex", target.modParamIndex);
+    if (target.paramName.isNotEmpty())
+        obj->setProperty("paramName", target.paramName);
 
     return juce::var(obj);
 }
@@ -209,6 +218,8 @@ bool ProjectSerializer::deserializeAutomationTarget(const juce::var& json,
     outTarget.macroIndex = obj->getProperty("macroIndex");
     outTarget.modId = obj->getProperty("modId");
     outTarget.modParamIndex = obj->getProperty("modParamIndex");
+    if (obj->hasProperty("paramName"))
+        outTarget.paramName = obj->getProperty("paramName").toString();
 
     return true;
 }

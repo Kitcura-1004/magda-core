@@ -159,7 +159,10 @@ class TrackContentPanel : public juce::Component,
     std::function<void(ClipId)> onBounceToNewTrackRequested;  // Bounce clip to new track
     std::function<double(double)>
         snapTimeToGrid;  // Callback to snap time to grid (provided by MainView)
-
+    std::function<double(double)>
+        snapBeatsToGrid;  // Callback to snap beats to grid (for automation, provided by MainView)
+    std::function<double()>
+        getGridSpacingBeats;  // Returns current grid spacing in beats (for line stamp tool)
     // Multi-clip drag methods (public for ClipComponent access)
     void startMultiClipDrag(ClipId anchorClipId, const juce::Point<int>& startPos);
     void updateMultiClipDrag(const juce::Point<int>& currentPos);
@@ -373,7 +376,15 @@ class TrackContentPanel : public juce::Component,
     // Plugin Drag-and-Drop State
     // ========================================================================
     bool showPluginDropOverlay_ = false;
+    int pluginDropTrackIndex_ = -1;  // -1 = empty area (new track)
+    int minHeight_ = 0;              // Floor set by MainView so DnD works below last track
 
+  public:
+    void setMinHeight(int h) {
+        minHeight_ = h;
+    }
+
+  private:
     // ========================================================================
     // File Drag-and-Drop State
     // ========================================================================

@@ -31,7 +31,6 @@ void SidechainMonitorPlugin::reset() {
 void SidechainMonitorPlugin::applyToBuffer(const te::PluginRenderContext& fc) {
     // Transparent passthrough — don't modify audio or MIDI
 
-    // Periodic heartbeat counter (no logging — this runs on the audio thread)
     ++heartbeatCount_;
 
     // --- MIDI detection + broadcast ---
@@ -61,8 +60,9 @@ void SidechainMonitorPlugin::applyToBuffer(const te::PluginRenderContext& fc) {
 
         if (hasNoteOff) {
             triggerBus.triggerNoteOff(sourceTrackId_);
-            if (localHeldNoteCount_ == 0 && pluginManager_)
-                pluginManager_->gateSidechainLFOs(sourceTrackId_);
+            // Don't gate MIDI-triggered sidechain LFOs on note-off.
+            // The LFO should run its full cycle after being triggered.
+            // Gating is only for Audio-triggered LFOs (no audio = no modulation).
         }
 
         // Pass 2: broadcast all messages (including noteOffs) and process noteOns for held-count
@@ -77,7 +77,7 @@ void SidechainMonitorPlugin::applyToBuffer(const te::PluginRenderContext& fc) {
         if (hasNoteOn) {
             triggerBus.triggerNoteOn(sourceTrackId_);
             if (pluginManager_)
-                pluginManager_->triggerSidechainNoteOn(sourceTrackId_);
+                pluginManager_->triggerSidechainNoteOn(sourceTrackId_, LFOTriggerMode::MIDI);
         }
 
         bus.endBlock(sourceTrackId_);

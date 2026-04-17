@@ -171,8 +171,15 @@ void TabbedPanel::activeTabChanged(PanelLocation location, int /*tabIndex*/,
     }
 }
 
+void TabbedPanel::mouseDoubleClick(const juce::MouseEvent& /*event*/) {
+    if (collapsed_ && location_ != PanelLocation::Bottom) {
+        PanelController::getInstance().setCollapsed(location_, false);
+    }
+}
+
 void TabbedPanel::panelCollapsedChanged(PanelLocation location, bool collapsed) {
     if (location == location_) {
+        bool wasCollapsed = collapsed_;
         collapsed_ = collapsed;
         tabBar_.setCollapseState(collapsed);
 
@@ -182,6 +189,11 @@ void TabbedPanel::panelCollapsedChanged(PanelLocation location, bool collapsed) 
 
         resized();
         repaint();
+
+        // Notify active content when panel expands from collapsed state
+        if (wasCollapsed && !collapsed && activeContent_) {
+            activeContent_->onPanelExpanded();
+        }
     }
 }
 
@@ -212,14 +224,19 @@ void TabbedPanel::updateFromState() {
 }
 
 void TabbedPanel::switchToContent(PanelContentType type) {
+    // Get or create new content before deactivating old
+    auto* incoming = getOrCreateContent(type);
+
+    // Notify subclass (e.g. BottomPanel header population)
+    onContentWillSwitch(activeContent_, incoming);
+
     // Deactivate old content
     if (activeContent_) {
         activeContent_->onDeactivated();
         activeContent_->setVisible(false);
     }
 
-    // Get or create new content
-    activeContent_ = getOrCreateContent(type);
+    activeContent_ = incoming;
 
     // Activate new content
     if (activeContent_) {

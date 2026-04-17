@@ -27,6 +27,11 @@ class AddAutomationPointCommand : public UndoableCommand {
         return "Add Automation Point";
     }
 
+    /// Valid after execute() has run. INVALID_AUTOMATION_POINT_ID otherwise.
+    AutomationPointId getAddedPointId() const {
+        return addedPointId_;
+    }
+
   private:
     AutomationLaneId laneId_;
     AutomationClipId clipId_;
@@ -195,6 +200,66 @@ class SetAutomationPointHandlesCommand : public UndoableCommand {
     BezierHandle newInHandle_, newOutHandle_;
     BezierHandle oldInHandle_, oldOutHandle_;
     bool isClip_;
+};
+
+/**
+ * @brief Command for setting an automation point's curve type
+ */
+class SetAutomationPointCurveTypeCommand : public UndoableCommand {
+  public:
+    SetAutomationPointCurveTypeCommand(AutomationLaneId laneId, AutomationClipId clipId,
+                                       AutomationPointId pointId, AutomationCurveType newCurveType)
+        : laneId_(laneId),
+          clipId_(clipId),
+          pointId_(pointId),
+          newCurveType_(newCurveType),
+          isClip_(clipId != INVALID_AUTOMATION_CLIP_ID) {
+        captureOldCurveType();
+    }
+
+    void execute() override;
+    void undo() override;
+    juce::String getDescription() const override {
+        return "Set Automation Curve Type";
+    }
+
+  private:
+    void captureOldCurveType();
+
+    AutomationLaneId laneId_;
+    AutomationClipId clipId_;
+    AutomationPointId pointId_;
+    AutomationCurveType newCurveType_;
+    AutomationCurveType oldCurveType_ = AutomationCurveType::Linear;
+    bool isClip_;
+};
+
+/**
+ * @brief Command for deleting an entire automation lane (and its clips)
+ *
+ * Captures the full lane state plus any clip-based data so that undo
+ * re-inserts the lane at its original index.
+ */
+class DeleteAutomationLaneCommand : public UndoableCommand {
+  public:
+    explicit DeleteAutomationLaneCommand(AutomationLaneId laneId) : laneId_(laneId) {
+        captureLane();
+    }
+
+    void execute() override;
+    void undo() override;
+    juce::String getDescription() const override {
+        return "Delete Automation Lane";
+    }
+
+  private:
+    void captureLane();
+
+    AutomationLaneId laneId_;
+    AutomationLaneInfo storedLane_;
+    std::vector<AutomationClipInfo> storedClips_;
+    size_t storedIndex_ = 0;
+    bool captured_ = false;
 };
 
 }  // namespace magda

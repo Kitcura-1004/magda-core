@@ -54,6 +54,8 @@ class AutomationLaneComponent : public juce::Component,
         return laneId_;
     }
     void setPixelsPerSecond(double pps);
+    void setPixelsPerBeat(double ppb);
+    void setTempoBPM(double bpm);
     double getPixelsPerSecond() const {
         return pixelsPerSecond_;
     }
@@ -64,9 +66,10 @@ class AutomationLaneComponent : public juce::Component,
 
     // Snapping
     std::function<double(double)> snapTimeToGrid;
+    std::function<double()> getGridSpacingBeats;
 
     // Header dimensions
-    static constexpr int HEADER_HEIGHT = 20;
+    static constexpr int HEADER_HEIGHT = 24;
     static constexpr int MIN_LANE_HEIGHT = 40;
     static constexpr int MAX_LANE_HEIGHT = 200;
     static constexpr int DEFAULT_LANE_HEIGHT = 60;
@@ -77,9 +80,27 @@ class AutomationLaneComponent : public juce::Component,
     // Callbacks for parent coordination
     std::function<void(AutomationLaneId, int)> onHeightChanged;
 
+    /**
+     * @brief Run Ramer–Douglas–Peucker simplification on an absolute automation
+     *        lane, wrapped in a single undoable op.
+     *
+     * @param laneId         Target lane.
+     * @param epsilon        Tolerance in normalized value units (e.g. 0.01 =
+     *                       1% of parameter range). Points within epsilon of
+     *                       the linear interpolation between retained
+     *                       neighbours are dropped.
+     * @param pointIdFilter  If non-empty, restrict simplification to just
+     *                       these point IDs (all other points are left
+     *                       untouched). Empty means "simplify the whole lane".
+     */
+    static void simplifyLane(AutomationLaneId laneId, double epsilon,
+                             const std::vector<AutomationPointId>& pointIdFilter = {});
+
   private:
     AutomationLaneId laneId_;
     double pixelsPerSecond_ = 100.0;
+    double pixelsPerBeat_ = 10.0;
+    double tempoBPM_ = 120.0;
     bool isSelected_ = false;
 
     // Resize state

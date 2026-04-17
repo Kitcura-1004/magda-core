@@ -83,6 +83,18 @@ void CurvePointComponent::mouseDown(const juce::MouseEvent& e) {
     if (parentEditor_)
         parentEditor_->grabKeyboardFocus();
 
+    // Right-click on a point must not be swallowed — forward to the parent
+    // curve editor so its context menu (e.g. Simplify Curve) appears whether
+    // the user clicked on empty space or directly on a point.
+    if (e.mods.isPopupMenu()) {
+        isRightClickPending_ = true;
+        if (parentEditor_) {
+            parentEditor_->mouseDown(e.getEventRelativeTo(parentEditor_));
+        }
+        return;
+    }
+    isRightClickPending_ = false;
+
     if (e.mods.isLeftButtonDown()) {
         // Handle selection
         if (e.mods.isCommandDown() || e.mods.isShiftDown()) {
@@ -130,6 +142,11 @@ void CurvePointComponent::mouseDrag(const juce::MouseEvent& e) {
 }
 
 void CurvePointComponent::mouseUp(const juce::MouseEvent& e) {
+    if (isRightClickPending_ || e.mods.isPopupMenu()) {
+        isRightClickPending_ = false;
+        return;
+    }
+
     if (isDragging_) {
         isDragging_ = false;
 
@@ -138,17 +155,23 @@ void CurvePointComponent::mouseUp(const juce::MouseEvent& e) {
             int deltaXPx = parentPos.x - dragStartPos_.x;
             int deltaYPx = parentPos.y - dragStartPos_.y;
 
-            double pixelsPerX = parentEditor_->getPixelsPerX();
-            double pixelsPerY = parentEditor_->getPixelsPerY();
+            // Only commit a move if the mouse actually moved (> 2px).
+            // Skipping no-op moves prevents a rebuildPointComponents() between
+            // the two clicks of a double-click, which would destroy this component
+            // and prevent mouseDoubleClick from ever firing.
+            if (std::abs(deltaXPx) > 2 || std::abs(deltaYPx) > 2) {
+                double pixelsPerX = parentEditor_->getPixelsPerX();
+                double pixelsPerY = parentEditor_->getPixelsPerY();
 
-            double newX = dragStartX_ + deltaXPx / pixelsPerX;
-            double newY = dragStartY_ - deltaYPx / pixelsPerY;
+                double newX = dragStartX_ + deltaXPx / pixelsPerX;
+                double newY = dragStartY_ - deltaYPx / pixelsPerY;
 
-            newX = juce::jmax(0.0, newX);
-            newY = juce::jlimit(0.0, 1.0, newY);
+                newX = juce::jmax(0.0, newX);
+                newY = juce::jlimit(0.0, 1.0, newY);
 
-            if (onPointMoved) {
-                onPointMoved(pointId_, newX, newY);
+                if (onPointMoved) {
+                    onPointMoved(pointId_, newX, newY);
+                }
             }
         }
     }

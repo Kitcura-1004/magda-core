@@ -225,19 +225,22 @@ void MainView::setupComponents() {
             double newVerticalZoom = juce::jlimit(0.5, 3.0, 0.5 + rangeHeight * 2.5);
             verticalZoom = newVerticalZoom;
 
-            // Calculate scroll position based on start position
-            int totalContentHeight = trackHeadersPanel->getTotalTracksHeight();
-            int scaledHeight = static_cast<int>(totalContentHeight * verticalZoom);
-            int scrollY = static_cast<int>(start * scaledHeight);
-
-            // Update track heights and viewport position directly
+            // Update track heights FIRST so getTotalTracksHeight reflects the
+            // new zoom. Then compute scroll position from the scaled total.
             trackContentPanel->setVerticalZoom(verticalZoom);
             trackHeadersPanel->setVerticalZoom(verticalZoom);
 
+            // getTotalTracksHeight already incorporates verticalZoom per track,
+            // so no extra multiplication here. No jmax with viewport height —
+            // the two panels must end up at the exact same content size to
+            // stay in scroll sync (otherwise one viewport can scroll past the
+            // other and they visually drift on first scroll-down).
+            int scaledHeight = trackHeadersPanel->getTotalTracksHeight();
+            int scrollY = static_cast<int>(start * scaledHeight);
+
             int contentWidth = trackContentPanel->getWidth();
-            int contentHeight = juce::jmax(scaledHeight, trackContentViewport->getHeight());
-            trackContentPanel->setSize(contentWidth, contentHeight);
-            trackHeadersPanel->setSize(trackHeaderWidth, contentHeight);
+            trackContentPanel->setSize(contentWidth, scaledHeight);
+            trackHeadersPanel->setSize(trackHeaderWidth, scaledHeight);
 
             trackContentViewport->setViewPosition(trackContentViewport->getViewPositionX(),
                                                   scrollY);
@@ -991,23 +994,38 @@ bool MainView::keyPressed(const juce::KeyPress& key) {
 
 void MainView::updateContentSizes() {
     // Use the same content width calculation as ZoomManager for consistency
-    // horizontalZoom is ppb, convert timeline length to beats
+    // horizontalZoom is ppb, convert timeline length to beats. Round so the
+    // integer width matches TrackContentPanel::resized()'s own rounded
+    // computation — truncating here while TCP rounds produces a 1 px drift
+    // that fires resized() every frame.
     const auto& st = timelineController->getState();
     double beats = st.secondsToBeats(timelineLength);
-    auto baseWidth = static_cast<int>(beats * horizontalZoom);
+    auto baseWidth = static_cast<int>(std::round(beats * horizontalZoom));
     auto viewportWidth = timelineViewport->getWidth();
     auto minWidth = viewportWidth + (viewportWidth / 2);  // 1.5x viewport width for centering
     auto contentWidth = juce::jmax(baseWidth, minWidth);
 
-    // Calculate track content height with vertical zoom
-    auto baseTrackHeight = trackHeadersPanel->getTotalTracksHeight();
-    auto scaledTrackHeight = static_cast<int>(baseTrackHeight * verticalZoom);
+    // getTotalTracksHeight already applies verticalZoom per track, so do NOT
+    // multiply again.
+    // Floor to viewport height so both panels cover the full visible area —
+    // needed for DnD (plugin drops hit the panel even below the last track).
+    // Using the viewport widget height (constant for a given window size)
+    // rather than the panel's own height avoids the monotonic-growth bug
+    // that caused phantom scrollbars: when content shrinks the panel shrinks
+    // back to the viewport floor, not its own stale height.
+    int contentHeight = trackHeadersPanel->getTotalTracksHeight();
+    int viewportFloor = trackContentViewport->getHeight();
+    contentHeight = juce::jmax(contentHeight, viewportFloor);
+
+    // Tell the content panel the minimum height so its own resized() (which
+    // re-computes content size from zoom/timeline) doesn't shrink below the
+    // viewport — needed for DnD to work in the empty region below tracks.
+    trackContentPanel->setMinHeight(viewportFloor);
 
     // Update timeline size with enhanced content width
     timeline->setSize(contentWidth, getTimelineHeight());
 
     // Update track content and headers with same height
-    int contentHeight = juce::jmax(scaledTrackHeight, trackContentViewport->getHeight());
     trackContentPanel->setSize(contentWidth, contentHeight);
     trackContentPanel->setVerticalZoom(verticalZoom);
     trackHeadersPanel->setSize(trackHeaderWidth, contentHeight);
@@ -1040,7 +1058,20 @@ void MainView::scrollBarMoved(juce::ScrollBar* scrollBarThatHasMoved, double new
 
     // Sync track headers viewport and update zoom scroll bar when scrolling vertically
     if (scrollBarThatHasMoved == &trackContentViewport->getVerticalScrollBar()) {
-        // Sync track headers viewport to same vertical position
+        // Sync track headers viewport to same vertical position. Ensure the
+        // two panels are still the same height before syncing: when an
+        // automation lane is added via setLaneVisible (e.g. from a device's
+        // "Show Automation Lane") the content panel self-sizes to the new
+        // total via its resized(), but the headers panel doesn't self-size —
+        // it relies on updateContentSizes. If that hook hasn't run yet, the
+        // headers viewport silently clamps scrollY to (shorter panel height
+        // - viewport height) which presents as "scrolling only works after
+        // you go all the way down and back up". updateContentSizes is
+        // idempotent and cheap; calling it here costs nothing when sizes are
+        // already in sync.
+        if (trackContentPanel->getHeight() != trackHeadersPanel->getHeight())
+            updateContentSizes();
+
         int scrollY = trackContentViewport->getViewPositionY();
         trackHeadersViewport->setViewPosition(0, scrollY);
 
@@ -1072,6 +1103,14 @@ void MainView::setupTrackSynchronization() {
         updateContentSizes();
     };
 
+    // Any layout change in the headers panel (automation lanes added/
+    // removed/resized) must re-size BOTH panels so the outer viewports stay
+    // in scroll sync. Without this, opening a lane via setLaneVisible leaves
+    // TrackContentPanel taller than TrackHeadersPanel — the content viewport
+    // can scroll past what the headers viewport can, and the headers stay
+    // pinned at y=0 until the user scrolls all the way down and back.
+    trackHeadersPanel->onLayoutChanged = [this]() { updateContentSizes(); };
+
     trackHeadersPanel->onTrackSelected = [this](int trackIndex) {
         if (!isUpdatingTrackSelection) {
             isUpdatingTrackSelection = true;
@@ -1082,7 +1121,7 @@ void MainView::setupTrackSynchronization() {
 
     // Wire up automation lane visibility toggle
     trackHeadersPanel->onShowAutomationLane = [this](TrackId trackId, AutomationLaneId laneId) {
-        trackContentPanel->toggleAutomationLane(trackId, laneId);
+        trackContentPanel->showAutomationLane(trackId, laneId);
         updateContentSizes();
     };
 
@@ -1542,6 +1581,12 @@ void MainView::setupSelectionCallbacks() {
     // This uses the controller's state for snapping
     trackContentPanel->snapTimeToGrid = [this](double time) {
         return timelineController->getState().snapTimeToGrid(time);
+    };
+    trackContentPanel->snapBeatsToGrid = [this](double beats) {
+        return timelineController->getState().snapBeatsToGrid(beats);
+    };
+    trackContentPanel->getGridSpacingBeats = [this]() -> double {
+        return timelineController->getState().getSnapBeatFraction();
     };
 
     // Set up render callbacks (bubble up to MainWindow)

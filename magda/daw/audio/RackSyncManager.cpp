@@ -424,14 +424,7 @@ void RackSyncManager::updateAllModifierProperties(TrackId trackId) {
                                 if (param) {
                                     for (auto* assignment : param->getAssignments()) {
                                         if (assignment->isForModifierSource(*modifier)) {
-                                            float effectiveAmount = link.amount;
-                                            if (!renderingActive_ &&
-                                                modInfo.triggerMode != LFOTriggerMode::Free &&
-                                                !modInfo.running) {
-                                                if (!modInfo.oneShot || modInfo.phase < 1.0f)
-                                                    effectiveAmount = 0.0f;
-                                            }
-                                            assignment->value = effectiveAmount;
+                                            assignment->value = link.amount;
                                             assignment->offset = 0.0f;
                                             break;
                                         }
@@ -790,6 +783,9 @@ void RackSyncManager::syncModifiers(SyncedRack& synced, const RackInfo& rackInfo
                     if (!snapHolder)
                         snapHolder = std::make_unique<CurveSnapshotHolder>();
                     applyLFOProperties(lfo, modInfo, snapHolder.get());
+                    if (modInfo.triggerMode == LFOTriggerMode::MIDI ||
+                        modInfo.triggerMode == LFOTriggerMode::Audio)
+                        lfo->setGated(true);
                 }
                 modifier = lfoMod;
                 DBG("RackSyncManager::syncModifiers - created LFO for rackId="
@@ -838,13 +834,7 @@ void RackSyncManager::syncModifiers(SyncedRack& synced, const RackInfo& rackInfo
                 link.target.paramIndex < static_cast<int>(params.size())) {
                 auto* param = params[static_cast<size_t>(link.target.paramIndex)];
                 if (param) {
-                    float initialAmount = link.amount;
-                    if (!renderingActive_ && modInfo.triggerMode != LFOTriggerMode::Free &&
-                        !modInfo.running) {
-                        if (!modInfo.oneShot || modInfo.phase < 1.0f)
-                            initialAmount = 0.0f;
-                    }
-                    param->addModifier(*modifier, initialAmount);
+                    param->addModifier(*modifier, link.amount);
                 }
             }
         }
@@ -976,6 +966,26 @@ void RackSyncManager::collectLFOModifiers(TrackId trackId,
         if (collected > 0)
             DBG("RackSyncManager::collectLFOModifiers - rackId=" << rackId << " trackId=" << trackId
                                                                  << " collected=" << collected);
+    }
+}
+
+void RackSyncManager::ungateAllLFOs() {
+    for (auto& [rackId, synced] : syncedRacks_) {
+        for (auto& [modId, modifier] : synced.innerModifiers) {
+            if (auto* lfo = dynamic_cast<te::LFOModifier*>(modifier.get()))
+                lfo->setGated(false);
+        }
+    }
+}
+
+void RackSyncManager::regateTriggeredLFOs() {
+    for (auto& [rackId, synced] : syncedRacks_) {
+        for (auto& [modId, modifier] : synced.innerModifiers) {
+            if (auto* lfo = dynamic_cast<te::LFOModifier*>(modifier.get())) {
+                if (lfo->getSkipNativeResync())
+                    lfo->setGated(true);
+            }
+        }
     }
 }
 

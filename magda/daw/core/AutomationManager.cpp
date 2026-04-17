@@ -6,6 +6,8 @@
 #include "ParameterInfo.hpp"
 #include "ParameterUtils.hpp"
 #include "TrackManager.hpp"
+#include "audio/AudioBridge.hpp"
+#include "engine/AudioEngine.hpp"
 
 namespace magda {
 
@@ -18,7 +20,7 @@ static float gainToDb(float gain) {
 }
 
 // Get current normalized value for an automation target
-static double getCurrentTargetValue(const AutomationTarget& target) {
+static std::optional<double> getCurrentTargetValueImpl(const AutomationTarget& target) {
     // Get parameter info for proper conversion
     ParameterInfo paramInfo = target.getParameterInfo();
 
@@ -38,8 +40,41 @@ static double getCurrentTargetValue(const AutomationTarget& target) {
             }
             return 0.5;  // Default to center
         }
+        case AutomationTargetType::DeviceParameter: {
+            auto resolved = TrackManager::getInstance().resolvePath(target.devicePath);
+            if (!resolved.valid || !resolved.device)
+                return std::nullopt;
+            if (target.paramIndex < 0 ||
+                target.paramIndex >= static_cast<int>(resolved.device->parameters.size())) {
+                return std::nullopt;
+            }
+            return static_cast<double>(ParameterUtils::realToNormalized(
+                resolved.device->parameters[static_cast<size_t>(target.paramIndex)].currentValue,
+                paramInfo));
+        }
+        case AutomationTargetType::Macro: {
+            const auto* track = TrackManager::getInstance().getTrack(target.trackId);
+            if (!track)
+                return std::nullopt;
+
+            if (target.devicePath.isValid()) {
+                auto resolved = TrackManager::getInstance().resolvePath(target.devicePath);
+                if (resolved.valid && resolved.rack && target.paramIndex >= 0 &&
+                    target.paramIndex < static_cast<int>(resolved.rack->macros.size())) {
+                    return static_cast<double>(
+                        resolved.rack->macros[static_cast<size_t>(target.paramIndex)].value);
+                }
+            }
+
+            if (target.paramIndex >= 0 &&
+                target.paramIndex < static_cast<int>(track->macros.size())) {
+                return static_cast<double>(
+                    track->macros[static_cast<size_t>(target.paramIndex)].value);
+            }
+            return std::nullopt;
+        }
         default:
-            return 0.5;  // Default for unknown targets
+            return std::nullopt;
     }
 }
 
@@ -62,6 +97,13 @@ AutomationManager::~AutomationManager() {
 // ============================================================================
 
 void AutomationManager::trackPropertyChanged(int trackId) {
+    // Suppress feedback when automation playback is driving parameter values.
+    // Without this guard, automation sets volume → TrackManager fires
+    // trackPropertyChanged → we'd overwrite the automation point with the
+    // value we just set, corrupting the curve.
+    if (playbackActive_)
+        return;
+
     // When a track's volume or pan changes, update any automation lanes
     // that target those parameters (if they have points)
     TrackId tid = static_cast<TrackId>(trackId);
@@ -81,12 +123,14 @@ void AutomationManager::trackPropertyChanged(int trackId) {
             continue;
 
         // Get current value from track
-        double newValue = getCurrentTargetValue(lane.target);
+        auto newValue = getCurrentTargetValueImpl(lane.target);
+        if (!newValue)
+            continue;
 
         // Update the first point (or all points if single-point lane)
         // This provides real-time feedback when moving faders
         if (lane.absolutePoints.size() == 1) {
-            lane.absolutePoints[0].value = newValue;
+            lane.absolutePoints[0].value = *newValue;
             notifyPointsChanged(lane.id);
         }
     }
@@ -98,6 +142,12 @@ void AutomationManager::trackPropertyChanged(int trackId) {
 
 AutomationLaneId AutomationManager::createLane(const AutomationTarget& target,
                                                AutomationLaneType type) {
+    // Enforce lane singletons: at most one lane per (target) pair. A duplicate
+    // volume/pan/param lane is always a bug — either the caller forgot to
+    // check, or two code paths raced. Return the existing id either way.
+    if (auto existing = getLaneForTarget(target); existing != INVALID_AUTOMATION_LANE_ID)
+        return existing;
+
     AutomationLaneInfo lane;
     lane.id = nextLaneId_++;
     lane.target = target;
@@ -106,7 +156,7 @@ AutomationLaneId AutomationManager::createLane(const AutomationTarget& target,
 
     // For absolute lanes, add an initial point at the current target value
     if (type == AutomationLaneType::Absolute) {
-        double initialValue = getCurrentTargetValue(target);
+        double initialValue = getCurrentTargetValueImpl(target).value_or(0.5);
         AutomationPoint point;
         point.id = nextPointId_++;
         point.time = 0.0;
@@ -205,6 +255,13 @@ void AutomationManager::setLaneVisible(AutomationLaneId laneId, bool visible) {
     }
 }
 
+void AutomationManager::setGlobalLaneVisibility(bool enabled) {
+    if (globalLaneVisibilityEnabled_ == enabled)
+        return;
+    globalLaneVisibilityEnabled_ = enabled;
+    notifyLanesChanged();
+}
+
 void AutomationManager::setLaneExpanded(AutomationLaneId laneId, bool expanded) {
     if (auto* lane = getLane(laneId)) {
         lane->expanded = expanded;
@@ -212,9 +269,89 @@ void AutomationManager::setLaneExpanded(AutomationLaneId laneId, bool expanded) 
     }
 }
 
-void AutomationManager::setLaneArmed(AutomationLaneId laneId, bool armed) {
+void AutomationManager::setLaneBypass(AutomationLaneId laneId, bool bypass) {
     if (auto* lane = getLane(laneId)) {
-        lane->armed = armed;
+        if (lane->bypass == bypass)
+            return;
+        lane->bypass = bypass;
+        notifyLanePropertyChanged(laneId);
+    }
+}
+
+void AutomationManager::setTargetUserTouched(const AutomationTarget& target, bool touched) {
+    auto it = std::find(userTouchedTargets_.begin(), userTouchedTargets_.end(), target);
+    if (touched) {
+        if (it == userTouchedTargets_.end())
+            userTouchedTargets_.push_back(target);
+    } else if (it != userTouchedTargets_.end()) {
+        userTouchedTargets_.erase(it);
+    }
+}
+
+bool AutomationManager::isTargetUserTouched(const AutomationTarget& target) const {
+    return std::find(userTouchedTargets_.begin(), userTouchedTargets_.end(), target) !=
+           userTouchedTargets_.end();
+}
+
+AutomationVisualState AutomationManager::getVisualState(const AutomationTarget& target) const {
+    AutomationLaneId laneId = getLaneForTarget(target);
+    if (laneId == INVALID_AUTOMATION_LANE_ID)
+        return AutomationVisualState::None;
+    const auto* lane = const_cast<AutomationManager*>(this)->getLane(laneId);
+    if (!lane)
+        return AutomationVisualState::None;
+    if (lane->bypass || lane->touchSuppressed)
+        return AutomationVisualState::Overridden;
+    return AutomationVisualState::Active;
+}
+
+void AutomationManager::setTargetOverridden(const AutomationTarget& target, bool overridden) {
+    AutomationLaneId laneId = getLaneForTarget(target);
+    if (laneId == INVALID_AUTOMATION_LANE_ID)
+        return;
+    setLaneBypass(laneId, overridden);
+}
+
+bool AutomationManager::isWriteModeEnabled() const {
+    auto* audioEngine = TrackManager::getInstance().getAudioEngine();
+    if (!audioEngine)
+        return false;
+    const auto* bridge = audioEngine->getAudioBridge();
+    return bridge && bridge->isAutomationWriteEnabled();
+}
+
+std::optional<double> AutomationManager::getCurrentTargetValue(
+    const AutomationTarget& target) const {
+    return getCurrentTargetValueImpl(target);
+}
+
+void AutomationManager::setTargetTouchSuppressed(const AutomationTarget& target, bool suppressed) {
+    AutomationLaneId laneId = getLaneForTarget(target);
+    if (laneId == INVALID_AUTOMATION_LANE_ID)
+        return;
+    auto* lane = getLane(laneId);
+    if (!lane || lane->touchSuppressed == suppressed)
+        return;
+    lane->touchSuppressed = suppressed;
+
+    if (touchSuppressionListener_)
+        touchSuppressionListener_(laneId, suppressed);
+}
+
+void AutomationManager::setLaneSnapTime(AutomationLaneId laneId, bool snap) {
+    if (auto* lane = getLane(laneId)) {
+        if (lane->snapTime == snap)
+            return;
+        lane->snapTime = snap;
+        notifyLanePropertyChanged(laneId);
+    }
+}
+
+void AutomationManager::setLaneSnapValue(AutomationLaneId laneId, bool snap) {
+    if (auto* lane = getLane(laneId)) {
+        if (lane->snapValue == snap)
+            return;
+        lane->snapValue = snap;
         notifyLanePropertyChanged(laneId);
     }
 }
@@ -425,6 +562,15 @@ void AutomationManager::deletePoint(AutomationLaneId laneId, AutomationPointId p
     notifyPointsChanged(laneId);
 }
 
+void AutomationManager::clearLanePoints(AutomationLaneId laneId) {
+    auto* lane = getLane(laneId);
+    if (!lane || !lane->isAbsolute() || lane->absolutePoints.empty())
+        return;
+
+    lane->absolutePoints.clear();
+    notifyPointsChanged(laneId);
+}
+
 void AutomationManager::deletePointFromClip(AutomationClipId clipId, AutomationPointId pointId) {
     auto* clip = getClip(clipId);
     if (!clip)
@@ -503,6 +649,18 @@ void AutomationManager::setPointCurveType(AutomationLaneId laneId, AutomationPoi
     if (auto* point = findPoint(lane->absolutePoints, pointId)) {
         point->curveType = curveType;
         notifyPointsChanged(laneId);
+    }
+}
+
+void AutomationManager::setPointCurveTypeInClip(AutomationClipId clipId, AutomationPointId pointId,
+                                                AutomationCurveType curveType) {
+    auto* clip = getClip(clipId);
+    if (!clip)
+        return;
+
+    if (auto* point = findPoint(clip->points, pointId)) {
+        point->curveType = curveType;
+        notifyClipsChanged(clip->laneId);
     }
 }
 
@@ -683,7 +841,38 @@ void AutomationManager::notifyClipsChanged(AutomationLaneId laneId) {
 }
 
 void AutomationManager::notifyPointsChanged(AutomationLaneId laneId) {
+    if (notificationBatchDepth_ > 0) {
+        if (std::find(pendingPointsChangedLanes_.begin(), pendingPointsChangedLanes_.end(),
+                      laneId) == pendingPointsChangedLanes_.end()) {
+            pendingPointsChangedLanes_.push_back(laneId);
+        }
+        return;
+    }
     listeners_.call([laneId](AutomationManagerListener& l) { l.automationPointsChanged(laneId); });
+}
+
+void AutomationManager::beginNotificationBatch() {
+    ++notificationBatchDepth_;
+}
+
+void AutomationManager::endNotificationBatch() {
+    if (notificationBatchDepth_ == 0)
+        return;
+    --notificationBatchDepth_;
+    if (notificationBatchDepth_ > 0)
+        return;
+    auto pending = std::move(pendingPointsChangedLanes_);
+    pendingPointsChangedLanes_.clear();
+    for (auto laneId : pending) {
+        listeners_.call(
+            [laneId](AutomationManagerListener& l) { l.automationPointsChanged(laneId); });
+    }
+}
+
+void AutomationManager::notifyValueChanged(AutomationLaneId laneId, double normalizedValue) {
+    listeners_.call([laneId, normalizedValue](AutomationManagerListener& l) {
+        l.automationValueChanged(laneId, normalizedValue);
+    });
 }
 
 void AutomationManager::notifyPointDragPreview(AutomationLaneId laneId, AutomationPointId pointId,
@@ -707,7 +896,21 @@ void AutomationManager::clearAll() {
 }
 
 void AutomationManager::restoreLane(AutomationLaneInfo& lane) {
+    // Dedup at restore time too — a saved project with duplicate lanes for
+    // the same target is always corrupt data from a pre-singleton-enforcement
+    // session. Keep the first one and drop the rest. Undo-driven restore is
+    // unaffected: undo restores a lane that was just deleted, so no existing
+    // lane for that target can be present.
+    if (getLaneForTarget(lane.target) != INVALID_AUTOMATION_LANE_ID)
+        return;
     lanes_.push_back(std::move(lane));
+    notifyLanesChanged();
+}
+
+void AutomationManager::insertLaneAt(AutomationLaneInfo& lane, size_t index) {
+    if (index > lanes_.size())
+        index = lanes_.size();
+    lanes_.insert(lanes_.begin() + static_cast<std::ptrdiff_t>(index), std::move(lane));
     notifyLanesChanged();
 }
 

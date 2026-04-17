@@ -5,6 +5,7 @@
 
 #include "../../themes/DarkTheme.hpp"
 #include "../../themes/FontManager.hpp"
+#include "core/AutomationManager.hpp"
 
 namespace magda {
 
@@ -13,6 +14,10 @@ DraggableValueLabel::DraggableValueLabel(Format format) : format_(format) {
 }
 
 DraggableValueLabel::~DraggableValueLabel() {
+    if (listeningToAutomation_) {
+        AutomationManager::getInstance().removeListener(this);
+        listeningToAutomation_ = false;
+    }
     if (editor_) {
         editor_ = nullptr;
     }
@@ -248,7 +253,9 @@ void DraggableValueLabel::paint(juce::Graphics& g) {
 
     // Fill indicator
     if (showFillIndicator_) {
-        g.setColour(DarkTheme::getColour(DarkTheme::ACCENT_BLUE).withAlpha(0.3f * alpha));
+        auto fillBase = customFillColour_.value_or(DarkTheme::getColour(DarkTheme::ACCENT_BLUE));
+        float fillAlpha = customFillColour_ ? fillBase.getFloatAlpha() : 0.3f;
+        g.setColour(fillBase.withAlpha(fillAlpha * alpha));
 
         if (format_ == Format::Pan) {
             // Pan: draw from center outward
@@ -280,12 +287,29 @@ void DraggableValueLabel::paint(juce::Graphics& g) {
         }
     }
 
-    // Border
+    // Automation tint: purple when the lane is driving the parameter,
+    // grey when the user has taken over (override / touch-suppressed).
+    const bool hasTint = automationVisualState_ != AutomationVisualState::None;
+    const juce::Colour tintColour = automationVisualState_ == AutomationVisualState::Overridden
+                                        ? juce::Colour(DarkTheme::TEXT_DISABLED)
+                                        : juce::Colour(DarkTheme::ACCENT_PURPLE);
+
+    if (hasTint && drawBackground_) {
+        g.setColour(tintColour.withAlpha(0.18f * alpha));
+        g.fillRoundedRectangle(bounds, 2.0f);
+    }
+
+    // Border: automation tint wins over drag so the state reads at a glance.
     if (drawBorder_) {
-        g.setColour((isDragging_ ? DarkTheme::getColour(DarkTheme::ACCENT_BLUE)
-                                 : DarkTheme::getColour(DarkTheme::BORDER))
-                        .withMultipliedAlpha(alpha));
-        g.drawRoundedRectangle(bounds.reduced(0.5f), 2.0f, 1.0f);
+        juce::Colour borderColour;
+        if (hasTint)
+            borderColour = tintColour;
+        else if (isDragging_)
+            borderColour = DarkTheme::getColour(DarkTheme::ACCENT_BLUE);
+        else
+            borderColour = DarkTheme::getColour(DarkTheme::BORDER);
+        g.setColour(borderColour.withMultipliedAlpha(alpha));
+        g.drawRoundedRectangle(bounds.reduced(0.5f), 2.0f, hasTint ? 1.5f : 1.0f);
     }
 
     // Text
@@ -309,9 +333,39 @@ void DraggableValueLabel::mouseDown(const juce::MouseEvent& e) {
     }
 
     isDragging_ = true;
+    overrideLatchedThisGesture_ = false;
     dragStartValue_ = value_;
     dragStartY_ = e.y;
+
+    // Suppress playback write-back for the duration of the gesture so the
+    // engine doesn't fight a drag-in-progress. This is transient (cleared on
+    // mouseUp) and is NOT the same as the persistent override/bypass — that
+    // only latches once we see a real value change (see latchAutomationOverride).
+    if (hasAutomationTarget_ && isAutomated()) {
+        AutomationManager::getInstance().setTargetTouchSuppressed(automationTarget_, true);
+    }
+    // Always mark the gesture on the target (even when no lane exists yet) so
+    // AutomationRecordingEngine can distinguish real user touches from playback
+    // engine echo-backs when deciding whether to record a point.
+    if (hasAutomationTarget_) {
+        AutomationManager::getInstance().setTargetUserTouched(automationTarget_, true);
+    }
+
     repaint();
+}
+
+void DraggableValueLabel::latchAutomationOverride() {
+    if (overrideLatchedThisGesture_)
+        return;
+    if (!hasAutomationTarget_ || !isAutomated())
+        return;
+    // Write mode is ACTIVELY recording into the lane — do not bypass it.
+    if (AutomationManager::getInstance().isWriteModeEnabled())
+        return;
+    auto& mgr = AutomationManager::getInstance();
+    mgr.setTargetOverridden(automationTarget_, true);
+    setAutomationVisualState(AutomationVisualState::Overridden);
+    overrideLatchedThisGesture_ = true;
 }
 
 void DraggableValueLabel::mouseDrag(const juce::MouseEvent& e) {
@@ -321,6 +375,13 @@ void DraggableValueLabel::mouseDrag(const juce::MouseEvent& e) {
 
     // Calculate delta (dragging up increases value)
     int deltaY = dragStartY_ - e.y;
+
+    // Confirm gesture as a real edit once the drag crosses a small threshold —
+    // only then do we latch the persistent override. A plain click or an
+    // aborted gesture never reaches this point.
+    constexpr int kDragThresholdPx = 2;
+    if (std::abs(deltaY) >= kDragThresholdPx)
+        latchAutomationOverride();
 
     double deltaValue;
     if (format_ == Format::BarsBeats) {
@@ -352,6 +413,15 @@ void DraggableValueLabel::mouseDrag(const juce::MouseEvent& e) {
 void DraggableValueLabel::mouseUp(const juce::MouseEvent& /*e*/) {
     bool wasDragging = isDragging_;
     isDragging_ = false;
+
+    // Release the transient flags; the lane stays in bypass (override) state
+    // until the user explicitly re-enables it from the lane header.
+    if (hasAutomationTarget_) {
+        auto& mgr = AutomationManager::getInstance();
+        mgr.setTargetUserTouched(automationTarget_, false);
+        mgr.setTargetTouchSuppressed(automationTarget_, false);
+    }
+
     repaint();
     if (wasDragging && onDragEnd)
         onDragEnd(dragStartValue_);
@@ -359,6 +429,8 @@ void DraggableValueLabel::mouseUp(const juce::MouseEvent& /*e*/) {
 
 void DraggableValueLabel::mouseDoubleClick(const juce::MouseEvent& /*e*/) {
     if (doubleClickResets_) {
+        if (value_ != defaultValue_)
+            latchAutomationOverride();
         setValue(defaultValue_);
     } else {
         startEditing();
@@ -412,6 +484,8 @@ void DraggableValueLabel::finishEditing() {
     double newValue = parseValue(editor_->getText());
     isEditing_ = false;
     editor_ = nullptr;
+    if (newValue != value_)
+        latchAutomationOverride();
     setValue(newValue);
     repaint();
 }

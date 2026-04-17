@@ -28,6 +28,7 @@ juce_add_binary_data(MagdaAssets
     ../../assets/icons/general/menu.svg
     ../../assets/icons/general/chord.svg
     ../../assets/icons/general/funnel.svg
+    ../../assets/icons/general/learn.svg
     ../../assets/icons/general/refresh.svg
     ../../assets/icons/general/send.svg
     ../../assets/icons/general/chevron_left.svg
@@ -78,6 +79,8 @@ juce_add_binary_data(MagdaAssets
     ../../assets/icons/transport/punchin_on.svg
     ../../assets/icons/transport/punchout.svg
     ../../assets/icons/transport/punchout_on.svg
+    ../../assets/icons/transport/automation_off.svg
+    ../../assets/icons/transport/automation_on.svg
     # Inspector icons
     ../../assets/icons/inspector/infinito.svg
     ../../assets/icons/inspector/position.svg
@@ -95,6 +98,10 @@ juce_add_binary_data(MagdaAssets
     # Resume/arrangement icons
     ../../assets/icons/resume/resume.svg
     ../../assets/icons/resume/resume_on.svg
+    # Automation icons
+    ../../assets/icons/automation/horizontal_snap.svg
+    ../../assets/icons/automation/vertical_snap.svg
+    ../../assets/icons/automation/automation.svg
     # Waveform icons
     ../../assets/icons/waveform/sine-wave.svg
     ../../assets/icons/waveform/bare_sine.svg
@@ -193,6 +200,7 @@ set(DAW_CORE_SOURCES
     core/ClipManager.cpp
     core/MidiFileWriter.cpp
     core/SelectionManager.cpp
+    core/AutomationInfo.cpp
     core/AutomationManager.cpp
     core/LinkModeManager.cpp
     core/UndoManager.cpp
@@ -203,7 +211,9 @@ set(DAW_CORE_SOURCES
     core/TrackPropertyCommands.cpp
     core/AutomationCommands.cpp
     core/MidiNoteCommands.cpp
+    core/ParameterInfo.cpp
     core/ParameterUtils.cpp
+    core/ParameterDetector.cpp
     engine/TracktionEngineWrapper.cpp
     engine/TracktionEngineWrapperInit.cpp
     engine/TracktionEngineWrapperDevices.cpp
@@ -240,8 +250,12 @@ set(DAW_CORE_SOURCES
     audio/PluginManager.cpp
     audio/InstrumentRackManager.cpp
     audio/RackSyncManager.cpp
+    audio/AutomationPlaybackEngine.cpp
+    audio/AutomationRecordingEngine.cpp
+    audio/AutomationCurveSimplifier.cpp
     audio/ClipSynchronizer.cpp
     audio/SidechainMonitorPlugin.cpp
+    audio/AudioSidechainMonitorPlugin.cpp
     audio/MidiReceivePlugin.cpp
     audio/MagdaSamplerPlugin.cpp
     audio/DrumGridPlugin.cpp
@@ -553,9 +567,11 @@ set(DAW_HEADERS
     audio/PluginManager.hpp
     audio/InstrumentRackManager.hpp
     audio/RackSyncManager.hpp
+    audio/AutomationPlaybackEngine.hpp
     audio/ClipSynchronizer.hpp
     audio/SidechainTriggerBus.hpp
     audio/SidechainMonitorPlugin.hpp
+    audio/AudioSidechainMonitorPlugin.hpp
     audio/MidiBroadcastBus.hpp
     audio/MidiReceivePlugin.hpp
     audio/MagdaSamplerPlugin.hpp
@@ -651,6 +667,7 @@ set(DAW_HEADERS
     core/ModInfo.hpp
     # Core - Parameter
     core/ParameterInfo.hpp
+    core/ParameterDetector.hpp
     core/ParameterUtils.hpp
     # Core - Automation
     core/AutomationTypes.hpp
@@ -696,6 +713,21 @@ juce_add_gui_app(magda_daw_app
         <string>MAGDA needs access to your Downloads folder to import audio files.</string>
         <key>NSRemovableVolumesUsageDescription</key>
         <string>MAGDA needs access to external drives to load and save projects and audio files.</string>
+        <key>CFBundleDocumentTypes</key>
+        <array>
+            <dict>
+                <key>CFBundleTypeName</key>
+                <string>MAGDA Project</string>
+                <key>CFBundleTypeRole</key>
+                <string>Editor</string>
+                <key>LSHandlerRank</key>
+                <string>Owner</string>
+                <key>CFBundleTypeExtensions</key>
+                <array>
+                    <string>mgd</string>
+                </array>
+            </dict>
+        </array>
     </dict></plist>"
 )
 
@@ -893,6 +925,7 @@ target_include_directories(magda_plugin_scanner
     PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}/engine
+    ${CMAKE_CURRENT_BINARY_DIR}/generated
 )
 
 # Copy scanner executable alongside the main app

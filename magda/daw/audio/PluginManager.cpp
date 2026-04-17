@@ -8,6 +8,7 @@
 #include "../core/TrackManager.hpp"
 #include "../profiling/PerformanceProfiler.hpp"
 #include "ArpeggiatorPlugin.hpp"
+#include "AudioSidechainMonitorPlugin.hpp"
 #include "CurveSnapshot.hpp"
 #include "DrumGridPlugin.hpp"
 #include "MagdaSamplerPlugin.hpp"
@@ -567,11 +568,17 @@ void PluginManager::syncTrackPlugins(TrackId trackId) {
     // Sync sidechain routing for plugins that support it
     syncSidechains(trackId, teTrack);
 
-    // Sidechain monitor: insert on tracks that need audio-thread MIDI detection
+    // Sidechain monitors: insert on tracks that are sidechain sources.
+    // MIDI monitor at position 0 (before instruments), audio monitor near end (after instruments).
     if (trackNeedsSidechainMonitor(trackId))
         ensureSidechainMonitor(trackId);
     else
         removeSidechainMonitor(trackId);
+
+    if (trackNeedsAudioSidechainMonitor(trackId))
+        ensureAudioSidechainMonitor(trackId);
+    else
+        removeAudioSidechainMonitor(trackId);
 
     // Reorder TE plugins to match the MAGDA chain element order.
     // This handles moveNode (drag-and-drop reorder) where the MAGDA chain changed
@@ -1225,12 +1232,10 @@ void PluginManager::updateDeviceModifierProperties(TrackId trackId) {
                     snapHolder = std::make_unique<CurveSnapshotHolder>();
 
                 applyLFOProperties(lfo, modInfo, snapHolder.get());
-                // Note-triggered LFO retrigger is handled on the audio thread
-                // by SidechainMonitorPlugin → triggerSidechainNoteOn.
-                // Do NOT call triggerLFONoteOnWithReset here — the message thread
-                // runs asynchronously and would reset the ramp a few ms after the
-                // audio-thread trigger, shifting the LFO phase and causing the
-                // rendered output to differ from playback.
+                // Gate state for MIDI/Audio LFOs is managed on the audio thread:
+                // triggerNoteOn clears gate, gateSidechainLFOs sets it on note-off.
+                // Do NOT re-gate here — the message thread timer would fight with
+                // the audio thread, causing brief modulation dropouts.
             }
 
             // Update assignment values (mod depth) for each link
@@ -1261,16 +1266,11 @@ void PluginManager::updateDeviceModifierProperties(TrackId trackId) {
                     if (param) {
                         for (auto* assignment : param->getAssignments()) {
                             if (assignment->isForModifierSource(*modifier)) {
-                                float effectiveAmount = link.amount;
-                                if (!renderingActive_ &&
-                                    modInfo.triggerMode != LFOTriggerMode::Free &&
-                                    !modInfo.running) {
-                                    // Gate stopped LFOs, but let completed 1-shot hold
-                                    // at end value (phase clamped at 1.0)
-                                    if (!modInfo.oneShot || modInfo.phase < 1.0f)
-                                        effectiveAmount = 0.0f;
-                                }
-                                assignment->value = effectiveAmount;
+                                DBG("[MOD-ASSIGN] update: devId="
+                                    << device.id << " paramIdx=" << link.target.paramIndex
+                                    << " linkAmount=" << link.amount
+                                    << " prevValue=" << assignment->value);
+                                assignment->value = link.amount;
                                 assignment->offset = 0.0f;
                                 break;
                             }
@@ -1334,14 +1334,7 @@ void PluginManager::updateDeviceModifierProperties(TrackId trackId) {
                     if (param) {
                         for (auto* assignment : param->getAssignments()) {
                             if (assignment->isForModifierSource(*modifier)) {
-                                float effectiveAmount = link.amount;
-                                if (!renderingActive_ &&
-                                    modInfo.triggerMode != LFOTriggerMode::Free &&
-                                    !modInfo.running) {
-                                    if (!modInfo.oneShot || modInfo.phase < 1.0f)
-                                        effectiveAmount = 0.0f;
-                                }
-                                assignment->value = effectiveAmount;
+                                assignment->value = link.amount;
                                 assignment->offset = 0.0f;
                                 break;
                             }
@@ -1470,6 +1463,12 @@ void PluginManager::syncDeviceModifiers(TrackId trackId, te::AudioTrack* teTrack
                         // externally via triggerSidechainNoteOn().
                         if (device.sidechain.sourceTrackId != INVALID_TRACK_ID)
                             lfo->setSkipNativeResync(true);
+                        // Audio-triggered LFOs start gated so getCurrentValue()
+                        // returns 0 until an audio peak fires the trigger.
+                        // MIDI-triggered LFOs don't need gating — they just
+                        // resync phase on note-on and free-run otherwise.
+                        if (modInfo.triggerMode == LFOTriggerMode::Audio)
+                            lfo->setGated(true);
                     }
                     modifier = lfoMod;
                     break;
@@ -1519,15 +1518,11 @@ void PluginManager::syncDeviceModifiers(TrackId trackId, te::AudioTrack* teTrack
                     link.target.paramIndex < static_cast<int>(params.size())) {
                     auto* param = params[static_cast<size_t>(link.target.paramIndex)];
                     if (param) {
-                        // Gate triggered LFOs: start with 0 until triggered
-                        float initialAmount = link.amount;
-                        if (!renderingActive_ && modInfo.triggerMode != LFOTriggerMode::Free &&
-                            !modInfo.running) {
-                            // Gate stopped LFOs, but let completed 1-shot hold
-                            if (!modInfo.oneShot || modInfo.phase < 1.0f)
-                                initialAmount = 0.0f;
-                        }
-                        param->addModifier(*modifier, initialAmount);
+                        param->addModifier(*modifier, link.amount);
+                        DBG("[MOD-ASSIGN] created: devId="
+                            << device.id << " paramIdx=" << link.target.paramIndex << " paramName="
+                            << param->getParameterName() << " linkAmount=" << link.amount
+                            << " paramBase=" << param->getCurrentValue());
                     }
                 }
             }
@@ -1596,6 +1591,8 @@ void PluginManager::syncDeviceModifiers(TrackId trackId, te::AudioTrack* teTrack
                             if (!snapHolder)
                                 snapHolder = std::make_unique<CurveSnapshotHolder>();
                             applyLFOProperties(lfo, modInfo, snapHolder.get());
+                            if (modInfo.triggerMode == LFOTriggerMode::Audio)
+                                lfo->setGated(true);
                         }
                         modifier = lfoMod;
                         break;
@@ -1645,13 +1642,7 @@ void PluginManager::syncDeviceModifiers(TrackId trackId, te::AudioTrack* teTrack
                         link.target.paramIndex < static_cast<int>(params.size())) {
                         auto* param = params[static_cast<size_t>(link.target.paramIndex)];
                         if (param) {
-                            float initialAmount = link.amount;
-                            if (!renderingActive_ && modInfo.triggerMode != LFOTriggerMode::Free &&
-                                !modInfo.running) {
-                                if (!modInfo.oneShot || modInfo.phase < 1.0f)
-                                    initialAmount = 0.0f;
-                            }
-                            param->addModifier(*modifier, initialAmount);
+                            param->addModifier(*modifier, link.amount);
                         }
                     }
                 }
@@ -1674,7 +1665,7 @@ void PluginManager::triggerLFONoteOn(TrackId trackId) {
         const auto& device = getDevice(element);
 
         // Skip sidechain LFOs — they are triggered separately via
-        // triggerSidechainNoteOn from the source track's note events.
+        // triggerSidechainNoteOn from the source track's monitor plugin.
         // Triggering them here would reset the TE LFO phase mid-cycle,
         // causing false wrap-around detection in one-shot mode.
         if (device.sidechain.sourceTrackId != INVALID_TRACK_ID)
@@ -1706,18 +1697,32 @@ void PluginManager::triggerLFONoteOn(TrackId trackId) {
 }
 
 // =============================================================================
-void PluginManager::triggerSidechainNoteOn(TrackId sourceTrackId) {
+void PluginManager::triggerSidechainNoteOn(TrackId sourceTrackId,
+                                           std::optional<LFOTriggerMode> modeFilter) {
     if (sourceTrackId < 0 || sourceTrackId >= kMaxCacheTracks)
         return;
 
-    const juce::SpinLock::ScopedTryLockType lock(cacheLock_);
-    if (!lock.isLocked())
-        return;  // Cache is being rebuilt — skip this trigger
-
-    auto& entry = sidechainLFOCache_[static_cast<size_t>(sourceTrackId)];
+    auto* cache = activeCache_.load(std::memory_order_acquire);
+    auto& entry = cache->entries[static_cast<size_t>(sourceTrackId)];
+    DBG("[SC-TRIG] triggerSidechainNoteOn srcTrack="
+        << sourceTrackId << " cacheCount=" << entry.count
+        << " modeFilter=" << (modeFilter.has_value() ? (int)modeFilter.value() : -1)
+        << " rendering=" << (int)renderingActive_.load(std::memory_order_relaxed));
     for (int i = 0; i < entry.count; ++i) {
+        // Filter by trigger mode if specified
+        if (modeFilter.has_value() && entry.trigMode[static_cast<size_t>(i)] != modeFilter.value())
+            continue;
+
         auto* lfo = entry.lfos[static_cast<size_t>(i)];
         bool crossTrack = entry.isCrossTrack[static_cast<size_t>(i)];
+        DBG("[SC-TRIG]   LFO[" << i << "] crossTrack=" << (int)crossTrack
+                               << " gated=" << (int)lfo->isGated()
+                               << " skipNative=" << (int)lfo->getSkipNativeResync() << " syncType="
+                               << juce::roundToInt(lfo->syncTypeParam->getCurrentValue())
+                               << " phase=" << lfo->getCurrentPhase()
+                               << " curValue=" << lfo->getCurrentValue()
+                               << " depth=" << lfo->depthParam->getCurrentValue()
+                               << " rate=" << lfo->rateParam->getCurrentValue());
         // Cross-track: force value=0 for transient gap.
         // Self-track: resync phase but preserve value (no zero gap needed).
         triggerLFONoteOnWithReset(lfo, crossTrack);
@@ -1728,11 +1733,14 @@ void PluginManager::gateSidechainLFOs(TrackId sourceTrackId) {
     if (sourceTrackId < 0 || sourceTrackId >= kMaxCacheTracks)
         return;
 
-    const juce::SpinLock::ScopedTryLockType lock(cacheLock_);
-    if (!lock.isLocked())
+    // Skip gating during offline rendering — the renderer processes much faster
+    // than real-time, so noteOn/noteOff arrive in the same block and the gate
+    // would kill the LFO before it can run its curve.
+    if (renderingActive_.load(std::memory_order_relaxed))
         return;
 
-    auto& entry = sidechainLFOCache_[static_cast<size_t>(sourceTrackId)];
+    auto* cache = activeCache_.load(std::memory_order_acquire);
+    auto& entry = cache->entries[static_cast<size_t>(sourceTrackId)];
     for (int i = 0; i < entry.count; ++i) {
         // Only gate cross-track (sidechain destination) LFOs.
         // Self-track LFOs should free-run and just reset phase on noteOn.
@@ -1740,20 +1748,32 @@ void PluginManager::gateSidechainLFOs(TrackId sourceTrackId) {
             continue;
         auto* lfo = entry.lfos[static_cast<size_t>(i)];
         // Only gate note-triggered LFOs (syncType == 2)
-        if (juce::roundToInt(lfo->syncTypeParam->getCurrentValue()) == 2)
+        if (juce::roundToInt(lfo->syncTypeParam->getCurrentValue()) == 2) {
+            DBG("[SC-GATE] gating LFO srcTrack=" << sourceTrackId << " idx=" << i);
             lfo->setGated(true);
+        }
     }
 }
 
 void PluginManager::prepareForRendering() {
-    renderingActive_ = true;
+    renderingActive_.store(true, std::memory_order_release);
     rackSyncManager_.setRenderingActive(true);
+
+    DBG("[RENDER] prepareForRendering called");
 
     // Reset sidechain monitors so held-note counts from playback don't
     // carry over into the render pass (which would prevent gating).
     for (auto& [trackId, pluginPtr] : sidechainMonitors_) {
-        if (auto* monitor = dynamic_cast<SidechainMonitorPlugin*>(pluginPtr.get()))
+        if (auto* monitor = dynamic_cast<SidechainMonitorPlugin*>(pluginPtr.get())) {
+            DBG("[RENDER] resetting MIDI sidechain monitor for track " << trackId);
             monitor->reset();
+        }
+    }
+    for (auto& [trackId, pluginPtr] : audioSidechainMonitors_) {
+        if (auto* monitor = dynamic_cast<AudioSidechainMonitorPlugin*>(pluginPtr.get())) {
+            DBG("[RENDER] resetting audio sidechain monitor for track " << trackId);
+            monitor->reset();
+        }
     }
 
     // Re-enable tone generators that were bypassed when transport stopped.
@@ -1767,26 +1787,120 @@ void PluginManager::prepareForRendering() {
         }
     }
 
-    // Enable all MIDI/Audio-triggered LFO assignments so modulation is active
-    // during offline rendering. The message-thread timer gating can't keep up
-    // with the renderer's speed, so we disable gating entirely.
+    // Un-gate all MIDI/Audio-triggered LFOs so modulation is active during
+    // offline rendering. The sidechain monitor triggers still fire, but the
+    // message-thread gate management can't keep up with render speed.
+    {
+        juce::ScopedLock lock(pluginLock_);
+        for (auto& [deviceId, sd] : syncedDevices_) {
+            for (auto& mod : sd.modifiers) {
+                if (auto* lfo = dynamic_cast<te::LFOModifier*>(mod.get())) {
+                    bool wasGated = lfo->isGated();
+                    lfo->setGated(false);
+                    DBG("[RENDER] un-gated device LFO devId="
+                        << deviceId << " wasGated=" << (int)wasGated
+                        << " syncType=" << juce::roundToInt(lfo->syncTypeParam->getCurrentValue())
+                        << " curValue=" << lfo->getCurrentValue());
+                }
+            }
+        }
+    }
+    for (auto& [trackId, tms] : trackModStates_) {
+        for (auto& mod : tms.modifiers) {
+            if (auto* lfo = dynamic_cast<te::LFOModifier*>(mod.get())) {
+                bool wasGated = lfo->isGated();
+                lfo->setGated(false);
+                DBG("[RENDER] un-gated track LFO trackId="
+                    << trackId << " wasGated=" << (int)wasGated
+                    << " syncType=" << juce::roundToInt(lfo->syncTypeParam->getCurrentValue())
+                    << " curValue=" << lfo->getCurrentValue());
+            }
+        }
+    }
+    rackSyncManager_.ungateAllLFOs();
+
     auto& tm = TrackManager::getInstance();
     for (const auto& track : tm.getTracks()) {
         updateDeviceModifierProperties(track.id);
         rackSyncManager_.updateAllModifierProperties(track.id);
     }
+
+    // Log assignment state after update
+    {
+        juce::ScopedLock lock(pluginLock_);
+        for (auto& [deviceId, sd] : syncedDevices_) {
+            size_t modIdx = 0;
+            for (auto& mod : sd.modifiers) {
+                if (auto* lfo = dynamic_cast<te::LFOModifier*>(mod.get())) {
+                    DBG("[RENDER] post-update device LFO devId="
+                        << deviceId << " modIdx=" << modIdx << " gated=" << (int)lfo->isGated()
+                        << " curValue=" << lfo->getCurrentValue()
+                        << " depth=" << lfo->depthParam->getCurrentValue()
+                        << " wave=" << juce::roundToInt(lfo->waveParam->getCurrentValue()));
+                }
+                ++modIdx;
+            }
+        }
+    }
+
+    DBG("[RENDER] prepareForRendering done, monitors=" << sidechainMonitors_.size());
 }
 
 void PluginManager::restoreAfterRendering() {
-    renderingActive_ = false;
+    renderingActive_.store(false, std::memory_order_release);
     rackSyncManager_.setRenderingActive(false);
+    // LFOs were un-gated for rendering. They'll be re-gated naturally by
+    // gateSidechainLFOs on the next note-off, or by syncDeviceModifiers
+    // if the edit is rebuilt.
+}
+
+void PluginManager::resetSidechainState() {
+    // 1. Reset all sidechain monitors (zeroes localHeldNoteCount_ and bus)
+    for (auto& [trackId, pluginPtr] : sidechainMonitors_) {
+        if (auto* monitor = dynamic_cast<SidechainMonitorPlugin*>(pluginPtr.get()))
+            monitor->reset();
+    }
+    for (auto& [trackId, pluginPtr] : audioSidechainMonitors_) {
+        if (auto* monitor = dynamic_cast<AudioSidechainMonitorPlugin*>(pluginPtr.get()))
+            monitor->reset();
+    }
+
+    // 2. Re-gate all triggered LFOs (those with skipNativeResync).
+    {
+        juce::ScopedLock lock(pluginLock_);
+        for (auto& [deviceId, sd] : syncedDevices_) {
+            for (auto& mod : sd.modifiers) {
+                if (auto* lfo = dynamic_cast<te::LFOModifier*>(mod.get())) {
+                    if (lfo->getSkipNativeResync())
+                        lfo->setGated(true);
+                }
+            }
+        }
+    }
+
+    // 3. Re-gate triggered LFOs on track-level modifiers
+    for (auto& [trackId, tms] : trackModStates_) {
+        for (auto& mod : tms.modifiers) {
+            if (auto* lfo = dynamic_cast<te::LFOModifier*>(mod.get())) {
+                if (lfo->getSkipNativeResync())
+                    lfo->setGated(true);
+            }
+        }
+    }
+
+    // 4. Re-gate triggered LFOs inside racks
+    rackSyncManager_.regateTriggeredLFOs();
 }
 
 void PluginManager::rebuildSidechainLFOCache() {
     auto& tm = TrackManager::getInstance();
 
-    // Build new cache on the stack, then swap under lock
-    std::array<PerTrackEntry, kMaxCacheTracks> newCache{};
+    // Build into the inactive buffer, then atomically swap the pointer.
+    // Audio thread reads through activeCache_ with acquire — no lock needed.
+    auto& newCache = cacheBuffers_[writeCacheIndex_].entries;
+    // Zero out the inactive buffer before populating
+    for (auto& e : newCache)
+        e = PerTrackEntry{};
 
     for (const auto& track : tm.getTracks()) {
         if (track.id < 0 || track.id >= kMaxCacheTracks)
@@ -1794,7 +1908,30 @@ void PluginManager::rebuildSidechainLFOCache() {
 
         auto& entry = newCache[static_cast<size_t>(track.id)];
         std::vector<te::LFOModifier*> lfos;
+        std::vector<LFOTriggerMode> modes;
         int selfTrackCount = 0;  // track how many are self-track (added first)
+
+        // Helper to collect LFOs from a device's synced modifiers,
+        // pairing each with the trigger mode from the MAGDA ModInfo.
+        auto collectDeviceLFOs = [&](const DeviceInfo& device) {
+            auto it = syncedDevices_.find(device.id);
+            if (it == syncedDevices_.end())
+                return;
+            // TE modifiers are created 1:1 with enabled+linked MAGDA mods
+            size_t teModIdx = 0;
+            for (const auto& modInfo : device.mods) {
+                if (!modInfo.enabled || modInfo.links.empty())
+                    continue;
+                if (teModIdx >= it->second.modifiers.size())
+                    break;
+                auto& mod = it->second.modifiers[teModIdx];
+                if (auto* lfo = dynamic_cast<te::LFOModifier*>(mod.get())) {
+                    lfos.push_back(lfo);
+                    modes.push_back(modInfo.triggerMode);
+                }
+                ++teModIdx;
+            }
+        };
 
         // 1. Self-track LFOs: collect from syncedDevices_ modifiers for this track's devices
         //    Skip devices that have a cross-track sidechain source — those LFOs
@@ -1805,13 +1942,7 @@ void PluginManager::rebuildSidechainLFOCache() {
             const auto& device = getDevice(element);
             if (device.sidechain.sourceTrackId != INVALID_TRACK_ID)
                 continue;  // Has external sidechain — skip self-triggering
-            auto it = syncedDevices_.find(device.id);
-            if (it == syncedDevices_.end())
-                continue;
-            for (auto& mod : it->second.modifiers) {
-                if (auto* lfo = dynamic_cast<te::LFOModifier*>(mod.get()))
-                    lfos.push_back(lfo);
-            }
+            collectDeviceLFOs(device);
         }
 
         // Also collect from racks on this track (skip racks with external sidechain)
@@ -1838,8 +1969,13 @@ void PluginManager::rebuildSidechainLFOCache() {
                     }
                 }
             }
-            if (!hasRackSidechain)
+            if (!hasRackSidechain) {
+                size_t before = lfos.size();
                 rackSyncManager_.collectLFOModifiers(track.id, lfos);
+                // Rack LFOs default to Free trigger mode (TODO: track per-mod modes)
+                modes.resize(lfos.size(), LFOTriggerMode::Free);
+                juce::ignoreUnused(before);
+            }
         }
 
         selfTrackCount = static_cast<int>(lfos.size());
@@ -1899,16 +2035,15 @@ void PluginManager::rebuildSidechainLFOCache() {
                 // Only collect from devices whose sidechain source is this track
                 if (device.sidechain.sourceTrackId != track.id)
                     continue;
-                auto it = syncedDevices_.find(device.id);
-                if (it == syncedDevices_.end())
-                    continue;
-                for (auto& mod : it->second.modifiers) {
-                    if (auto* lfo = dynamic_cast<te::LFOModifier*>(mod.get()))
-                        lfos.push_back(lfo);
-                }
+                collectDeviceLFOs(device);
             }
             // TODO: also filter rack LFOs by sidechain source
-            rackSyncManager_.collectLFOModifiers(otherTrack.id, lfos);
+            {
+                size_t before = lfos.size();
+                rackSyncManager_.collectLFOModifiers(otherTrack.id, lfos);
+                modes.resize(lfos.size(), LFOTriggerMode::Free);
+                juce::ignoreUnused(before);
+            }
         }
 
         // Write to cache entry (capped at kMaxLFOs)
@@ -1918,14 +2053,30 @@ void PluginManager::rebuildSidechainLFOCache() {
         for (int i = 0; i < entry.count; ++i) {
             entry.lfos[static_cast<size_t>(i)] = lfos[static_cast<size_t>(i)];
             entry.isCrossTrack[static_cast<size_t>(i)] = (i >= selfTrackCount);
+            entry.trigMode[static_cast<size_t>(i)] = (static_cast<size_t>(i) < modes.size())
+                                                         ? modes[static_cast<size_t>(i)]
+                                                         : LFOTriggerMode::Free;
+        }
+        if (entry.count > 0 && cacheRebuildLogCount_++ < 3) {
+            DBG("[SC-CACHE] track=" << track.id << " totalLFOs=" << entry.count
+                                    << " selfTrack=" << selfTrackCount
+                                    << " crossTrack=" << (entry.count - selfTrackCount));
+            for (int i = 0; i < entry.count; ++i) {
+                auto* lfo = entry.lfos[static_cast<size_t>(i)];
+                DBG("[SC-CACHE]   LFO["
+                    << i << "] crossTrack=" << (int)entry.isCrossTrack[static_cast<size_t>(i)]
+                    << " trigMode=" << (int)entry.trigMode[static_cast<size_t>(i)]
+                    << " gated=" << (int)lfo->isGated()
+                    << " skipNativeResync=" << (int)lfo->getSkipNativeResync()
+                    << " syncType=" << juce::roundToInt(lfo->syncTypeParam->getCurrentValue()));
+            }
         }
     }
 
-    // Swap under lock
-    {
-        const juce::SpinLock::ScopedLockType lock(cacheLock_);
-        sidechainLFOCache_ = newCache;
-    }
+    // Atomically swap to the newly built buffer. The audio thread will see
+    // the new cache on its next read via acquire on activeCache_.
+    activeCache_.store(&cacheBuffers_[writeCacheIndex_], std::memory_order_release);
+    writeCacheIndex_ = 1 - writeCacheIndex_;
 }
 
 // =============================================================================
@@ -1992,10 +2143,19 @@ void PluginManager::resyncDeviceModifiers(TrackId trackId) {
         auto& storedFP = modLinkFingerprints_[trackId];
 
         if (currentFP != storedFP) {
-            // Link structure changed — full rebuild
-            storedFP = currentFP;
-            syncDeviceModifiers(trackId, teTrack);
-            syncDeviceMacros(trackId, teTrack);
+            // During offline rendering, skip full rebuilds — syncDeviceModifiers
+            // creates new TE LFOs that start gated, undoing prepareForRendering's
+            // un-gating and silencing the sidechained track.
+            if (renderingActive_.load(std::memory_order_relaxed)) {
+                DBG("[RENDER] skipping full modifier rebuild for track " << trackId
+                                                                         << " — rendering active");
+                updateDeviceModifierProperties(trackId);
+            } else {
+                // Link structure changed — full rebuild
+                storedFP = currentFP;
+                syncDeviceModifiers(trackId, teTrack);
+                syncDeviceMacros(trackId, teTrack);
+            }
         } else {
             // Properties only changed (rate, waveform, etc.) — update in-place
             updateDeviceModifierProperties(trackId);
@@ -2433,6 +2593,135 @@ void PluginManager::removeSidechainMonitor(TrackId sourceTrackId) {
     DBG("PluginManager::removeSidechainMonitor - removing monitor from track " << sourceTrackId);
     auto plugin = it->second;
     sidechainMonitors_.erase(it);
+
+    if (plugin)
+        plugin->deleteFromParent();
+}
+
+// =============================================================================
+// Audio Sidechain Monitor Plugin Lifecycle
+// =============================================================================
+
+bool PluginManager::trackNeedsAudioSidechainMonitor(TrackId trackId) const {
+    // Check if any device sidechained from this track has an Audio-triggered mod.
+    // The sidechain routing type (MIDI vs Audio) is independent of the LFO trigger
+    // mode, so we check the mod's triggerMode rather than sidechain.type.
+    auto deviceHasAudioTrigger = [&](const DeviceInfo& device) {
+        if (device.sidechain.sourceTrackId != trackId)
+            return false;
+        for (const auto& mod : device.mods) {
+            if (mod.triggerMode == LFOTriggerMode::Audio)
+                return true;
+        }
+        return false;
+    };
+
+    for (const auto& track : TrackManager::getInstance().getTracks()) {
+        for (const auto& element : track.chainElements) {
+            if (isDevice(element)) {
+                if (deviceHasAudioTrigger(getDevice(element)))
+                    return true;
+            } else if (isRack(element)) {
+                const auto& rack = getRack(element);
+                // Check rack-level mods
+                if (rack.sidechain.sourceTrackId == trackId) {
+                    for (const auto& mod : rack.mods) {
+                        if (mod.triggerMode == LFOTriggerMode::Audio)
+                            return true;
+                    }
+                }
+                // Check devices inside rack
+                for (const auto& chain : rack.chains) {
+                    for (const auto& ce : chain.elements) {
+                        if (isDevice(ce) && deviceHasAudioTrigger(getDevice(ce)))
+                            return true;
+                    }
+                }
+            }
+        }
+    }
+    return false;
+}
+
+void PluginManager::checkAudioSidechainMonitor(TrackId trackId) {
+    if (trackNeedsAudioSidechainMonitor(trackId))
+        ensureAudioSidechainMonitor(trackId);
+    else
+        removeAudioSidechainMonitor(trackId);
+
+    rebuildSidechainLFOCache();
+}
+
+void PluginManager::ensureAudioSidechainMonitor(TrackId sourceTrackId) {
+    if (audioSidechainMonitors_.count(sourceTrackId) > 0)
+        return;
+
+    auto* teTrack = trackController_.getAudioTrack(sourceTrackId);
+    if (!teTrack) {
+        DBG("PluginManager::ensureAudioSidechainMonitor - track " << sourceTrackId
+                                                                  << " has no TE AudioTrack");
+        return;
+    }
+
+    // Check if an AudioSidechainMonitorPlugin already exists on the track
+    for (int i = 0; i < teTrack->pluginList.size(); ++i) {
+        if (dynamic_cast<AudioSidechainMonitorPlugin*>(teTrack->pluginList[i])) {
+            DBG("PluginManager::ensureAudioSidechainMonitor - track "
+                << sourceTrackId << " found existing audio monitor plugin on TE track");
+            audioSidechainMonitors_[sourceTrackId] = teTrack->pluginList[i];
+            auto* mon = dynamic_cast<AudioSidechainMonitorPlugin*>(teTrack->pluginList[i]);
+            mon->setSourceTrackId(sourceTrackId);
+            mon->setPluginManager(this);
+            return;
+        }
+    }
+
+    // Create a new audio monitor plugin
+    juce::ValueTree pluginState(te::IDs::PLUGIN);
+    pluginState.setProperty(te::IDs::type, AudioSidechainMonitorPlugin::xmlTypeName, nullptr);
+    pluginState.setProperty(juce::Identifier("sourceTrackId"), sourceTrackId, nullptr);
+
+    DBG("PluginManager::ensureAudioSidechainMonitor - creating new audio monitor for track "
+        << sourceTrackId);
+    auto plugin = edit_.getPluginCache().createNewPlugin(pluginState);
+    if (plugin) {
+        if (auto* mon = dynamic_cast<AudioSidechainMonitorPlugin*>(plugin.get())) {
+            mon->setSourceTrackId(sourceTrackId);
+            mon->setPluginManager(this);
+        }
+        // Insert near the end of the chain so it sees generated audio.
+        // TE's LevelMeterPlugin and VolumeAndPanPlugin are auto-added at the very end,
+        // so inserting at the last position before those is ideal.
+        int insertPos = teTrack->pluginList.size();
+        // Walk backwards past TE's built-in tail plugins
+        for (int i = teTrack->pluginList.size() - 1; i >= 0; --i) {
+            auto* p = teTrack->pluginList[i];
+            if (dynamic_cast<te::LevelMeterPlugin*>(p) ||
+                dynamic_cast<te::VolumeAndPanPlugin*>(p)) {
+                insertPos = i;
+            } else {
+                break;
+            }
+        }
+        teTrack->pluginList.insertPlugin(plugin, insertPos, nullptr);
+        audioSidechainMonitors_[sourceTrackId] = plugin;
+        DBG("PluginManager::ensureAudioSidechainMonitor - inserted audio monitor at position "
+            << insertPos << " on track " << sourceTrackId);
+    } else {
+        DBG("PluginManager::ensureAudioSidechainMonitor - FAILED to create audio monitor for track "
+            << sourceTrackId);
+    }
+}
+
+void PluginManager::removeAudioSidechainMonitor(TrackId sourceTrackId) {
+    auto it = audioSidechainMonitors_.find(sourceTrackId);
+    if (it == audioSidechainMonitors_.end())
+        return;
+
+    DBG("PluginManager::removeAudioSidechainMonitor - removing audio monitor from track "
+        << sourceTrackId);
+    auto plugin = it->second;
+    audioSidechainMonitors_.erase(it);
 
     if (plugin)
         plugin->deleteFromParent();
@@ -3069,7 +3358,7 @@ void PluginManager::updateTransportSyncedProcessors(bool isPlaying) {
 
     // During offline rendering, keep tone generators enabled regardless of
     // transport state — the renderer drives playback independently.
-    if (renderingActive_)
+    if (renderingActive_.load(std::memory_order_relaxed))
         return;
 
     for (const auto& [deviceId, sd] : syncedDevices_) {

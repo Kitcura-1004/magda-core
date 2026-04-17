@@ -9,6 +9,7 @@
 #include "../core/ClipManager.hpp"
 #include "../core/TrackManager.hpp"
 #include "serialization/ProjectSerializer.hpp"
+#include "version.hpp"
 
 namespace magda {
 
@@ -30,7 +31,7 @@ ProjectManager& ProjectManager::getInstance() {
 ProjectManager::ProjectManager() {
     // Initialize with default project info
     currentProject_.name = "Untitled";
-    currentProject_.version = "1.0.0";
+    currentProject_.version = MAGDA_VERSION;
 
     // Create temp media directory so recordings/renders have a home even before
     // the user explicitly creates or saves a project.
@@ -69,7 +70,7 @@ bool ProjectManager::newProject() {
     // Reset project state
     currentProject_ = ProjectInfo();
     currentProject_.name = "Untitled";
-    currentProject_.version = "1.0.0";
+    currentProject_.version = MAGDA_VERSION;
     currentFile_ = juce::File();
     isProjectOpen_ = true;
 
@@ -122,7 +123,9 @@ bool ProjectManager::saveProjectAs(const juce::File& file) {
 
     // Save to file
     if (!ProjectSerializer::saveToFile(actualFile, newProject)) {
-        lastError_ = "Failed to save project: " + ProjectSerializer::getLastError();
+        DBG("Failed to save project: " + ProjectSerializer::getLastError());
+        lastError_ =
+            "The project could not be saved. Please check disk space and file permissions.";
         return false;
     }
 
@@ -183,7 +186,9 @@ bool ProjectManager::loadProject(const juce::File& file,
     // Stage first (file I/O + parse + validate)
     StagedProjectData staged;
     if (!ProjectSerializer::loadAndStage(fileToLoad, staged)) {
-        lastError_ = "Failed to load project: " + ProjectSerializer::getLastError();
+        DBG("Failed to load project: " + ProjectSerializer::getLastError());
+        lastError_ = "The project file could not be opened. It may be corrupted or from an "
+                     "incompatible version.";
         return false;
     }
 
@@ -266,8 +271,12 @@ void ProjectManager::loadProjectAsync(const juce::File& file,
                                onComplete, this]() {
         auto staged = std::make_shared<StagedProjectData>();
         bool ok = ProjectSerializer::loadAndStage(fileCopy, *staged);
-        juce::String error =
-            ok ? juce::String() : ("Failed to load project: " + ProjectSerializer::getLastError());
+        juce::String error;
+        if (!ok) {
+            DBG("Failed to load project: " + ProjectSerializer::getLastError());
+            error = "The project file could not be opened. It may be corrupted or from an "
+                    "incompatible version.";
+        }
 
         // Bounce back to the message thread for commit + notification
         juce::MessageManager::callAsync([this, staged, ok, error, originalFile,

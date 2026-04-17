@@ -127,7 +127,9 @@ bool ProjectSerializer::deserializeTrackInfo(const juce::var& json, TrackInfo& o
 
     // Mixer state
     outTrack.volume = obj->getProperty("volume");
+    outTrack.manualVolume = outTrack.volume;
     outTrack.pan = obj->getProperty("pan");
+    outTrack.manualPan = outTrack.pan;
     outTrack.muted = obj->getProperty("muted");
     outTrack.soloed = obj->getProperty("soloed");
     outTrack.recordArmed = obj->getProperty("recordArmed");
@@ -328,8 +330,7 @@ juce::var ProjectSerializer::serializeDeviceInfo(const DeviceInfo& device) {
     }
     obj->setProperty("visibleParameters", juce::var(visibleParamsArray));
 
-    // Gain stage
-    obj->setProperty("gainParameterIndex", device.gainParameterIndex);
+    // Device volume
     obj->setProperty("gainValue", device.gainValue);
     obj->setProperty("gainDb", device.gainDb);
 
@@ -443,8 +444,7 @@ bool ProjectSerializer::deserializeDeviceInfo(const juce::var& json, DeviceInfo&
         }
     }
 
-    // Gain stage
-    outDevice.gainParameterIndex = obj->getProperty("gainParameterIndex");
+    // Device volume
     outDevice.gainValue = obj->getProperty("gainValue");
     outDevice.gainDb = obj->getProperty("gainDb");
 

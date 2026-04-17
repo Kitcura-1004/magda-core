@@ -158,7 +158,13 @@ class MainWindow::MainComponent::ResizeHandle : public juce::Component {
         }
     }
 
+    void mouseDoubleClick(const juce::MouseEvent&) override {
+        if (onDoubleClick)
+            onDoubleClick();
+    }
+
     std::function<void(int)> onResize;
+    std::function<void()> onDoubleClick;
 
   private:
     Direction direction;
@@ -179,6 +185,13 @@ MainWindow::MainWindow(AudioEngine* audioEngine)
     mainComponent = new MainComponent(externalAudioEngine_);
     juce::Logger::writeToLog("[MainWindow] MainComponent created");
     setContentOwned(mainComponent, true);  // Window takes ownership
+
+    // Register command manager key mappings on the DocumentWindow so that
+    // shortcuts (Cmd+T, Cmd+Z, etc.) work regardless of which child
+    // component has keyboard focus. Previously this was on MainComponent,
+    // which missed events when a child (e.g. track name label) consumed
+    // focus after track creation.
+    addKeyListener(mainComponent->getCommandManager().getKeyMappings());
 
     // Setup menu bar
     juce::Logger::writeToLog("[MainWindow] Setting up menu bar...");
@@ -232,6 +245,7 @@ MainWindow::~MainWindow() {
     setMenuBar(nullptr);
 #endif
 
+    removeKeyListener(mainComponent->getCommandManager().getKeyMappings());
     DBG("  [5c] MainWindow::~MainWindow - about to destroy content");
 }
 
@@ -340,14 +354,12 @@ MainWindow::MainComponent::MainComponent(AudioEngine* externalEngine) {
         int screenWidth = display->userArea.getWidth();
         if (screenWidth >= 2560) {  // Large display (1440p+)
             leftPanelWidth = rightPanelWidth = 400;
-            bottomPanelHeight = 380;
         } else if (screenWidth >= 1920) {  // Full HD
             leftPanelWidth = rightPanelWidth = 350;
-            bottomPanelHeight = 350;
         } else {
             leftPanelWidth = rightPanelWidth = layout.defaultLeftPanelWidth;
-            bottomPanelHeight = layout.defaultBottomPanelHeight;
         }
+        bottomPanelHeight = layout.defaultBottomPanelHeight;
     } else {
         leftPanelWidth = rightPanelWidth = layout.defaultLeftPanelWidth;
         bottomPanelHeight = layout.defaultBottomPanelHeight;
@@ -409,6 +421,28 @@ MainWindow::MainComponent::MainComponent(AudioEngine* externalEngine) {
         bottomPanelCollapsed = collapsed;
         if (footerBar)
             footerBar->setBottomPanelCollapsed(collapsed);
+        resized();
+    };
+    bottomPanel->onHeaderDoubleClick = [this]() {
+        auto& layout = LayoutConfig::getInstance();
+        int optimalHeight = layout.defaultBottomPanelHeight;
+        auto type = bottomPanel->getActiveContentType();
+        if (type == daw::ui::PanelContentType::PianoRoll ||
+            type == daw::ui::PanelContentType::DrumGridClipView) {
+            optimalHeight = getHeight() * 2 / 3;
+        } else if (type == daw::ui::PanelContentType::TrackChain) {
+            optimalHeight = juce::jmax(360, getHeight() / 3);
+        }
+        int maxHeight = static_cast<int>(getHeight() * layout.maxBottomPanelRatio);
+        bottomPanelHeight =
+            juce::jlimit(layout.minBottomPanelHeight,
+                         juce::jmax(layout.minBottomPanelHeight, maxHeight), optimalHeight);
+        if (bottomPanelCollapsed) {
+            bottomPanelCollapsed = false;
+            bottomPanel->setCollapsed(false);
+            if (footerBar)
+                footerBar->setBottomPanelCollapsed(false);
+        }
         resized();
     };
     addAndMakeVisible(*bottomPanel);
@@ -776,6 +810,11 @@ void MainWindow::MainComponent::setupAudioEngineCallbacks(AudioEngine* engine) {
     transportPanel->onGridQuantizeChange = [this](bool autoGrid, int numerator, int denominator) {
         mainView->getTimelineController().dispatch(
             SetGridQuantizeEvent{autoGrid, numerator, denominator});
+    };
+
+    transportPanel->onAutomationWriteToggle = [this](bool enabled) {
+        if (auto* bridge = getAudioEngine()->getAudioBridge())
+            bridge->setAutomationWriteEnabled(enabled);
     };
 
     // Navigation callbacks

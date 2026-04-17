@@ -26,6 +26,16 @@ TransportPanel::TransportPanel() {
     cpuValueLabel->setFont(FontManager::getInstance().getMonoFont(11.0f));
     cpuValueLabel->setJustificationType(juce::Justification::centred);
     addAndMakeVisible(*cpuValueLabel);
+
+    // Automation write indicator label — purple text, visible only when write mode on
+    automationWriteLabel = std::make_unique<juce::Label>("automationWrite", "AUTOMATION WRITE");
+    automationWriteLabel->setColour(juce::Label::textColourId,
+                                    DarkTheme::getColour(DarkTheme::ACCENT_PURPLE));
+    automationWriteLabel->setColour(juce::Label::backgroundColourId,
+                                    juce::Colours::transparentBlack);
+    automationWriteLabel->setFont(FontManager::getInstance().getUIFont(10.0f).boldened());
+    automationWriteLabel->setJustificationType(juce::Justification::centredRight);
+    addChildComponent(*automationWriteLabel);
 }
 
 TransportPanel::~TransportPanel() {
@@ -137,7 +147,8 @@ void TransportPanel::resized() {
     auto timeArea = getTimeDisplayArea();
     auto tempoArea = getTempoQuantizeArea();
 
-    // Transport controls layout — order: Home, Prev, Next, Play, Stop, Rec, Loop, BackToArr
+    // Transport controls layout — order: Home, Prev, Next, Play, Stop, Rec, AutoWrite, Loop,
+    // BackToArr
     auto buttonMargin = 3;
     auto buttonSize = transportArea.getHeight() - buttonMargin * 2;
     auto buttonY = buttonMargin;
@@ -161,6 +172,9 @@ void TransportPanel::resized() {
     x += buttonSize + buttonSpacing;
 
     recordButton->setBounds(x, buttonY, buttonSize, buttonSize);
+    x += buttonSize + buttonSpacing;
+
+    automationWriteButton->setBounds(x, buttonY, buttonSize, buttonSize);
     x += buttonSize + buttonSpacing;
 
     loopButton->setBounds(x, buttonY, buttonSize, buttonSize);
@@ -258,6 +272,14 @@ void TransportPanel::resized() {
     gridSlashLabel->setBounds(0, 0, 0, 0);
     gridSlashLabel->setVisible(false);
 
+    // Automation write indicator — fills the gap between grid quantize and CPU area
+    int autoWriteLeft = gridBtnX + btnWidth + 8;
+    int autoWriteRight = getCpuArea().getX() - 4;
+    if (autoWriteRight > autoWriteLeft) {
+        automationWriteLabel->setBounds(autoWriteLeft, 0, autoWriteRight - autoWriteLeft,
+                                        getHeight());
+    }
+
     // CPU usage — rounded frame: header (20%) + value
     auto cpuArea = getCpuArea().reduced(4, 3);
     int headerHeight = juce::roundToInt(cpuArea.getHeight() * 0.20f);
@@ -266,11 +288,11 @@ void TransportPanel::resized() {
 }
 
 juce::Rectangle<int> TransportPanel::getTransportControlsArea() const {
-    // 8 square buttons + punch stacked box (boxWidth=130)
+    // 9 square buttons + punch stacked box (boxWidth=130)
     int buttonSize = getHeight() - 6;
     int boxWidth = 130;
-    // 6px left pad + 8 buttons + 7*1px spacing + 3px gap + punch box + 6px right pad
-    int width = 6 + 8 * buttonSize + 7 + 3 + boxWidth + 6;
+    // 6px left pad + 9 buttons + 8*1px spacing + 3px gap + punch box + 6px right pad
+    int width = 6 + 9 * buttonSize + 8 + 3 + boxWidth + 6;
     return getLocalBounds().removeFromLeft(width);
 }
 
@@ -336,6 +358,16 @@ void TransportPanel::setupTransportButtons() {
         isRecording = false;
         playButton->setActive(false);
         recordButton->setActive(false);
+        // Pressing stop also disarms automation write mode, matching the
+        // transport-centric mental model (stop = end of pass).
+        if (isAutomationWriteEnabled) {
+            isAutomationWriteEnabled = false;
+            automationWriteButton->setActive(false);
+            if (automationWriteLabel)
+                automationWriteLabel->setVisible(false);
+            if (onAutomationWriteToggle)
+                onAutomationWriteToggle(false);
+        }
         if (onStop)
             onStop();
         repaint();
@@ -355,6 +387,25 @@ void TransportPanel::setupTransportButtons() {
         repaint();
     };
     addAndMakeVisible(*recordButton);
+
+    // Automation Write button — purple when enabled (write mode),
+    // grey when disabled. Matches the purple automation accent used on
+    // lane headers and control tints.
+    automationWriteButton = std::make_unique<SvgButton>(
+        "Automation Write", BinaryData::automation_off_svg, BinaryData::automation_off_svgSize,
+        BinaryData::automation_on_svg, BinaryData::automation_on_svgSize);
+    styleTransportButton(*automationWriteButton, DarkTheme::getColour(DarkTheme::ACCENT_PURPLE));
+    automationWriteButton->setActive(false);
+    automationWriteButton->onClick = [this]() {
+        isAutomationWriteEnabled = !isAutomationWriteEnabled;
+        automationWriteButton->setActive(isAutomationWriteEnabled);
+        if (automationWriteLabel)
+            automationWriteLabel->setVisible(isAutomationWriteEnabled);
+        if (onAutomationWriteToggle)
+            onAutomationWriteToggle(isAutomationWriteEnabled);
+        repaint();
+    };
+    addAndMakeVisible(*automationWriteButton);
 
     // Pause button
     pauseButton = std::make_unique<SvgButton>(
@@ -935,6 +986,15 @@ void TransportPanel::setTempo(double bpm) {
     setTimeSelection(cachedSelectionStart, cachedSelectionEnd, cachedSelectionActive);
     setLoopRegion(cachedLoopStart, cachedLoopEnd, cachedLoopEnabled);
     setPunchRegion(cachedPunchStart, cachedPunchEnd, cachedPunchInEnabled, cachedPunchOutEnabled);
+}
+
+void TransportPanel::setAutomationWriteEnabled(bool enabled) {
+    if (isAutomationWriteEnabled != enabled) {
+        isAutomationWriteEnabled = enabled;
+        automationWriteButton->setActive(isAutomationWriteEnabled);
+        if (automationWriteLabel)
+            automationWriteLabel->setVisible(isAutomationWriteEnabled);
+    }
 }
 
 void TransportPanel::setPlaybackState(bool playing) {

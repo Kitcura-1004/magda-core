@@ -32,6 +32,7 @@ class TabbedPanel : public juce::Component, public PanelStateListener {
 
     void paint(juce::Graphics& g) override;
     void resized() override;
+    void mouseDoubleClick(const juce::MouseEvent& event) override;
 
     // PanelStateListener interface
     void panelStateChanged(PanelLocation location, const PanelState& state) override;
@@ -91,6 +92,14 @@ class TabbedPanel : public juce::Component, public PanelStateListener {
      */
     PanelContent* getActiveContent() const {
         return activeContent_;
+    }
+
+    /**
+     * @brief Hook called just before content switches
+     * Override to manage header population/depopulation.
+     */
+    virtual void onContentWillSwitch(PanelContent* outgoing, PanelContent* incoming) {
+        juce::ignoreUnused(outgoing, incoming);
     }
 
     /**

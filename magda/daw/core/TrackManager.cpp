@@ -630,17 +630,21 @@ void TrackManager::setTrackColour(TrackId trackId, juce::Colour colour) {
     }
 }
 
-void TrackManager::setTrackVolume(TrackId trackId, float volume) {
+void TrackManager::setTrackVolume(TrackId trackId, float volume, bool fromAutomation) {
     if (auto* track = getTrack(trackId)) {
         // Allow up to +6dB gain (10^(6/20) ≈ 2.0)
         track->volume = juce::jlimit(0.0f, 2.0f, volume);
+        if (!fromAutomation)
+            track->manualVolume = track->volume;
         notifyTrackPropertyChanged(trackId);
     }
 }
 
-void TrackManager::setTrackPan(TrackId trackId, float pan) {
+void TrackManager::setTrackPan(TrackId trackId, float pan, bool fromAutomation) {
     if (auto* track = getTrack(trackId)) {
         track->pan = juce::jlimit(-1.0f, 1.0f, pan);
+        if (!fromAutomation)
+            track->manualPan = track->pan;
         notifyTrackPropertyChanged(trackId);
     }
 }
@@ -1781,6 +1785,14 @@ void TrackManager::notifyDeviceModifiersChanged(TrackId trackId) {
     for (size_t i = 0; i < listeners_.size(); ++i) {
         if (listeners_[i])
             listeners_[i]->deviceModifiersChanged(trackId);
+    }
+}
+
+void TrackManager::notifyAudioSidechainTriggered(TrackId sourceTrackId) {
+    ScopedNotifyGuard guard(*this);
+    for (size_t i = 0; i < listeners_.size(); ++i) {
+        if (listeners_[i])
+            listeners_[i]->audioSidechainTriggered(sourceTrackId);
     }
 }
 
