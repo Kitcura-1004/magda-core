@@ -215,6 +215,7 @@ set(DAW_CORE_SOURCES
     core/MidiNoteCommands.cpp
     core/ParameterInfo.cpp
     core/ParameterUtils.cpp
+    core/StringTable.cpp
     core/ParameterDetector.cpp
     engine/TracktionEngineWrapper.cpp
     engine/TracktionEngineWrapperInit.cpp
@@ -347,6 +348,7 @@ set(DAW_UI_SOURCES
     ui/panels/content/AIChatConsoleContent.cpp
     ui/panels/content/ScriptingConsoleContent.cpp
     ui/panels/content/DSLTokeniser.cpp
+    ui/panels/content/PanelContent.cpp
     ui/panels/content/TrackChainContent.cpp
     ui/panels/content/MidiEditorContent.cpp
     ui/panels/content/PianoRollContent.cpp
@@ -953,5 +955,23 @@ else()
             "$<TARGET_FILE:magda_plugin_scanner>"
             "$<TARGET_FILE_DIR:magda_daw_app>/magda_plugin_scanner"
         COMMENT "Copying plugin scanner alongside app executable"
+    )
+endif()
+
+# Copy lang/ (localization JSON) into the app so StringTable can load it at runtime.
+set(MAGDA_LANG_SRC "${CMAKE_CURRENT_SOURCE_DIR}/../../lang")
+if(APPLE)
+    add_custom_command(TARGET magda_daw_app POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+            "${MAGDA_LANG_SRC}"
+            "$<TARGET_BUNDLE_CONTENT_DIR:magda_daw_app>/Resources/lang"
+        COMMENT "Copying localization files to app bundle Resources"
+    )
+else()
+    add_custom_command(TARGET magda_daw_app POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+            "${MAGDA_LANG_SRC}"
+            "$<TARGET_FILE_DIR:magda_daw_app>/lang"
+        COMMENT "Copying localization files alongside app executable"
     )
 endif()
