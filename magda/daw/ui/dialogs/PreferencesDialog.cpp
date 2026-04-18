@@ -6,6 +6,7 @@
 #include "../themes/DarkTheme.hpp"
 #include "../themes/DialogLookAndFeel.hpp"
 #include "../themes/FontManager.hpp"
+#include "../i18n/TranslationManager.hpp"
 #include "../windows/MainWindow.hpp"
 #include "core/Config.hpp"
 
@@ -17,7 +18,7 @@ namespace {
 void setupSlider(juce::Component& owner, juce::Slider& slider, juce::Label& label,
                  const juce::String& labelText, double min, double max, double interval,
                  const juce::String& suffix = "") {
-    label.setText(labelText, juce::dontSendNotification);
+    label.setText(magda::i18n::tr(labelText), juce::dontSendNotification);
     label.setFont(magda::FontManager::getInstance().getUIFont(12.0f));
     label.setColour(juce::Label::textColourId,
                     magda::DarkTheme::getColour(magda::DarkTheme::TEXT_PRIMARY));
@@ -27,7 +28,7 @@ void setupSlider(juce::Component& owner, juce::Slider& slider, juce::Label& labe
     slider.setRange(min, max, interval);
     slider.setSliderStyle(juce::Slider::LinearHorizontal);
     slider.setTextBoxStyle(juce::Slider::TextBoxRight, false, 60, 20);
-    slider.setTextValueSuffix(suffix);
+    slider.setTextValueSuffix(magda::i18n::tr(suffix));
     slider.setColour(juce::Slider::backgroundColourId,
                      magda::DarkTheme::getColour(magda::DarkTheme::SURFACE));
     slider.setColour(juce::Slider::thumbColourId,
@@ -44,7 +45,7 @@ void setupSlider(juce::Component& owner, juce::Slider& slider, juce::Label& labe
 }
 
 void setupToggle(juce::Component& owner, juce::ToggleButton& toggle, const juce::String& text) {
-    toggle.setButtonText(text);
+    toggle.setButtonText(magda::i18n::tr(text));
     toggle.setColour(juce::ToggleButton::textColourId,
                      magda::DarkTheme::getColour(magda::DarkTheme::TEXT_PRIMARY));
     toggle.setColour(juce::ToggleButton::tickColourId,
@@ -55,7 +56,7 @@ void setupToggle(juce::Component& owner, juce::ToggleButton& toggle, const juce:
 }
 
 void setupSectionHeader(juce::Component& owner, juce::Label& header, const juce::String& text) {
-    header.setText(text, juce::dontSendNotification);
+    header.setText(magda::i18n::tr(text), juce::dontSendNotification);
     header.setColour(juce::Label::textColourId,
                      magda::DarkTheme::getColour(magda::DarkTheme::TEXT_SECONDARY));
     header.setFont(magda::FontManager::getInstance().getUIFontBold(14.0f));
@@ -65,7 +66,7 @@ void setupSectionHeader(juce::Component& owner, juce::Label& header, const juce:
 
 void setupShortcutLabel(juce::Component& owner, juce::Label& label, const juce::String& action,
                         const juce::String& shortcut) {
-    label.setText(action + ":  " + shortcut, juce::dontSendNotification);
+    label.setText(magda::i18n::tr(action) + ":  " + shortcut, juce::dontSendNotification);
     label.setFont(magda::FontManager::getInstance().getUIFont(12.0f));
     label.setColour(juce::Label::textColourId,
                     magda::DarkTheme::getColour(magda::DarkTheme::TEXT_PRIMARY));
@@ -189,6 +190,33 @@ class GeneralPage : public juce::Component {
 class UIPage : public juce::Component {
   public:
     UIPage() {
+        setupSectionHeader(*this, languageHeader, "Language");
+        languageLabel.setText(magda::i18n::tr("Display Language"), juce::dontSendNotification);
+        languageLabel.setFont(FontManager::getInstance().getUIFont(12.0f));
+        languageLabel.setColour(juce::Label::textColourId,
+                                DarkTheme::getColour(DarkTheme::TEXT_PRIMARY));
+        languageLabel.setJustificationType(juce::Justification::centredLeft);
+        addAndMakeVisible(languageLabel);
+
+        languageCombo.addItem(magda::i18n::tr("System Default"), 1);
+        languageCombo.addItem(magda::i18n::tr("English"), 2);
+        languageCombo.addItem(magda::i18n::tr("Simplified Chinese"), 3);
+        languageCombo.setColour(juce::ComboBox::backgroundColourId,
+                                DarkTheme::getColour(DarkTheme::SURFACE));
+        languageCombo.setColour(juce::ComboBox::textColourId,
+                                DarkTheme::getColour(DarkTheme::TEXT_PRIMARY));
+        languageCombo.setColour(juce::ComboBox::outlineColourId,
+                                DarkTheme::getColour(DarkTheme::BORDER));
+        addAndMakeVisible(languageCombo);
+
+        languageHint.setText(magda::i18n::tr("Restart MAGDA to fully apply language changes."),
+                             juce::dontSendNotification);
+        languageHint.setFont(FontManager::getInstance().getUIFont(11.0f));
+        languageHint.setColour(juce::Label::textColourId,
+                               DarkTheme::getColour(DarkTheme::TEXT_DIM));
+        languageHint.setJustificationType(juce::Justification::centredLeft);
+        addAndMakeVisible(languageHint);
+
         setupSectionHeader(*this, panelsHeader, "Panels");
         setupToggle(*this, showLeftPanelToggle, "Expand Left Panel (Browser)");
         setupToggle(*this, showRightPanelToggle, "Expand Right Panel (Inspector)");
@@ -207,7 +235,20 @@ class UIPage : public juce::Component {
         auto bounds = getLocalBounds().reduced(16);
         const int toggleH = 24;
         const int headerH = 28;
+        const int rowH = 32;
         const int secGap = 12;
+
+        // Language
+        languageHeader.setBounds(bounds.removeFromTop(headerH));
+        bounds.removeFromTop(4);
+        {
+            auto row = bounds.removeFromTop(rowH);
+            languageLabel.setBounds(row.removeFromLeft(140));
+            languageCombo.setBounds(row.reduced(0, 4));
+        }
+        bounds.removeFromTop(2);
+        languageHint.setBounds(bounds.removeFromTop(20));
+        bounds.removeFromTop(secGap);
 
         // Panels
         panelsHeader.setBounds(bounds.removeFromTop(headerH));
@@ -237,6 +278,14 @@ class UIPage : public juce::Component {
     }
 
     void loadSettings(Config& config) {
+        auto language = juce::String(config.getUiLanguage());
+        int selectedId = 1;
+        if (language.equalsIgnoreCase("en"))
+            selectedId = 2;
+        else if (language.equalsIgnoreCase("zh-CN") || language.equalsIgnoreCase("zh_CN"))
+            selectedId = 3;
+        languageCombo.setSelectedId(selectedId, juce::dontSendNotification);
+
         showLeftPanelToggle.setToggleState(!config.getLeftPanelCollapsed(),
                                            juce::dontSendNotification);
         showRightPanelToggle.setToggleState(!config.getRightPanelCollapsed(),
@@ -253,6 +302,18 @@ class UIPage : public juce::Component {
     }
 
     void applySettings(Config& config) {
+        switch (languageCombo.getSelectedId()) {
+            case 2:
+                config.setUiLanguage("en");
+                break;
+            case 3:
+                config.setUiLanguage("zh-CN");
+                break;
+            default:
+                config.setUiLanguage("system");
+                break;
+        }
+
         config.setLeftPanelCollapsed(!showLeftPanelToggle.getToggleState());
         config.setRightPanelCollapsed(!showRightPanelToggle.getToggleState());
         config.setBottomPanelCollapsed(!showBottomPanelToggle.getToggleState());
@@ -263,6 +324,8 @@ class UIPage : public juce::Component {
     }
 
   private:
+    juce::Label languageHeader, languageLabel, languageHint;
+    juce::ComboBox languageCombo;
     juce::Label panelsHeader, layoutHeader, behaviorHeader;
     juce::ToggleButton showLeftPanelToggle, showRightPanelToggle, showBottomPanelToggle;
     juce::ToggleButton headersOnRightToggle;
@@ -278,40 +341,42 @@ class ColoursPage : public juce::Component {
     ColoursPage() {
         setupSectionHeader(*this, coloursHeader, "Track Colour Palette");
 
-        colourHeaderLabel.setText("Colour", juce::dontSendNotification);
+        colourHeaderLabel.setText(magda::i18n::tr("Colour"), juce::dontSendNotification);
         colourHeaderLabel.setFont(FontManager::getInstance().getUIFont(11.0f));
         colourHeaderLabel.setColour(juce::Label::textColourId,
                                     DarkTheme::getColour(DarkTheme::TEXT_SECONDARY));
         addAndMakeVisible(colourHeaderLabel);
 
-        hexHeaderLabel.setText("Hex (RGB)", juce::dontSendNotification);
+        hexHeaderLabel.setText(magda::i18n::tr("Hex (RGB)"), juce::dontSendNotification);
         hexHeaderLabel.setFont(FontManager::getInstance().getUIFont(11.0f));
         hexHeaderLabel.setColour(juce::Label::textColourId,
                                  DarkTheme::getColour(DarkTheme::TEXT_SECONDARY));
         addAndMakeVisible(hexHeaderLabel);
 
-        nameHeaderLabel.setText("Name", juce::dontSendNotification);
+        nameHeaderLabel.setText(magda::i18n::tr("Name"), juce::dontSendNotification);
         nameHeaderLabel.setFont(FontManager::getInstance().getUIFont(11.0f));
         nameHeaderLabel.setColour(juce::Label::textColourId,
                                   DarkTheme::getColour(DarkTheme::TEXT_SECONDARY));
         addAndMakeVisible(nameHeaderLabel);
 
-        addColourButton.setButtonText("+ Add Colour");
-        addColourButton.onClick = [this]() { addColourRow(0xFF808080, "New"); };
+        addColourButton.setButtonText(magda::i18n::tr("+ Add Colour"));
+        addColourButton.onClick = [this]() {
+            addColourRow(0xFF808080, magda::i18n::tr("New").toStdString());
+        };
         addAndMakeVisible(addColourButton);
 
         // Clip colour mode
         setupSectionHeader(*this, clipColourHeader, "Clip Colours");
 
-        clipColourModeLabel.setText("New clip colour", juce::dontSendNotification);
+        clipColourModeLabel.setText(magda::i18n::tr("New clip colour"), juce::dontSendNotification);
         clipColourModeLabel.setFont(FontManager::getInstance().getUIFont(12.0f));
         clipColourModeLabel.setColour(juce::Label::textColourId,
                                       DarkTheme::getColour(DarkTheme::TEXT_PRIMARY));
         clipColourModeLabel.setJustificationType(juce::Justification::centredLeft);
         addAndMakeVisible(clipColourModeLabel);
 
-        clipColourModeCombo.addItem("Inherit from track", 1);
-        clipColourModeCombo.addItem("Cycle through palette", 2);
+        clipColourModeCombo.addItem(magda::i18n::tr("Inherit from track"), 1);
+        clipColourModeCombo.addItem(magda::i18n::tr("Cycle through palette"), 2);
         clipColourModeCombo.setColour(juce::ComboBox::backgroundColourId,
                                       DarkTheme::getColour(DarkTheme::SURFACE));
         clipColourModeCombo.setColour(juce::ComboBox::textColourId,
@@ -533,23 +598,26 @@ class RenderingPage : public juce::Component {
         // --- Output Folder ---
         setupSectionHeader(*this, renderHeader, "Output");
 
-        renderFolderLabel.setText("Render Output Folder", juce::dontSendNotification);
+        renderFolderLabel.setText(magda::i18n::tr("Render Output Folder"),
+                                  juce::dontSendNotification);
         renderFolderLabel.setFont(FontManager::getInstance().getUIFont(12.0f));
         renderFolderLabel.setColour(juce::Label::textColourId,
                                     DarkTheme::getColour(DarkTheme::TEXT_PRIMARY));
         renderFolderLabel.setJustificationType(juce::Justification::centredLeft);
         addAndMakeVisible(renderFolderLabel);
 
-        renderFolderValue.setText("Default (beside source file)", juce::dontSendNotification);
+        renderFolderValue.setText(magda::i18n::tr("Default (beside source file)"),
+                                  juce::dontSendNotification);
         renderFolderValue.setFont(FontManager::getInstance().getUIFont(12.0f));
         renderFolderValue.setColour(juce::Label::textColourId,
                                     DarkTheme::getColour(DarkTheme::TEXT_SECONDARY));
         renderFolderValue.setJustificationType(juce::Justification::centredLeft);
         addAndMakeVisible(renderFolderValue);
 
-        renderFolderBrowseButton.setButtonText("Browse...");
+        renderFolderBrowseButton.setButtonText(magda::i18n::tr("Browse..."));
         renderFolderBrowseButton.onClick = [this]() {
-            fileChooser_ = std::make_unique<juce::FileChooser>("Select Render Output Folder");
+            fileChooser_ = std::make_unique<juce::FileChooser>(
+                magda::i18n::tr("Select Render Output Folder"));
             fileChooser_->launchAsync(juce::FileBrowserComponent::openMode |
                                           juce::FileBrowserComponent::canSelectDirectories,
                                       [this](const juce::FileChooser& fc) {
@@ -564,10 +632,11 @@ class RenderingPage : public juce::Component {
         };
         addAndMakeVisible(renderFolderBrowseButton);
 
-        renderFolderClearButton.setButtonText("Clear");
+        renderFolderClearButton.setButtonText(magda::i18n::tr("Clear"));
         renderFolderClearButton.onClick = [this]() {
             renderFolderPath_.clear();
-            renderFolderValue.setText("Default (beside source file)", juce::dontSendNotification);
+            renderFolderValue.setText(magda::i18n::tr("Default (beside source file)"),
+                                      juce::dontSendNotification);
         };
         addAndMakeVisible(renderFolderClearButton);
 
@@ -619,8 +688,9 @@ class RenderingPage : public juce::Component {
                                       DarkTheme::getColour(DarkTheme::BORDER));
         addAndMakeVisible(bouncePatternEditor);
 
-        patternHint.setText("Tokens: <clip-name> <track-name> <project-name> <date-time>",
-                            juce::dontSendNotification);
+        patternHint.setText(
+            magda::i18n::tr("Tokens: <clip-name> <track-name> <project-name> <date-time>"),
+            juce::dontSendNotification);
         patternHint.setFont(FontManager::getInstance().getUIFont(10.0f));
         patternHint.setColour(juce::Label::textColourId, DarkTheme::getColour(DarkTheme::TEXT_DIM));
         patternHint.setJustificationType(juce::Justification::centredLeft);
@@ -681,7 +751,8 @@ class RenderingPage : public juce::Component {
         // Folder
         renderFolderPath_ = config.getRenderFolder();
         if (renderFolderPath_.empty()) {
-            renderFolderValue.setText("Default (beside source file)", juce::dontSendNotification);
+            renderFolderValue.setText(magda::i18n::tr("Default (beside source file)"),
+                                      juce::dontSendNotification);
         } else {
             renderFolderValue.setText(juce::String(renderFolderPath_), juce::dontSendNotification);
         }
@@ -752,7 +823,7 @@ class RenderingPage : public juce::Component {
 
   private:
     void setupComboLabel(juce::Label& label, const juce::String& text) {
-        label.setText(text, juce::dontSendNotification);
+        label.setText(magda::i18n::tr(text), juce::dontSendNotification);
         label.setFont(FontManager::getInstance().getUIFont(12.0f));
         label.setColour(juce::Label::textColourId, DarkTheme::getColour(DarkTheme::TEXT_PRIMARY));
         label.setJustificationType(juce::Justification::centredLeft);
@@ -853,14 +924,14 @@ PreferencesDialog::PreferencesDialog() {
     shortcutsPage = std::make_unique<ShortcutsPage>();
 
     auto tabBg = DarkTheme::getColour(DarkTheme::PANEL_BACKGROUND);
-    tabbedComponent.addTab("General", tabBg, generalPage.get(), false);
-    tabbedComponent.addTab("UI", tabBg, uiPage.get(), false);
-    tabbedComponent.addTab("Colours", tabBg, coloursPage.get(), false);
-    tabbedComponent.addTab("Rendering", tabBg, renderingPage.get(), false);
-    tabbedComponent.addTab("Shortcuts", tabBg, shortcutsPage.get(), false);
+    tabbedComponent.addTab(magda::i18n::tr("General"), tabBg, generalPage.get(), false);
+    tabbedComponent.addTab(magda::i18n::tr("UI"), tabBg, uiPage.get(), false);
+    tabbedComponent.addTab(magda::i18n::tr("Colours"), tabBg, coloursPage.get(), false);
+    tabbedComponent.addTab(magda::i18n::tr("Rendering"), tabBg, renderingPage.get(), false);
+    tabbedComponent.addTab(magda::i18n::tr("Shortcuts"), tabBg, shortcutsPage.get(), false);
     addAndMakeVisible(tabbedComponent);
 
-    okButton.setButtonText("OK");
+    okButton.setButtonText(magda::i18n::tr("OK"));
     okButton.onClick = [this]() {
         applySettings();
         if (auto* dw = findParentComponentOfClass<juce::DialogWindow>())
@@ -868,14 +939,14 @@ PreferencesDialog::PreferencesDialog() {
     };
     addAndMakeVisible(okButton);
 
-    cancelButton.setButtonText("Cancel");
+    cancelButton.setButtonText(magda::i18n::tr("Cancel"));
     cancelButton.onClick = [this]() {
         if (auto* dw = findParentComponentOfClass<juce::DialogWindow>())
             dw->exitModalState(0);
     };
     addAndMakeVisible(cancelButton);
 
-    applyButton.setButtonText("Apply");
+    applyButton.setButtonText(magda::i18n::tr("Apply"));
     applyButton.onClick = [this]() { applySettings(); };
     addAndMakeVisible(applyButton);
 
@@ -926,12 +997,20 @@ void PreferencesDialog::loadCurrentSettings() {
 
 void PreferencesDialog::applySettings() {
     auto& config = Config::getInstance();
+    auto previousLanguage = config.getUiLanguage();
     generalPage->applySettings(config);
     uiPage->applySettings(config);
     coloursPage->applySettings(config);
     renderingPage->applySettings(config);
     shortcutsPage->applySettings(config);
     config.save();
+
+    if (config.getUiLanguage() != previousLanguage) {
+        juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::InfoIcon,
+                                               magda::i18n::tr("Restart Required"),
+                                               magda::i18n::tr(
+                                                   "Restart MAGDA to fully apply language changes."));
+    }
 
     // Apply auto-save settings
     ProjectManager::getInstance().setAutoSaveEnabled(config.getAutoSaveEnabled(),
@@ -958,7 +1037,7 @@ void PreferencesDialog::showDialog(juce::Component* parent) {
     auto* dialog = new PreferencesDialog();
 
     juce::DialogWindow::LaunchOptions options;
-    options.dialogTitle = "Preferences";
+    options.dialogTitle = magda::i18n::tr("Preferences");
     options.dialogBackgroundColour = DarkTheme::getColour(DarkTheme::PANEL_BACKGROUND);
     options.content.setOwned(dialog);
     options.escapeKeyTriggersCloseButton = true;

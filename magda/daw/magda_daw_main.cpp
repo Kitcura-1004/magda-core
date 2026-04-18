@@ -15,6 +15,7 @@
 #include "engine/TracktionEngineWrapper.hpp"
 #include "project/ProjectManager.hpp"
 #include "ui/dialogs/SplashScreen.hpp"
+#include "ui/i18n/TranslationManager.hpp"
 #include "ui/themes/DarkTheme.hpp"
 #include "ui/themes/FontManager.hpp"
 #include "ui/windows/MainWindow.hpp"
@@ -79,6 +80,11 @@ class MagdaDAWApplication : public JUCEApplication {
         // 1. Initialize fonts
         magda::FontManager::getInstance().initialize();
 
+        // 1b. Load user config and translations before creating any UI text
+        auto& config = magda::Config::getInstance();
+        config.load();
+        magda::i18n::TranslationManager::getInstance().initialise(config.getUiLanguage());
+
         // 2. Set up dark theme
         lookAndFeel_ = std::make_unique<juce::LookAndFeel_V4>();
         magda::DarkTheme::applyToLookAndFeel(*lookAndFeel_);
@@ -106,7 +112,7 @@ class MagdaDAWApplication : public JUCEApplication {
         };
 
         if (splashScreen_)
-            splashScreen_->setStatus("Initializing audio engine...");
+            splashScreen_->setStatus(magda::i18n::tr("Initializing audio engine..."));
 
         juce::Logger::writeToLog("Calling daw_engine_->initialize()...");
         if (!daw_engine_->initialize()) {

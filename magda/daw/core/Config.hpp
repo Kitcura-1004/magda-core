@@ -178,6 +178,14 @@ class Config {
         scrollbarOnLeft = onLeft;
     }
 
+    // UI language
+    std::string getUiLanguage() const {
+        return uiLanguage;
+    }
+    void setUiLanguage(const std::string& language) {
+        uiLanguage = language.empty() ? "system" : language;
+    }
+
     // Audio Device Configuration
     std::string getPreferredAudioDevice() const {
         return preferredAudioDevice;
@@ -639,6 +647,7 @@ class Config {
 
     // Layout settings
     bool scrollbarOnLeft = false;  // Scrollbar on right by default
+    std::string uiLanguage = "system";
 
     // Recent projects (most recent first, max 10)
     std::vector<std::string> recentProjects;

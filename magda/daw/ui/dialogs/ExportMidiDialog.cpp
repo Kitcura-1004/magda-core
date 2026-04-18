@@ -1,5 +1,6 @@
 #include "ExportMidiDialog.hpp"
 
+#include "../i18n/TranslationManager.hpp"
 #include "../themes/DarkTheme.hpp"
 #include "../themes/DialogLookAndFeel.hpp"
 #include "../themes/FontManager.hpp"
@@ -10,37 +11,37 @@ ExportMidiDialog::ExportMidiDialog() {
     setLookAndFeel(&daw::ui::DialogLookAndFeel::getInstance());
 
     // MIDI format selection
-    formatLabel_.setText("MIDI Format:", juce::dontSendNotification);
+    formatLabel_.setText(i18n::tr("MIDI Format:"), juce::dontSendNotification);
     formatLabel_.setFont(FontManager::getInstance().getUIFontBold(14.0f));
     addAndMakeVisible(formatLabel_);
 
-    formatComboBox_.addItem("Type 0 (Single Track)", 1);
-    formatComboBox_.addItem("Type 1 (Multi-Track)", 2);
+    formatComboBox_.addItem(i18n::tr("Type 0 (Single Track)"), 1);
+    formatComboBox_.addItem(i18n::tr("Type 1 (Multi-Track)"), 2);
     formatComboBox_.setSelectedId(2, juce::dontSendNotification);
     addAndMakeVisible(formatComboBox_);
 
     // Export range
-    rangeLabel_.setText("Export Range:", juce::dontSendNotification);
+    rangeLabel_.setText(i18n::tr("Export Range:"), juce::dontSendNotification);
     rangeLabel_.setFont(FontManager::getInstance().getUIFontBold(14.0f));
     addAndMakeVisible(rangeLabel_);
 
-    exportEntireSongButton_.setButtonText("Entire Song");
+    exportEntireSongButton_.setButtonText(i18n::tr("Entire Song"));
     exportEntireSongButton_.setRadioGroupId(1);
     exportEntireSongButton_.setToggleState(true, juce::dontSendNotification);
     addAndMakeVisible(exportEntireSongButton_);
 
-    exportTimeSelectionButton_.setButtonText("Time Selection");
+    exportTimeSelectionButton_.setButtonText(i18n::tr("Time Selection"));
     exportTimeSelectionButton_.setRadioGroupId(1);
     exportTimeSelectionButton_.setEnabled(false);
     addAndMakeVisible(exportTimeSelectionButton_);
 
-    exportLoopRegionButton_.setButtonText("Loop Region");
+    exportLoopRegionButton_.setButtonText(i18n::tr("Loop Region"));
     exportLoopRegionButton_.setRadioGroupId(1);
     exportLoopRegionButton_.setEnabled(false);
     addAndMakeVisible(exportLoopRegionButton_);
 
     // Export button
-    exportButton_.setButtonText("Export");
+    exportButton_.setButtonText(i18n::tr("Export"));
     exportButton_.onClick = [this]() {
         if (onExport)
             onExport(getSettings());
@@ -50,7 +51,7 @@ ExportMidiDialog::ExportMidiDialog() {
     addAndMakeVisible(exportButton_);
 
     // Cancel button
-    cancelButton_.setButtonText("Cancel");
+    cancelButton_.setButtonText(i18n::tr("Cancel"));
     cancelButton_.onClick = [this]() {
         if (auto* dw = findParentComponentOfClass<juce::DialogWindow>())
             dw->exitModalState(0);
@@ -133,7 +134,7 @@ void ExportMidiDialog::showDialog(juce::Component* parent,
     dialog->onExport = exportCallback;
 
     juce::DialogWindow::LaunchOptions options;
-    options.dialogTitle = "Export MIDI";
+    options.dialogTitle = i18n::tr("Export MIDI");
     options.dialogBackgroundColour = DarkTheme::getColour(DarkTheme::PANEL_BACKGROUND);
     options.content.setOwned(dialog);
     options.escapeKeyTriggersCloseButton = true;

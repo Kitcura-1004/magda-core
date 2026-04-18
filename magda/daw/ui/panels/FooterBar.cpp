@@ -2,6 +2,7 @@
 
 #include <BinaryData.h>
 
+#include "../i18n/TranslationManager.hpp"
 #include "../themes/DarkTheme.hpp"
 
 namespace magda {
@@ -74,7 +75,7 @@ void FooterBar::setupButtons() {
         modeButtons[i] = magda::ManagedChild<SvgButton>::create(icons[i].name, icons[i].data,
                                                                 static_cast<size_t>(icons[i].size));
 
-        modeButtons[i]->setTooltip(icons[i].name);
+        modeButtons[i]->setTooltip(i18n::tr(icons[i].name));
         modeButtons[i]->setClickingTogglesState(false);
         modeButtons[i]->onClick = [mode = icons[i].mode]() {
             ViewModeController::getInstance().setViewMode(mode);

@@ -2,6 +2,7 @@
 
 #include "BinaryData.h"
 #include "magda.hpp"
+#include "ui/i18n/TranslationManager.hpp"
 #include "ui/themes/DarkTheme.hpp"
 #include "ui/themes/FontManager.hpp"
 
@@ -73,13 +74,13 @@ class SplashScreen::ContentComponent : public juce::Component {
         // Subtitle
         g.setFont(fm.getUIFont(14.0f));
         g.setColour(juce::Colour(DarkTheme::TEXT_SECONDARY));
-        g.drawText("Multi-Agent Digital Audio", bounds.removeFromTop(24),
+        g.drawText(i18n::tr("Multi-Agent Digital Audio"), bounds.removeFromTop(24),
                    juce::Justification::centred);
 
         // Version
         g.setFont(fm.getUIFont(12.0f));
         g.setColour(juce::Colour(DarkTheme::TEXT_DIM));
-        g.drawText(juce::String("Version ") + MAGDA_VERSION, bounds.removeFromTop(20),
+        g.drawText(i18n::tr("Version ") + MAGDA_VERSION, bounds.removeFromTop(20),
                    juce::Justification::centred);
 
         // Status text
@@ -112,17 +113,18 @@ class SplashScreen::ContentComponent : public juce::Component {
             return juce::roundToInt(ga.getBoundingBox(0, -1, false).getWidth()) + 1;
         };
 
-        int powW = measure("powered by");
+        int powW = measure(i18n::tr("powered by"));
         int teW = measure("Tracktion Engine");
         int dotW = measure("|");
-        int madeW = measure("made with");
+        int madeW = measure(i18n::tr("made with"));
         int juceW = measure("JUCE");
 
         int totalW = powW + gap + teW + gap + logoSize + dotGap + dotW + dotGap + madeW + gap +
                      juceW + gap + logoSize;
         auto centred = row.withSizeKeepingCentre(totalW, 20);
 
-        g.drawText("powered by", centred.removeFromLeft(powW), juce::Justification::centred);
+        g.drawText(i18n::tr("powered by"), centred.removeFromLeft(powW),
+                   juce::Justification::centred);
         centred.removeFromLeft(gap);
         g.drawText("Tracktion Engine", centred.removeFromLeft(teW), juce::Justification::centred);
         centred.removeFromLeft(gap);
@@ -132,7 +134,8 @@ class SplashScreen::ContentComponent : public juce::Component {
         centred.removeFromLeft(dotGap);
         g.drawText("|", centred.removeFromLeft(dotW), juce::Justification::centred);
         centred.removeFromLeft(dotGap);
-        g.drawText("made with", centred.removeFromLeft(madeW), juce::Justification::centred);
+        g.drawText(i18n::tr("made with"), centred.removeFromLeft(madeW),
+                   juce::Justification::centred);
         centred.removeFromLeft(gap);
         g.drawText("JUCE", centred.removeFromLeft(juceW), juce::Justification::centred);
         centred.removeFromLeft(gap);

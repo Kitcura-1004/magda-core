@@ -10,6 +10,7 @@
 #include "../dialogs/ExportAudioDialog.hpp"
 #include "../dialogs/PreferencesDialog.hpp"
 #include "../dialogs/TrackManagerDialog.hpp"
+#include "../i18n/TranslationManager.hpp"
 #include "../panels/BottomPanel.hpp"
 #include "../panels/FooterBar.hpp"
 #include "../panels/LeftPanel.hpp"
@@ -95,7 +96,7 @@ class MainWindow::MainComponent::LoadingOverlay : public juce::Component, privat
     }
 
   private:
-    juce::String message_ = "Initializing...";
+    juce::String message_ = i18n::tr("Initializing audio engine...");
     float alpha_ = 1.0f;
     int spinnerFrame_ = 0;
 

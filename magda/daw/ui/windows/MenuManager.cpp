@@ -1,5 +1,6 @@
 #include "MenuManager.hpp"
 
+#include "../i18n/TranslationManager.hpp"
 #include "Config.hpp"
 #include "core/UndoManager.hpp"
 
@@ -43,23 +44,25 @@ void MenuManager::updateMenuStates(bool canUndo, bool canRedo, bool hasSelection
 }
 
 juce::StringArray MenuManager::getMenuBarNames() {
-    return {"File", "Edit", "View", "Transport", "Track", "Settings", "Window", "Help"};
+    return {i18n::tr("File"),      i18n::tr("Edit"),   i18n::tr("View"),
+            i18n::tr("Transport"), i18n::tr("Track"),  i18n::tr("Settings"),
+            i18n::tr("Window"),    i18n::tr("Help")};
 }
 
 juce::PopupMenu MenuManager::getMenuForIndex(int topLevelMenuIndex, const juce::String& menuName) {
     juce::PopupMenu menu;
 
-    if (menuName == "File") {
-        menu.addItem(NewProject, "New Project", true, false);
+    if (menuName == i18n::tr("File")) {
+        menu.addItem(NewProject, i18n::tr("New Project"), true, false);
         menu.addSeparator();
-        menu.addItem(OpenProject, "Open Project...", true, false);
+        menu.addItem(OpenProject, i18n::tr("Open Project..."), true, false);
 
         // Open Recent submenu
         {
             juce::PopupMenu recentMenu;
             auto recentPaths = Config::getInstance().getRecentProjects();
             if (recentPaths.empty()) {
-                recentMenu.addItem(0, "(No Recent Projects)", false, false);
+                recentMenu.addItem(0, i18n::tr("(No Recent Projects)"), false, false);
             } else {
                 int idx = 0;
                 for (const auto& path : recentPaths) {
@@ -70,44 +73,45 @@ juce::PopupMenu MenuManager::getMenuForIndex(int topLevelMenuIndex, const juce::
                     ++idx;
                 }
                 recentMenu.addSeparator();
-                recentMenu.addItem(RecentProjectBase + 10, "Clear Recent Projects", true, false);
+                recentMenu.addItem(RecentProjectBase + 10, i18n::tr("Clear Recent Projects"), true,
+                                   false);
             }
-            menu.addSubMenu("Open Recent", recentMenu);
+            menu.addSubMenu(i18n::tr("Open Recent"), recentMenu);
         }
 
-        menu.addItem(CloseProject, "Close Project", true, false);
+        menu.addItem(CloseProject, i18n::tr("Close Project"), true, false);
         menu.addSeparator();
-        menu.addItem(SaveProject, "Save Project", true, false);
-        menu.addItem(SaveProjectAs, "Save Project As...", true, false);
+        menu.addItem(SaveProject, i18n::tr("Save Project"), true, false);
+        menu.addItem(SaveProjectAs, i18n::tr("Save Project As..."), true, false);
         menu.addSeparator();
-        menu.addItem(ExportAudio, "Export Audio...", true, false);
-        menu.addItem(ExportMidi, "Export MIDI...", true, false);
+        menu.addItem(ExportAudio, i18n::tr("Export Audio..."), true, false);
+        menu.addItem(ExportMidi, i18n::tr("Export MIDI..."), true, false);
 
 #if !JUCE_MAC
         menu.addSeparator();
-        menu.addItem(Quit, "Quit", true, false);
+        menu.addItem(Quit, i18n::tr("Quit"), true, false);
 #endif
-    } else if (menuName == "Edit") {
+    } else if (menuName == i18n::tr("Edit")) {
         // Get undo/redo state directly from UndoManager for accurate descriptions
         auto& undoManager = UndoManager::getInstance();
         bool canUndo = undoManager.canUndo();
         bool canRedo = undoManager.canRedo();
 
         // Build undo menu item with description
-        juce::String undoText = "Undo";
+        juce::String undoText = i18n::tr("Undo");
         if (canUndo) {
             juce::String desc = undoManager.getUndoDescription();
             if (desc.isNotEmpty()) {
-                undoText = "Undo " + desc;
+                undoText = i18n::tr("Undo") + " " + i18n::tr(desc);
             }
         }
 
         // Build redo menu item with description
-        juce::String redoText = "Redo";
+        juce::String redoText = i18n::tr("Redo");
         if (canRedo) {
             juce::String desc = undoManager.getRedoDescription();
             if (desc.isNotEmpty()) {
-                redoText = "Redo " + desc;
+                redoText = i18n::tr("Redo") + " " + i18n::tr(desc);
             }
         }
 
@@ -115,125 +119,129 @@ juce::PopupMenu MenuManager::getMenuForIndex(int topLevelMenuIndex, const juce::
         menu.addItem(Undo, undoText + juce::String::fromUTF8("\t\u2318Z"), canUndo, false);
         menu.addItem(Redo, redoText + juce::String::fromUTF8("\t\u21E7\u2318Z"), canRedo, false);
         menu.addSeparator();
-        menu.addItem(Cut, juce::String("Cut") + juce::String::fromUTF8("\t\u2318X"), hasSelection_,
+        menu.addItem(Cut, i18n::tr("Cut") + juce::String::fromUTF8("\t\u2318X"), hasSelection_,
                      false);
-        menu.addItem(Copy, juce::String("Copy") + juce::String::fromUTF8("\t\u2318C"),
+        menu.addItem(Copy, i18n::tr("Copy") + juce::String::fromUTF8("\t\u2318C"),
                      hasSelection_, false);
-        menu.addItem(Paste, juce::String("Paste") + juce::String::fromUTF8("\t\u2318V"), true,
+        menu.addItem(Paste, i18n::tr("Paste") + juce::String::fromUTF8("\t\u2318V"), true,
                      false);
-        menu.addItem(Duplicate, juce::String("Duplicate") + juce::String::fromUTF8("\t\u2318D"),
+        menu.addItem(Duplicate, i18n::tr("Duplicate") + juce::String::fromUTF8("\t\u2318D"),
                      hasSelection_, false);
-        menu.addItem(Delete, juce::String("Delete") + juce::String::fromUTF8("\t\u232B"),
+        menu.addItem(Delete, i18n::tr("Delete") + juce::String::fromUTF8("\t\u232B"),
                      hasSelection_, false);
         menu.addSeparator();
         menu.addItem(SplitOrTrim,
-                     juce::String("Split / Trim") + juce::String::fromUTF8("\t\u2318E"), true,
+                     i18n::tr("Split / Trim") + juce::String::fromUTF8("\t\u2318E"), true,
                      false);
-        menu.addItem(JoinClips, juce::String("Join Clips") + juce::String::fromUTF8("\t\u2318J"),
+        menu.addItem(JoinClips, i18n::tr("Join Clips") + juce::String::fromUTF8("\t\u2318J"),
                      hasSelection_, false);
         menu.addSeparator();
         menu.addItem(RenderClip,
-                     juce::String("Render Selected Clip(s)") + juce::String::fromUTF8("\t\u2318B"),
+                     i18n::tr("Render Selected Clip(s)") + juce::String::fromUTF8("\t\u2318B"),
                      hasSelection_, false);
         menu.addItem(RenderTimeSelection,
-                     juce::String("Render Time Selection") +
-                         juce::String::fromUTF8("\t\u21E7\u2318B"),
+                     i18n::tr("Render Time Selection") + juce::String::fromUTF8("\t\u21E7\u2318B"),
                      true, false);
         menu.addSeparator();
-        menu.addItem(SelectAll, juce::String("Select All") + juce::String::fromUTF8("\t\u2318A"),
+        menu.addItem(SelectAll, i18n::tr("Select All") + juce::String::fromUTF8("\t\u2318A"),
                      true, false);
 #else
         menu.addItem(Undo, undoText + "\tCtrl+Z", canUndo, false);
         menu.addItem(Redo, redoText + "\tCtrl+Shift+Z", canRedo, false);
         menu.addSeparator();
-        menu.addItem(Cut, "Cut\tCtrl+X", hasSelection_, false);
-        menu.addItem(Copy, "Copy\tCtrl+C", hasSelection_, false);
-        menu.addItem(Paste, "Paste\tCtrl+V", true, false);
-        menu.addItem(Duplicate, "Duplicate\tCtrl+D", hasSelection_, false);
-        menu.addItem(Delete, "Delete\tDelete", hasSelection_, false);
+        menu.addItem(Cut, i18n::trMenuLabel("Cut\tCtrl+X"), hasSelection_, false);
+        menu.addItem(Copy, i18n::trMenuLabel("Copy\tCtrl+C"), hasSelection_, false);
+        menu.addItem(Paste, i18n::trMenuLabel("Paste\tCtrl+V"), true, false);
+        menu.addItem(Duplicate, i18n::trMenuLabel("Duplicate\tCtrl+D"), hasSelection_, false);
+        menu.addItem(Delete, i18n::trMenuLabel("Delete\tDelete"), hasSelection_, false);
         menu.addSeparator();
-        menu.addItem(SplitOrTrim, "Split / Trim\tCtrl+E", true, false);
-        menu.addItem(JoinClips, "Join Clips\tCtrl+J", hasSelection_, false);
+        menu.addItem(SplitOrTrim, i18n::trMenuLabel("Split / Trim\tCtrl+E"), true, false);
+        menu.addItem(JoinClips, i18n::trMenuLabel("Join Clips\tCtrl+J"), hasSelection_, false);
         menu.addSeparator();
-        menu.addItem(RenderClip, "Render Selected Clip(s)\tCtrl+B", hasSelection_, false);
-        menu.addItem(RenderTimeSelection, "Render Time Selection\tCtrl+Shift+B", true, false);
+        menu.addItem(RenderClip, i18n::trMenuLabel("Render Selected Clip(s)\tCtrl+B"),
+                     hasSelection_, false);
+        menu.addItem(RenderTimeSelection, i18n::trMenuLabel("Render Time Selection\tCtrl+Shift+B"),
+                     true, false);
         menu.addSeparator();
-        menu.addItem(SelectAll, "Select All\tCtrl+A", true, false);
+        menu.addItem(SelectAll, i18n::trMenuLabel("Select All\tCtrl+A"), true, false);
 #endif
 #if !JUCE_MAC
         menu.addSeparator();
-        menu.addItem(Preferences, "Preferences...", true, false);
+        menu.addItem(Preferences, i18n::tr("Preferences..."), true, false);
 #endif
-    } else if (menuName == "Settings") {
-        menu.addItem(Preferences, "Preferences...", true, false);
+    } else if (menuName == i18n::tr("Settings")) {
+        menu.addItem(Preferences, i18n::tr("Preferences..."), true, false);
         menu.addSeparator();
-        menu.addItem(AISettings, "AI Settings...", true, false);
+        menu.addItem(AISettings, i18n::tr("AI Settings..."), true, false);
         menu.addSeparator();
-        menu.addItem(AudioSettings, "Audio/MIDI Settings...", true, false);
+        menu.addItem(AudioSettings, i18n::tr("Audio/MIDI Settings..."), true, false);
         menu.addSeparator();
-        menu.addItem(PluginSettings, "Plugin Settings...", true, false);
-    } else if (menuName == "View") {
-        menu.addItem(ShowTrackManager, "Track Manager...", true, false);
+        menu.addItem(PluginSettings, i18n::tr("Plugin Settings..."), true, false);
+    } else if (menuName == i18n::tr("View")) {
+        menu.addItem(ShowTrackManager, i18n::tr("Track Manager..."), true, false);
         menu.addSeparator();
         bool headersOnRight = Config::getInstance().getScrollbarOnLeft();
-        menu.addItem(ToggleScrollbarPosition, "Headers on the Right", true, headersOnRight);
+        menu.addItem(ToggleScrollbarPosition, i18n::tr("Headers on the Right"), true,
+                     headersOnRight);
         menu.addSeparator();
-        menu.addItem(ZoomIn, "Zoom In", true, false);
-        menu.addItem(ZoomOut, "Zoom Out", true, false);
-        menu.addItem(ZoomToFit, "Zoom to Fit", true, false);
-        menu.addItem(ZoomLoopToFit, "Zoom Loop to Fit", true, false);
-        menu.addItem(ZoomSelectionToFit, "Zoom Selection to Fit", true, false);
+        menu.addItem(ZoomIn, i18n::tr("Zoom In"), true, false);
+        menu.addItem(ZoomOut, i18n::tr("Zoom Out"), true, false);
+        menu.addItem(ZoomToFit, i18n::tr("Zoom to Fit"), true, false);
+        menu.addItem(ZoomLoopToFit, i18n::tr("Zoom Loop to Fit"), true, false);
+        menu.addItem(ZoomSelectionToFit, i18n::tr("Zoom Selection to Fit"), true, false);
         menu.addSeparator();
-        menu.addItem(ToggleFullscreen, "Enter Full Screen", true, false);
-    } else if (menuName == "Transport") {
-        menu.addItem(Play, isPlaying_ ? "Pause" : "Play", true, false);
-        menu.addItem(Stop, "Stop", true, false);
-        menu.addItem(Record, "Record", true, isRecording_);
+        menu.addItem(ToggleFullscreen, i18n::tr("Enter Full Screen"), true, false);
+    } else if (menuName == i18n::tr("Transport")) {
+        menu.addItem(Play, isPlaying_ ? i18n::tr("Pause") : i18n::tr("Play"), true, false);
+        menu.addItem(Stop, i18n::tr("Stop"), true, false);
+        menu.addItem(Record, i18n::tr("Record"), true, isRecording_);
         menu.addSeparator();
-        menu.addItem(ToggleLoop, "Loop", true, isLooping_);
+        menu.addItem(ToggleLoop, i18n::tr("Loop"), true, isLooping_);
         menu.addSeparator();
-        menu.addItem(GoToStart, "Go to Start", true, false);
-        menu.addItem(GoToEnd, "Go to End", true, false);
-    } else if (menuName == "Track") {
+        menu.addItem(GoToStart, i18n::tr("Go to Start"), true, false);
+        menu.addItem(GoToEnd, i18n::tr("Go to End"), true, false);
+    } else if (menuName == i18n::tr("Track")) {
 #if JUCE_MAC
-        menu.addItem(AddTrack, juce::String("Add Track") + juce::String::fromUTF8("\t\u2318T"),
+        menu.addItem(AddTrack, i18n::tr("Add Track") + juce::String::fromUTF8("\t\u2318T"),
                      true, false);
         menu.addItem(AddGroupTrack,
-                     juce::String("Add Group Track") + juce::String::fromUTF8("\t\u21E7\u2318T"),
+                     i18n::tr("Add Group Track") + juce::String::fromUTF8("\t\u21E7\u2318T"),
                      true, false);
-        menu.addItem(AddAuxTrack, "Add Aux Track", true, false);
+        menu.addItem(AddAuxTrack, i18n::tr("Add Aux Track"), true, false);
         menu.addSeparator();
-        menu.addItem(DeleteTrack, juce::String("Delete Track") + juce::String::fromUTF8("\t\u232B"),
+        menu.addItem(DeleteTrack, i18n::tr("Delete Track") + juce::String::fromUTF8("\t\u232B"),
                      true, false);
         menu.addItem(DuplicateTrack,
-                     juce::String("Duplicate Track") + juce::String::fromUTF8("\t\u2318D"), true,
+                     i18n::tr("Duplicate Track") + juce::String::fromUTF8("\t\u2318D"), true,
                      false);
         menu.addItem(DuplicateTrackNoContent,
-                     juce::String("Duplicate Track Without Content") +
+                     i18n::tr("Duplicate Track Without Content") +
                          juce::String::fromUTF8("\t\u21E7\u2318D"),
                      true, false);
 #else
-        menu.addItem(AddTrack, "Add Track\tCtrl+T", true, false);
-        menu.addItem(AddGroupTrack, "Add Group Track\tCtrl+Shift+T", true, false);
-        menu.addItem(AddAuxTrack, "Add Aux Track", true, false);
+        menu.addItem(AddTrack, i18n::trMenuLabel("Add Track\tCtrl+T"), true, false);
+        menu.addItem(AddGroupTrack, i18n::trMenuLabel("Add Group Track\tCtrl+Shift+T"), true,
+                     false);
+        menu.addItem(AddAuxTrack, i18n::tr("Add Aux Track"), true, false);
         menu.addSeparator();
-        menu.addItem(DeleteTrack, "Delete Track\tDelete", true, false);
-        menu.addItem(DuplicateTrack, "Duplicate Track\tCtrl+D", true, false);
-        menu.addItem(DuplicateTrackNoContent, "Duplicate Track Without Content\tCtrl+Shift+D", true,
+        menu.addItem(DeleteTrack, i18n::trMenuLabel("Delete Track\tDelete"), true, false);
+        menu.addItem(DuplicateTrack, i18n::trMenuLabel("Duplicate Track\tCtrl+D"), true, false);
+        menu.addItem(DuplicateTrackNoContent,
+                     i18n::trMenuLabel("Duplicate Track Without Content\tCtrl+Shift+D"), true,
                      false);
 #endif
         menu.addSeparator();
-        menu.addItem(MuteTrack, "Mute Track\tM", true, false);
-        menu.addItem(SoloTrack, "Solo Track\tS", true, false);
-    } else if (menuName == "Window") {
-        menu.addItem(Minimize, "Minimize", true, false);
-        menu.addItem(Zoom, "Zoom", true, false);
+        menu.addItem(MuteTrack, i18n::trMenuLabel("Mute Track\tM"), true, false);
+        menu.addItem(SoloTrack, i18n::trMenuLabel("Solo Track\tS"), true, false);
+    } else if (menuName == i18n::tr("Window")) {
+        menu.addItem(Minimize, i18n::tr("Minimize"), true, false);
+        menu.addItem(Zoom, i18n::tr("Zoom"), true, false);
         menu.addSeparator();
-        menu.addItem(BringAllToFront, "Bring All to Front", true, false);
-    } else if (menuName == "Help") {
-        menu.addItem(OpenManual, "Online Manual", true, false);
+        menu.addItem(BringAllToFront, i18n::tr("Bring All to Front"), true, false);
+    } else if (menuName == i18n::tr("Help")) {
+        menu.addItem(OpenManual, i18n::tr("Online Manual"), true, false);
         menu.addSeparator();
-        menu.addItem(About, "About MAGDA", true, false);
+        menu.addItem(About, i18n::tr("About MAGDA"), true, false);
     }
 
     return menu;

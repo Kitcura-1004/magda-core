@@ -8,6 +8,7 @@
 #include "../dialogs/PluginSettingsDialog.hpp"
 #include "../dialogs/PreferencesDialog.hpp"
 #include "../dialogs/TrackManagerDialog.hpp"
+#include "../i18n/TranslationManager.hpp"
 #include "../state/TimelineController.hpp"
 #include "../state/TimelineEvents.hpp"
 #include "../views/MainView.hpp"
@@ -38,13 +39,13 @@ void MainWindow::setupMenuCallbacks() {
             mainComponent->mainView->getTimelineController().dispatch(ClearTimeSelectionEvent{});
         auto& projectManager = ProjectManager::getInstance();
         if (!projectManager.newProject()) {
-            auto message = juce::String("Could not create new project.");
+            auto message = i18n::tr("Could not create new project.");
             const auto lastError = projectManager.getLastError();
             if (lastError.isNotEmpty())
                 message += juce::String("\n\n") + lastError;
 
-            juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::WarningIcon, "New Project",
-                                                   message);
+            juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::WarningIcon,
+                                                   i18n::tr("New Project"), message);
         } else {
             // Reset timeline/transport to defaults
             if (mainComponent && mainComponent->mainView) {
@@ -65,7 +66,8 @@ void MainWindow::setupMenuCallbacks() {
             return;
 
         fileChooser_ = std::make_unique<juce::FileChooser>(
-            "Open Project", juce::File::getSpecialLocation(juce::File::userDocumentsDirectory),
+            i18n::tr("Open Project"),
+            juce::File::getSpecialLocation(juce::File::userDocumentsDirectory),
             "*.mgd", true);
 
         auto flags =
@@ -80,7 +82,7 @@ void MainWindow::setupMenuCallbacks() {
 
             // Show loading overlay
             if (mainComponent)
-                mainComponent->showLoadingMessage("Loading project...");
+                mainComponent->showLoadingMessage(i18n::tr("Loading project..."));
 
             SelectionManager::getInstance().clearSelection();
             if (mainComponent && mainComponent->mainView)
@@ -106,7 +108,7 @@ void MainWindow::setupMenuCallbacks() {
 
                     if (!success) {
                         juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::WarningIcon,
-                                                               "Open Project", error);
+                                                               i18n::tr("Open Project"), error);
                     } else {
                         auto& config = Config::getInstance();
                         config.addRecentProject(file.getFullPathName().toStdString());
@@ -120,13 +122,14 @@ void MainWindow::setupMenuCallbacks() {
     callbacks.onOpenRecentProject = [this](const juce::String& path) {
         juce::File file(path);
         if (!file.existsAsFile()) {
-            juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::WarningIcon, "Open Recent",
-                                                   "Project file not found:\n" + path);
+            juce::AlertWindow::showMessageBoxAsync(
+                juce::AlertWindow::WarningIcon, i18n::tr("Open Recent"),
+                i18n::tr("Project file not found:\n") + path);
             return;
         }
 
         if (mainComponent)
-            mainComponent->showLoadingMessage("Loading project...");
+            mainComponent->showLoadingMessage(i18n::tr("Loading project..."));
 
         SelectionManager::getInstance().clearSelection();
         if (mainComponent && mainComponent->mainView)
@@ -149,7 +152,7 @@ void MainWindow::setupMenuCallbacks() {
 
                 if (!success) {
                     juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::WarningIcon,
-                                                           "Open Recent", error);
+                                                           i18n::tr("Open Recent"), error);
                 } else {
                     auto& config = Config::getInstance();
                     config.addRecentProject(file.getFullPathName().toStdString());
@@ -165,9 +168,9 @@ void MainWindow::setupMenuCallbacks() {
             mainComponent->mainView->getTimelineController().dispatch(ClearTimeSelectionEvent{});
         auto& projectManager = ProjectManager::getInstance();
         if (!projectManager.closeProject()) {
-            juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::WarningIcon, "Close Project",
-                                                   "Failed to close project: " +
-                                                       projectManager.getLastError());
+            juce::AlertWindow::showMessageBoxAsync(
+                juce::AlertWindow::WarningIcon, i18n::tr("Close Project"),
+                i18n::tr("Failed to close project: ") + projectManager.getLastError());
         } else {
             // Reset timeline/transport to defaults
             if (mainComponent && mainComponent->mainView) {
@@ -194,7 +197,8 @@ void MainWindow::setupMenuCallbacks() {
             auto initialDir = juce::File::getSpecialLocation(juce::File::userDocumentsDirectory);
 
             fileChooser_ =
-                std::make_unique<juce::FileChooser>("Save Project As", initialDir, "*.mgd", true);
+                std::make_unique<juce::FileChooser>(i18n::tr("Save Project As"), initialDir,
+                                                    "*.mgd", true);
 
             auto flags = juce::FileBrowserComponent::saveMode |
                          juce::FileBrowserComponent::canSelectFiles |
@@ -215,8 +219,8 @@ void MainWindow::setupMenuCallbacks() {
                 auto& projectManager = ProjectManager::getInstance();
                 if (!projectManager.saveProjectAs(file)) {
                     juce::AlertWindow::showMessageBoxAsync(
-                        juce::AlertWindow::WarningIcon, "Save Project As",
-                        "Failed to save project: " + projectManager.getLastError());
+                        juce::AlertWindow::WarningIcon, i18n::tr("Save Project As"),
+                        i18n::tr("Failed to save project: ") + projectManager.getLastError());
                 } else {
                     // Use actual saved path (saveProjectAs may wrap in subdirectory)
                     auto& config = Config::getInstance();
@@ -231,9 +235,9 @@ void MainWindow::setupMenuCallbacks() {
 
         // File path exists, just save
         if (!projectManager.saveProject()) {
-            juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::WarningIcon, "Save Project",
-                                                   "Failed to save project: " +
-                                                       projectManager.getLastError());
+            juce::AlertWindow::showMessageBoxAsync(
+                juce::AlertWindow::WarningIcon, i18n::tr("Save Project"),
+                i18n::tr("Failed to save project: ") + projectManager.getLastError());
         }
     };
 
@@ -249,7 +253,8 @@ void MainWindow::setupMenuCallbacks() {
                               : juce::File::getSpecialLocation(juce::File::userDocumentsDirectory);
 
         fileChooser_ =
-            std::make_unique<juce::FileChooser>("Save Project As", initialDir, "*.mgd", true);
+            std::make_unique<juce::FileChooser>(i18n::tr("Save Project As"), initialDir, "*.mgd",
+                                                true);
 
         auto flags = juce::FileBrowserComponent::saveMode |
                      juce::FileBrowserComponent::canSelectFiles |
@@ -270,8 +275,8 @@ void MainWindow::setupMenuCallbacks() {
             auto& projectManager = ProjectManager::getInstance();
             if (!projectManager.saveProjectAs(file)) {
                 juce::AlertWindow::showMessageBoxAsync(
-                    juce::AlertWindow::WarningIcon, "Save Project As",
-                    "Failed to save project: " + projectManager.getLastError());
+                    juce::AlertWindow::WarningIcon, i18n::tr("Save Project As"),
+                    i18n::tr("Failed to save project: ") + projectManager.getLastError());
             } else {
                 // Use actual saved path (saveProjectAs may wrap in subdirectory)
                 auto& config = Config::getInstance();
@@ -293,7 +298,7 @@ void MainWindow::setupMenuCallbacks() {
 
         // Create file chooser for audio files
         fileChooser_ = std::make_unique<juce::FileChooser>(
-            "Select Audio Files to Import",
+            i18n::tr("Select Audio Files to Import"),
             juce::File::getSpecialLocation(juce::File::userMusicDirectory),
             "*.wav;*.aiff;*.aif;*.mp3;*.ogg;*.flac",  // Supported formats
             true,                                     // use native dialog
@@ -325,8 +330,8 @@ void MainWindow::setupMenuCallbacks() {
 
             if (targetTrackId == INVALID_TRACK_ID) {
                 juce::AlertWindow::showMessageBoxAsync(
-                    juce::AlertWindow::WarningIcon, "Import Audio",
-                    "No audio track found. Please create an audio track first.");
+                    juce::AlertWindow::WarningIcon, i18n::tr("Import Audio"),
+                    i18n::tr("No audio track found. Please create an audio track first."));
                 return;
             }
 
@@ -361,15 +366,14 @@ void MainWindow::setupMenuCallbacks() {
             }
 
             if (numImported > 0) {
-                juce::String message =
-                    juce::String(numImported) + " audio file(s) imported successfully.";
-                juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::InfoIcon, "Import Audio",
-                                                       message);
+                juce::String message = juce::String(numImported) +
+                                       i18n::tr(" audio file(s) imported successfully.");
+                juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::InfoIcon,
+                                                       i18n::tr("Import Audio"), message);
             } else {
                 juce::AlertWindow::showMessageBoxAsync(
-                    juce::AlertWindow::WarningIcon, "Import Audio",
-                    "No valid audio files could be imported. The selected files may be "
-                    "unsupported or corrupt.");
+                    juce::AlertWindow::WarningIcon, i18n::tr("Import Audio"),
+                    i18n::tr("No valid audio files could be imported. The selected files may be unsupported or corrupt."));
             }
 
             fileChooser_.reset();
@@ -384,8 +388,9 @@ void MainWindow::setupMenuCallbacks() {
 
         auto* engine = dynamic_cast<TracktionEngineWrapper*>(mainComponent->getAudioEngine());
         if (!engine || !engine->getEdit()) {
-            juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::WarningIcon, "Export Audio",
-                                                   "Cannot export: no Edit loaded");
+            juce::AlertWindow::showMessageBoxAsync(
+                juce::AlertWindow::WarningIcon, i18n::tr("Export Audio"),
+                i18n::tr("Cannot export: no Edit loaded"));
             return;
         }
 
@@ -734,8 +739,9 @@ void MainWindow::setupMenuCallbacks() {
     callbacks.onZoom = []() {
         // TODO: Implement window zoom functionality
         // Note: JUCE DocumentWindow doesn't have simple maximize methods on all platforms
-        juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::InfoIcon, "Zoom",
-                                               "Window zoom functionality not yet implemented.");
+        juce::AlertWindow::showMessageBoxAsync(
+            juce::AlertWindow::InfoIcon, i18n::tr("Zoom"),
+            i18n::tr("Window zoom functionality not yet implemented."));
     };
 
     callbacks.onBringAllToFront = [this]() { toFront(true); };
@@ -743,8 +749,9 @@ void MainWindow::setupMenuCallbacks() {
     // Help menu callbacks
     callbacks.onShowHelp = []() {
         // TODO: Implement help
-        juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::InfoIcon, "Help",
-                                               "Help functionality not yet implemented.");
+        juce::AlertWindow::showMessageBoxAsync(
+            juce::AlertWindow::InfoIcon, i18n::tr("Help"),
+            i18n::tr("Help functionality not yet implemented."));
     };
 
     callbacks.onOpenManual = []() {

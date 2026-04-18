@@ -14,6 +14,8 @@ juce_add_binary_data(MagdaAssets
     ../../assets/fonts/Inter-Bold.ttf
     "../../assets/fonts/Microgramma D Extended Bold.otf"
     ../../assets/fonts/JetBrainsMono-Regular.ttf
+    # Language packs
+    ../../assets/i18n/lang_zh_CN.json
     # General UI icons
     ../../assets/icons/general/enter.svg
     ../../assets/icons/general/track.svg
@@ -278,6 +280,7 @@ set(DAW_UI_SOURCES
     ui/themes/FontManager.cpp
     ui/themes/CursorManager.cpp
     ui/themes/MixerLookAndFeel.cpp
+    ui/i18n/TranslationManager.cpp
     # Windows
     ui/windows/MainWindow.cpp
     ui/windows/MainWindowMenus.cpp
@@ -482,6 +485,7 @@ set(DAW_HEADERS
     ui/themes/FontManager.hpp
     ui/themes/CursorManager.hpp
     ui/themes/MixerLookAndFeel.hpp
+    ui/i18n/TranslationManager.hpp
     # Windows
     ui/windows/MainWindow.hpp
     ui/windows/MenuManager.hpp

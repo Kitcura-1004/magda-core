@@ -2,6 +2,8 @@
 
 #include <juce_gui_basics/juce_gui_basics.h>
 
+#include "../../i18n/TranslationManager.hpp"
+
 namespace magda::daw::ui {
 
 /**
@@ -78,29 +80,29 @@ inline juce::String getContentTypeName(PanelContentType type) {
         case PanelContentType::Empty:
             return "";
         case PanelContentType::PluginBrowser:
-            return "Plugins";
+            return i18n::tr("Plugins");
         case PanelContentType::MediaExplorer:
-            return "Samples";
+            return i18n::tr("Samples");
         case PanelContentType::PresetBrowser:
-            return "Presets";
+            return i18n::tr("Presets");
         case PanelContentType::Inspector:
-            return "Inspector";
+            return i18n::tr("Inspector");
         case PanelContentType::AIChatConsole:
-            return "AI Chat";
+            return i18n::tr("AI Chat");
         case PanelContentType::ScriptingConsole:
-            return "Script";
+            return i18n::tr("Script");
         case PanelContentType::TrackChain:
-            return "Track Chain";
+            return i18n::tr("Track Chain");
         case PanelContentType::PianoRoll:
-            return "Piano Roll";
+            return i18n::tr("Piano Roll");
         case PanelContentType::WaveformEditor:
-            return "Waveform";
+            return i18n::tr("Waveform");
         case PanelContentType::DrumGridClipView:
-            return "Drum Grid";
+            return i18n::tr("Drum Grid");
         case PanelContentType::AudioClipProperties:
-            return "Properties";
+            return i18n::tr("Properties");
     }
-    return "Unknown";
+    return i18n::tr("Unknown");
 }
 
 /**

@@ -1,6 +1,7 @@
 #include "ExportAudioDialog.hpp"
 
 #include "../../core/Config.hpp"
+#include "../i18n/TranslationManager.hpp"
 #include "../themes/DarkTheme.hpp"
 #include "../themes/DialogLookAndFeel.hpp"
 #include "../themes/FontManager.hpp"
@@ -11,7 +12,7 @@ ExportAudioDialog::ExportAudioDialog() {
     setLookAndFeel(&daw::ui::DialogLookAndFeel::getInstance());
 
     // Format selection
-    formatLabel_.setText("Format:", juce::dontSendNotification);
+    formatLabel_.setText(i18n::tr("Format:"), juce::dontSendNotification);
     formatLabel_.setFont(FontManager::getInstance().getUIFontBold(14.0f));
     addAndMakeVisible(formatLabel_);
 
@@ -34,7 +35,7 @@ ExportAudioDialog::ExportAudioDialog() {
     addAndMakeVisible(formatComboBox_);
 
     // Sample rate selection
-    sampleRateLabel_.setText("Sample Rate:", juce::dontSendNotification);
+    sampleRateLabel_.setText(i18n::tr("Sample Rate:"), juce::dontSendNotification);
     sampleRateLabel_.setFont(FontManager::getInstance().getUIFontBold(14.0f));
     addAndMakeVisible(sampleRateLabel_);
 
@@ -55,7 +56,7 @@ ExportAudioDialog::ExportAudioDialog() {
     addAndMakeVisible(sampleRateComboBox_);
 
     // Bit depth (read-only, updates based on format)
-    bitDepthLabel_.setText("Bit Depth:", juce::dontSendNotification);
+    bitDepthLabel_.setText(i18n::tr("Bit Depth:"), juce::dontSendNotification);
     bitDepthLabel_.setFont(FontManager::getInstance().getUIFontBold(14.0f));
     addAndMakeVisible(bitDepthLabel_);
 
@@ -64,48 +65,49 @@ ExportAudioDialog::ExportAudioDialog() {
     updateBitDepthOptions();  // Set label based on restored format
 
     // Normalization option
-    normalizeCheckbox_.setButtonText("Normalize to 0 dB (peak)");
+    normalizeCheckbox_.setButtonText(i18n::tr("Normalize to 0 dB (peak)"));
     normalizeCheckbox_.setToggleState(false, juce::dontSendNotification);
     addAndMakeVisible(normalizeCheckbox_);
 
     // Real-time render option
-    realTimeRenderCheckbox_.setButtonText("Real-time render (slower, avoids plugin glitches)");
+    realTimeRenderCheckbox_.setButtonText(
+        i18n::tr("Real-time render (slower, avoids plugin glitches)"));
     realTimeRenderCheckbox_.setToggleState(false, juce::dontSendNotification);
     addAndMakeVisible(realTimeRenderCheckbox_);
 
     // Lead-in silence
-    leadInSilenceLabel_.setText("Lead-in Silence:", juce::dontSendNotification);
+    leadInSilenceLabel_.setText(i18n::tr("Lead-in Silence:"), juce::dontSendNotification);
     leadInSilenceLabel_.setFont(FontManager::getInstance().getUIFontBold(14.0f));
     addAndMakeVisible(leadInSilenceLabel_);
 
     leadInSilenceSlider_.setSliderStyle(juce::Slider::LinearBar);
     leadInSilenceSlider_.setRange(0.0, 2.0, 0.1);
     leadInSilenceSlider_.setValue(0.0, juce::dontSendNotification);
-    leadInSilenceSlider_.setTextValueSuffix(" s");
+    leadInSilenceSlider_.setTextValueSuffix(i18n::tr(" s"));
     addAndMakeVisible(leadInSilenceSlider_);
 
     // Time range selection
-    timeRangeLabel_.setText("Export Range:", juce::dontSendNotification);
+    timeRangeLabel_.setText(i18n::tr("Export Range:"), juce::dontSendNotification);
     timeRangeLabel_.setFont(FontManager::getInstance().getUIFontBold(14.0f));
     addAndMakeVisible(timeRangeLabel_);
 
-    exportEntireSongButton_.setButtonText("Entire Song");
+    exportEntireSongButton_.setButtonText(i18n::tr("Entire Song"));
     exportEntireSongButton_.setRadioGroupId(1);
     exportEntireSongButton_.setToggleState(true, juce::dontSendNotification);
     addAndMakeVisible(exportEntireSongButton_);
 
-    exportTimeSelectionButton_.setButtonText("Time Selection");
+    exportTimeSelectionButton_.setButtonText(i18n::tr("Time Selection"));
     exportTimeSelectionButton_.setRadioGroupId(1);
     exportTimeSelectionButton_.setEnabled(false);  // Disabled by default
     addAndMakeVisible(exportTimeSelectionButton_);
 
-    exportLoopRegionButton_.setButtonText("Loop Region");
+    exportLoopRegionButton_.setButtonText(i18n::tr("Loop Region"));
     exportLoopRegionButton_.setRadioGroupId(1);
     exportLoopRegionButton_.setEnabled(false);  // Disabled by default
     addAndMakeVisible(exportLoopRegionButton_);
 
     // Export button
-    exportButton_.setButtonText("Export");
+    exportButton_.setButtonText(i18n::tr("Export"));
     exportButton_.onClick = [this]() {
         if (onExport) {
             auto settings = getSettings();
@@ -128,7 +130,7 @@ ExportAudioDialog::ExportAudioDialog() {
     addAndMakeVisible(exportButton_);
 
     // Cancel button
-    cancelButton_.setButtonText("Cancel");
+    cancelButton_.setButtonText(i18n::tr("Cancel"));
     cancelButton_.onClick = [this]() {
         if (auto* dw = findParentComponentOfClass<juce::DialogWindow>()) {
             dw->exitModalState(0);
@@ -322,7 +324,7 @@ void ExportAudioDialog::showDialog(juce::Component* parent,
     dialog->onExport = exportCallback;
 
     juce::DialogWindow::LaunchOptions options;
-    options.dialogTitle = "Export Audio";
+    options.dialogTitle = i18n::tr("Export Audio");
     options.dialogBackgroundColour = DarkTheme::getColour(DarkTheme::PANEL_BACKGROUND);
     options.content.setOwned(dialog);
     options.escapeKeyTriggersCloseButton = true;

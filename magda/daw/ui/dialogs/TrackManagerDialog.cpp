@@ -1,6 +1,7 @@
 #include "TrackManagerDialog.hpp"
 
 #include "../themes/DarkTheme.hpp"
+#include "ui/i18n/TranslationManager.hpp"
 
 namespace magda {
 
@@ -24,12 +25,14 @@ class TrackManagerDialog::ContentComponent : public juce::Component,
         table_.setHeaderHeight(28);
 
         auto& header = table_.getHeader();
-        header.addColumn("Track", TrackName, 180, 100, 300,
+        header.addColumn(i18n::tr("Track"), TrackName, 180, 100, 300,
                          juce::TableHeaderComponent::defaultFlags);
-        header.addColumn("Live", LiveCol, 60, 50, 80, juce::TableHeaderComponent::defaultFlags);
-        header.addColumn("Arrange", ArrangeCol, 60, 50, 80,
+        header.addColumn(i18n::tr("Live"), LiveCol, 60, 50, 80,
                          juce::TableHeaderComponent::defaultFlags);
-        header.addColumn("Mix", MixCol, 60, 50, 80, juce::TableHeaderComponent::defaultFlags);
+        header.addColumn(i18n::tr("Arrange"), ArrangeCol, 60, 50, 80,
+                         juce::TableHeaderComponent::defaultFlags);
+        header.addColumn(i18n::tr("Mix"), MixCol, 60, 50, 80,
+                         juce::TableHeaderComponent::defaultFlags);
 
         // Style the header
         header.setColour(juce::TableHeaderComponent::backgroundColourId,
@@ -40,7 +43,7 @@ class TrackManagerDialog::ContentComponent : public juce::Component,
         addAndMakeVisible(table_);
 
         // Info label
-        infoLabel_.setText("Click checkboxes to toggle track visibility per view mode",
+        infoLabel_.setText(i18n::tr("Click checkboxes to toggle track visibility per view mode"),
                            juce::dontSendNotification);
         infoLabel_.setColour(juce::Label::textColourId,
                              DarkTheme::getColour(DarkTheme::TEXT_SECONDARY));
@@ -100,7 +103,8 @@ class TrackManagerDialog::ContentComponent : public juce::Component,
             if (columnId == TrackName) {
                 // Draw master track name with special styling
                 g.setColour(DarkTheme::getColour(DarkTheme::ACCENT_ORANGE));
-                g.drawText("Master", 5, 0, width - 10, height, juce::Justification::centredLeft);
+                g.drawText(i18n::tr("Master"), 5, 0, width - 10, height,
+                           juce::Justification::centredLeft);
             } else {
                 // Draw checkbox for view mode columns
                 ViewMode mode = columnIdToViewMode(columnId);
@@ -232,7 +236,7 @@ class TrackManagerDialog::ContentComponent : public juce::Component,
         table_.updateContent();
         table_.repaint();
 
-        infoLabel_.setText("Click checkboxes to toggle track visibility per view mode",
+        infoLabel_.setText(i18n::tr("Click checkboxes to toggle track visibility per view mode"),
                            juce::dontSendNotification);
     }
 
@@ -261,7 +265,8 @@ class TrackManagerDialog::ContentComponent : public juce::Component,
 // ============================================================================
 
 TrackManagerDialog::TrackManagerDialog()
-    : DialogWindow("Track Manager", DarkTheme::getColour(DarkTheme::PANEL_BACKGROUND), true) {
+    : DialogWindow(i18n::tr("Track Manager"), DarkTheme::getColour(DarkTheme::PANEL_BACKGROUND),
+                   true) {
     content_ = std::make_unique<ContentComponent>();
     setContentOwned(content_.release(), true);
     centreWithSize(500, 400);
